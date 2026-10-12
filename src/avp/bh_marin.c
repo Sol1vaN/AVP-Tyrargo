@@ -2873,6 +2873,7 @@ void EndMarineMuzzleFlash(STRATEGYBLOCK *sbPtr) {
 
 }
 
+#include "marine_weapon_rules.inc"
 #include "marine_aim_impl.inc"
 #include "marine_squad_impl.inc"
 
@@ -7057,6 +7058,7 @@ void Marine_Enter_Reload_State(STRATEGYBLOCK *sbPtr) {
 	marineStatusPointer->internalState=0;
 	marineStatusPointer->volleySize = 0;
 	marineStatusPointer->lastState=marineStatusPointer->behaviourState;
+	MarineReloadClock(sbPtr);
 	marineStatusPointer->behaviourState = MBS_Reloading;
 	marineStatusPointer->stateTimer = MARINE_NEARWAITTIME;
 
@@ -7084,7 +7086,7 @@ void Marine_Enter_Reload_State(STRATEGYBLOCK *sbPtr) {
 		Sound_Play(marineStatusPointer->My_Weapon->EndSound,"d",&(sbPtr->DynPtr->Position));
 	}
 
-	SetMarineAnimationSequence_Null(sbPtr,HMSQT_MarineStand,marineStatusPointer->My_Weapon->Reload_Sequence,-1,(ONE_FIXED>>3));
+	SetMarineAnimationSequence_Null(sbPtr,HMSQT_MarineStand,marineStatusPointer->My_Weapon->Reload_Sequence,NPCSupportCanCommand(sbPtr)?marineStatusPointer->squad.reloadDelay:-1,(ONE_FIXED>>3));
 	marineStatusPointer->HModelController.LoopAfterTweening=0;
 	
 }
@@ -7103,6 +7105,7 @@ void Marine_Enter_PanicReload_State(STRATEGYBLOCK *sbPtr) {
 	marineStatusPointer->internalState=0;
 	marineStatusPointer->volleySize = 0;
 	marineStatusPointer->lastState=marineStatusPointer->behaviourState;
+	MarineReloadClock(sbPtr);
 	marineStatusPointer->behaviourState = MBS_PanicReloading;
 	marineStatusPointer->stateTimer = MARINE_NEARWAITTIME;
 
@@ -7141,7 +7144,7 @@ void Marine_Enter_PanicReload_State(STRATEGYBLOCK *sbPtr) {
 	if (HModelSequence_Exists(&marineStatusPointer->HModelController,(int)HMSQT_MarineStand,MSSS_Panic_Reload)) {
 		SetMarineAnimationSequence_Null(sbPtr,HMSQT_MarineStand,MSSS_Panic_Reload,-1,(ONE_FIXED>>3));
 	} else {
-		SetMarineAnimationSequence_Null(sbPtr,HMSQT_MarineStand,marineStatusPointer->My_Weapon->Reload_Sequence,-1,(ONE_FIXED>>3));
+		SetMarineAnimationSequence_Null(sbPtr,HMSQT_MarineStand,marineStatusPointer->My_Weapon->Reload_Sequence,NPCSupportCanCommand(sbPtr)?marineStatusPointer->squad.reloadDelay:-1,(ONE_FIXED>>3));
 	}
 	marineStatusPointer->HModelController.LoopAfterTweening=0;
 	
@@ -7863,6 +7866,7 @@ static void LobAGrenade(STRATEGYBLOCK *sbPtr)
 	marineStatusPointer = (MARINE_STATUS_BLOCK *)(sbPtr->SBdataptr);    	
 	LOCALASSERT(marineStatusPointer);	
 	
+	if(!MarineShotReady(sbPtr,1))return;
 	/* first, find the firing direction */
 	//firingDirn.vx = marineStatusPointer->weaponTarget.vx - sbPtr->DynPtr->Position.vx;
 	//firingDirn.vy = marineStatusPointer->weaponTarget.vy - sbPtr->DynPtr->Position.vz;
@@ -7927,7 +7931,7 @@ static void LobAGrenade(STRATEGYBLOCK *sbPtr)
 			
 	    #define PULSEGRENADE_SPEED 100000 // Was 30000
 		dynPtr->Position = marineStatusPointer->My_Gunflash_Section->World_Offset;
-		dynPtr->OrientMat = marineStatusPointer->My_Gunflash_Section->SecMat;
+		dynPtr->OrientMat = NPCSupportCanCommand(sbPtr)?MarineAimMatrix(sbPtr,&marineStatusPointer->My_Gunflash_Section->World_Offset):marineStatusPointer->My_Gunflash_Section->SecMat;
 		dynPtr->PrevOrientMat = dynPtr->OrientMat; /* stops mis-alignment if dynamics problem */	    
 
 	    dynPtr->LinVelocity.vx = dynPtr->OrientMat.mat31;
@@ -7937,7 +7941,7 @@ static void LobAGrenade(STRATEGYBLOCK *sbPtr)
 	    dynPtr->LinVelocity.vx = MUL_FIXED(dynPtr->LinVelocity.vx, PULSEGRENADE_SPEED);
 	    dynPtr->LinVelocity.vy = MUL_FIXED(dynPtr->LinVelocity.vy, PULSEGRENADE_SPEED);
 	    dynPtr->LinVelocity.vz = MUL_FIXED(dynPtr->LinVelocity.vz, PULSEGRENADE_SPEED);
-        if(NPCSupportCanCommand(sbPtr)){PLAYER_WEAPON_DATA*w=&marineStatusPointer->squad.weapons[marineStatusPointer->squad.activeSlot];if(w->SecondaryRoundsRemaining>=ONE_FIXED)w->SecondaryRoundsRemaining-=ONE_FIXED;}
+        if(NPCSupportCanCommand(sbPtr)){PLAYER_WEAPON_DATA*w=&marineStatusPointer->squad.weapons[marineStatusPointer->squad.activeSlot];if(w->SecondaryRoundsRemaining>=ONE_FIXED){w->SecondaryRoundsRemaining-=ONE_FIXED;MarineShotCommitted(sbPtr,1);}}
 
 	    //dynPtr->LinImpulse.vx = MUL_FIXED(firingDirn.vx,PULSEGRENADE_SPEED);
 	    //dynPtr->LinImpulse.vy = MUL_FIXED(firingDirn.vy,PULSEGRENADE_SPEED);
@@ -10569,7 +10573,7 @@ static STATE_RETURN_CONDITION Execute_MNS_DischargeFlamethrower(STRATEGYBLOCK *s
 	}
 
 	if (marineStatusPointer->clipammo>0) {
-		marineStatusPointer->clipammo-=NormalFrameTime;
+		marineStatusPointer->clipammo-=MarineFuelSpent(sbPtr);
 		if (marineStatusPointer->clipammo<0) {
 			marineStatusPointer->clipammo=0;
 		}
@@ -10645,7 +10649,7 @@ static void DischargeLOSWeapon_Core(STRATEGYBLOCK *sbPtr)
 
 	volleytime=marineStatusPointer->My_Weapon->FiringTime-marineStatusPointer->stateTimer;
 	/* It was that or reverse the state timer for this state. */
-	volleyrounds=MUL_FIXED(volleytime,marineStatusPointer->My_Weapon->FiringRate);
+	volleyrounds=MUL_FIXED(volleytime,MarineWeaponRate(sbPtr));
 	volleyrounds>>=ONE_FIXED_SHIFT;
 
 	volleyrounds-=marineStatusPointer->volleySize;
@@ -10758,14 +10762,14 @@ static void DischargeLOSWeapon_Core(STRATEGYBLOCK *sbPtr)
 				rel_pos.vz=marineStatusPointer->Target->DynPtr->Position.vz-sbPtr->DynPtr->Position.vz;
 				range2=Approximate3dMagnitude(&rel_pos);
 
-				if (VerifyHitShot(sbPtr,marineStatusPointer->Target,&marineStatusPointer->My_Gunflash_Section->World_Offset,&shotvector, marineStatusPointer->My_Weapon->Ammo_Type, hits,range2)) {
+				if (VerifyHitShot(sbPtr,marineStatusPointer->Target,&marineStatusPointer->My_Gunflash_Section->World_Offset,&shotvector, MarineWeaponAmmo(sbPtr), hits,range2)) {
 					/* If 0, hits have been dealt with. */					
 					GetDirectionOfAttack(marineStatusPointer->Target,&rel_pos,&attack_dir);
 
 					if (marineStatusPointer->lasthitsection) {
-						CauseDamageToHModel(marineStatusPointer->lasthitsection->my_controller, marineStatusPointer->Target,&TemplateAmmo[marineStatusPointer->My_Weapon->Ammo_Type].MaxDamage[AvP.Difficulty], ONE_FIXED*hits, marineStatusPointer->lasthitsection,&attack_dir,NULL,0);
+						CauseDamageToHModel(marineStatusPointer->lasthitsection->my_controller, marineStatusPointer->Target,&TemplateAmmo[MarineWeaponAmmo(sbPtr)].MaxDamage[AvP.Difficulty], ONE_FIXED*hits, marineStatusPointer->lasthitsection,&attack_dir,NULL,0);
 					} else {
-						CauseDamageToObject(marineStatusPointer->Target,&TemplateAmmo[marineStatusPointer->My_Weapon->Ammo_Type].MaxDamage[AvP.Difficulty], ONE_FIXED*hits,&attack_dir);
+						CauseDamageToObject(marineStatusPointer->Target,&TemplateAmmo[MarineWeaponAmmo(sbPtr)].MaxDamage[AvP.Difficulty], ONE_FIXED*hits,&attack_dir);
 					}
 				}
 
@@ -10775,10 +10779,10 @@ static void DischargeLOSWeapon_Core(STRATEGYBLOCK *sbPtr)
 				GLOBALASSERT(marineStatusPointer->My_Gunflash_Section);
 			
 				if (marineStatusPointer->Target) {
-					MarineMissShot(sbPtr, marineStatusPointer->Target, &marineStatusPointer->My_Gunflash_Section->World_Offset,&marineStatusPointer->My_Gunflash_Section->SecMat, marineStatusPointer->My_Weapon->Ammo_Type, (volleyrounds-hits));
+					MarineMissShot(sbPtr, marineStatusPointer->Target, &marineStatusPointer->My_Gunflash_Section->World_Offset,&marineStatusPointer->My_Gunflash_Section->SecMat, MarineWeaponAmmo(sbPtr), (volleyrounds-hits));
 				} else {
 					/* Like a miss, so it's inaccurate. */
-					CastLOSProjectile(sbPtr,&marineStatusPointer->My_Gunflash_Section->World_Offset,&shotvector, marineStatusPointer->My_Weapon->Ammo_Type, volleyrounds,1);
+					CastLOSProjectile(sbPtr,&marineStatusPointer->My_Gunflash_Section->World_Offset,&shotvector, MarineWeaponAmmo(sbPtr), volleyrounds,1);
 				}
 			}
 
@@ -12115,7 +12119,7 @@ static STATE_RETURN_CONDITION Execute_MNS_DischargeShotgun(STRATEGYBLOCK *sbPtr)
 			
 			MATRIXCH aim=MarineAimMatrix(sbPtr,&marineStatusPointer->My_Gunflash_Section->World_Offset);
             RotateAndCopyVector(&ShotgunBlast[hitroll],&world_vec,&aim);
-			CastLOSProjectile(sbPtr,&marineStatusPointer->My_Gunflash_Section->World_Offset,&world_vec, marineStatusPointer->My_Weapon->Ammo_Type, 1,0);
+			CastLOSProjectile(sbPtr,&marineStatusPointer->My_Gunflash_Section->World_Offset,&world_vec, MarineWeaponAmmo(sbPtr), 1,0);
 	
 			hitroll++;
 		}
@@ -12256,6 +12260,7 @@ static STATE_RETURN_CONDITION Execute_MNS_DischargePistol(STRATEGYBLOCK *sbPtr)
 
 	if ((marineStatusPointer->HModelController.keyframe_flags)
 		||(marineStatusPointer->HModelController.Playing==0)) {
+        if(!MarineShotReady(sbPtr,0))return SRC_No_Change;
 		
 		marineStatusPointer->HModelController.Playing=0;
 		marineStatusPointer->HModelController.sequence_timer=0;
@@ -12328,7 +12333,7 @@ static STATE_RETURN_CONDITION Execute_MNS_DischargePistol(STRATEGYBLOCK *sbPtr)
 
 		marineStatusPointer->HModelController.Playing=1;
 		if (marineStatusPointer->clipammo>0) {
-			marineStatusPointer->clipammo--;
+			marineStatusPointer->clipammo--;MarineShotCommitted(sbPtr,0);
 		}
 		marineStatusPointer->roundsForThisTarget++;
 		
@@ -12401,7 +12406,7 @@ static STATE_RETURN_CONDITION Execute_MNS_DischargePistol(STRATEGYBLOCK *sbPtr)
 
 				dist=Approximate3dMagnitude(&rel_pos);
 
-				if (VerifyHitShot(sbPtr,marineStatusPointer->Target,&marineStatusPointer->My_Gunflash_Section->World_Offset,&shotvector, marineStatusPointer->My_Weapon->Ammo_Type, 1,dist)) {
+				if (VerifyHitShot(sbPtr,marineStatusPointer->Target,&marineStatusPointer->My_Gunflash_Section->World_Offset,&shotvector, MarineWeaponAmmo(sbPtr), 1,dist)) {
 
 					GetDirectionOfAttack(marineStatusPointer->Target,&rel_pos,&attack_dir);
 					/* Get hit location? */
@@ -12409,14 +12414,14 @@ static STATE_RETURN_CONDITION Execute_MNS_DischargePistol(STRATEGYBLOCK *sbPtr)
 					marineStatusPointer->lasthitsection=HitLocationRoll(marineStatusPointer->Target,sbPtr);
 				
 					if (marineStatusPointer->lasthitsection) {
-						CauseDamageToHModel(marineStatusPointer->lasthitsection->my_controller, marineStatusPointer->Target,&TemplateAmmo[marineStatusPointer->My_Weapon->Ammo_Type].MaxDamage[AvP.Difficulty], ONE_FIXED, marineStatusPointer->lasthitsection,&attack_dir,NULL,0);
+						CauseDamageToHModel(marineStatusPointer->lasthitsection->my_controller, marineStatusPointer->Target,&TemplateAmmo[MarineWeaponAmmo(sbPtr)].MaxDamage[AvP.Difficulty], ONE_FIXED, marineStatusPointer->lasthitsection,&attack_dir,NULL,0);
 					} else {
-						CauseDamageToObject(marineStatusPointer->Target,&TemplateAmmo[marineStatusPointer->My_Weapon->Ammo_Type].MaxDamage[AvP.Difficulty], ONE_FIXED,&attack_dir);
+						CauseDamageToObject(marineStatusPointer->Target,&TemplateAmmo[MarineWeaponAmmo(sbPtr)].MaxDamage[AvP.Difficulty], ONE_FIXED,&attack_dir);
 					}
 				}
 			} else {
 				GLOBALASSERT(marineStatusPointer->My_Gunflash_Section);
-				MarineMissShot(sbPtr, marineStatusPointer->Target, &marineStatusPointer->My_Gunflash_Section->World_Offset,&marineStatusPointer->My_Gunflash_Section->SecMat, marineStatusPointer->My_Weapon->Ammo_Type, 1);
+				MarineMissShot(sbPtr, marineStatusPointer->Target, &marineStatusPointer->My_Gunflash_Section->World_Offset,&marineStatusPointer->My_Gunflash_Section->SecMat, MarineWeaponAmmo(sbPtr), 1);
 			}
 
 			/* Did we get him? */
@@ -12845,11 +12850,7 @@ static STATE_RETURN_CONDITION Execute_MNS_DischargeGL(STRATEGYBLOCK *sbPtr)
 			LOCALASSERT(marineStatusPointer->My_Gunflash_Section);
 			//LOCALASSERT(marineStatusPointer->internalState==0);
 			
-			MarineLaunchGrenade(sbPtr,NPCSupportCanCommand(sbPtr)?NPCInventoryGrenadeType(sbPtr):I_BehaviourGrenade,&marineStatusPointer->My_Gunflash_Section->World_Offset);
-		
-			if (marineStatusPointer->clipammo>0) {
-				marineStatusPointer->clipammo--;
-			}
+			if(MarineLaunchGrenade(sbPtr,NPCSupportCanCommand(sbPtr)?NPCInventoryGrenadeType(sbPtr):I_BehaviourGrenade,&marineStatusPointer->My_Gunflash_Section->World_Offset) && marineStatusPointer->clipammo>0) {marineStatusPointer->clipammo--;}
 		}
 	}	
 
@@ -12959,6 +12960,7 @@ static STATE_RETURN_CONDITION Execute_MNS_NewDischargeGL(STRATEGYBLOCK *sbPtr)
 	}
 
 	if (marineStatusPointer->HModelController.Playing==0) {
+        if(!MarineShotReady(sbPtr,0))return SRC_No_Change;
 
 		/* Only terminate if you haven't fired yet... */
 		if(!MarineCanSeeTarget(sbPtr))
@@ -13079,11 +13081,7 @@ static STATE_RETURN_CONDITION Execute_MNS_NewDischargeGL(STRATEGYBLOCK *sbPtr)
 		{
 			LOCALASSERT(marineStatusPointer->My_Gunflash_Section);
 			
-			MarineLaunchGrenade(sbPtr,NPCSupportCanCommand(sbPtr)?NPCInventoryGrenadeType(sbPtr):I_BehaviourGrenade,&marineStatusPointer->My_Gunflash_Section->World_Offset);
-		
-			if (marineStatusPointer->clipammo>0) {
-				marineStatusPointer->clipammo--;
-			}
+			if(MarineLaunchGrenade(sbPtr,NPCSupportCanCommand(sbPtr)?NPCInventoryGrenadeType(sbPtr):I_BehaviourGrenade,&marineStatusPointer->My_Gunflash_Section->World_Offset) && marineStatusPointer->clipammo>0) {marineStatusPointer->clipammo--;}
 		}
 
 	} else {
@@ -13301,11 +13299,7 @@ static STATE_RETURN_CONDITION Execute_MNS_DischargeSADAR(STRATEGYBLOCK *sbPtr)
 
 			LOCALASSERT(rocket_section);
 			
-			MarineLaunchRocket(sbPtr,&rocket_section->World_Offset);
-
-			if (marineStatusPointer->clipammo>0) {
-				marineStatusPointer->clipammo--;
-			}
+			if(MarineLaunchRocket(sbPtr,&rocket_section->World_Offset) && marineStatusPointer->clipammo>0) {marineStatusPointer->clipammo--;}
 		}
 	}	
 
@@ -14589,7 +14583,7 @@ static STATE_RETURN_CONDITION Execute_MNS_Reloading(STRATEGYBLOCK *sbPtr)
 		}
 	}
 	
-	if (HModelAnimation_IsFinished(&marineStatusPointer->HModelController)) {
+	if (HModelAnimation_IsFinished(&marineStatusPointer->HModelController) && (!NPCSupportCanCommand(sbPtr) || !marineStatusPointer->squad.reloadDelay)) {
 		marineStatusPointer->clipammo=NPCInventoryReload(sbPtr);
 		return(SRC_Request_Approach);
 	} else {
@@ -14673,7 +14667,7 @@ static STATE_RETURN_CONDITION Execute_MNS_PanicReloading(STRATEGYBLOCK *sbPtr)
 		}
 	}
 	
-	if (HModelAnimation_IsFinished(&marineStatusPointer->HModelController)) {
+	if (HModelAnimation_IsFinished(&marineStatusPointer->HModelController) && (!NPCSupportCanCommand(sbPtr) || !marineStatusPointer->squad.reloadDelay)) {
 		marineStatusPointer->clipammo=NPCInventoryReload(sbPtr);
 		return(SRC_Request_Approach);
 	} else {
@@ -15303,7 +15297,7 @@ static STATE_RETURN_CONDITION Execute_MNS_PanicFireLOSWeapon(STRATEGYBLOCK *sbPt
 
 	volleytime=marineStatusPointer->My_Weapon->FiringTime-marineStatusPointer->stateTimer;
 	/* It was that or reverse the state timer for this state. */
-	volleyrounds=MUL_FIXED(volleytime,marineStatusPointer->My_Weapon->FiringRate);
+	volleyrounds=MUL_FIXED(volleytime,MarineWeaponRate(sbPtr));
 	volleyrounds>>=ONE_FIXED_SHIFT;
 
 	volleyrounds-=marineStatusPointer->volleySize;
@@ -15329,7 +15323,7 @@ static STATE_RETURN_CONDITION Execute_MNS_PanicFireLOSWeapon(STRATEGYBLOCK *sbPt
 		shotvector.vz=65535;
 		shotvector=MarineAimDirection(sbPtr,&marineStatusPointer->My_Gunflash_Section->World_Offset);
 
-		CastLOSProjectile(sbPtr,&marineStatusPointer->My_Gunflash_Section->World_Offset,&shotvector, marineStatusPointer->My_Weapon->Ammo_Type, volleyrounds,1);
+		CastLOSProjectile(sbPtr,&marineStatusPointer->My_Gunflash_Section->World_Offset,&shotvector, MarineWeaponAmmo(sbPtr), volleyrounds,1);
 
 	}
 
@@ -15605,7 +15599,7 @@ static STATE_RETURN_CONDITION Execute_MNS_PanicFireFlamethrower(STRATEGYBLOCK *s
 	}
 
 	if (marineStatusPointer->clipammo>0) {
-		marineStatusPointer->clipammo-=NormalFrameTime;
+		marineStatusPointer->clipammo-=MarineFuelSpent(sbPtr);
 		if (marineStatusPointer->clipammo<0) {
 			marineStatusPointer->clipammo=0;
 		}
@@ -15912,7 +15906,7 @@ static STATE_RETURN_CONDITION Execute_MNS_PanicFireGL(STRATEGYBLOCK *sbPtr)
 
 	/* I know there are only four firing points... */
 	for (a=0; a<4; a++) {
-		if (keyframeflags&1) {
+		if ((keyframeflags&1) && MarineShotReady(sbPtr,0)) {
 			/* Fire a grenade! */
 
 			/* look after the gun flash */
@@ -15927,10 +15921,7 @@ static STATE_RETURN_CONDITION Execute_MNS_PanicFireGL(STRATEGYBLOCK *sbPtr)
 			}
 
 			LOCALASSERT(marineStatusPointer->My_Gunflash_Section);
-			MarineLaunchGrenade(sbPtr,NPCSupportCanCommand(sbPtr)?NPCInventoryGrenadeType(sbPtr):I_BehaviourGrenade,&marineStatusPointer->My_Gunflash_Section->World_Offset);
-			if (marineStatusPointer->clipammo>0) {
-				marineStatusPointer->clipammo--;
-			}
+			if(MarineLaunchGrenade(sbPtr,NPCSupportCanCommand(sbPtr)?NPCInventoryGrenadeType(sbPtr):I_BehaviourGrenade,&marineStatusPointer->My_Gunflash_Section->World_Offset) && marineStatusPointer->clipammo>0) {marineStatusPointer->clipammo--;}
 		}
 		keyframeflags>>=1;
 	}
@@ -16455,6 +16446,7 @@ static STATE_RETURN_CONDITION Execute_MNS_PanicFirePistol(STRATEGYBLOCK *sbPtr)
 	/* I know there are only six possible firing points... */
 	for (a=0; a<6; a++) {
 		if ((keyframeflags&1)||((a==0)&&(marineStatusPointer->HModelController.Tweening==Controller_EndTweening))) {
+            if(!MarineShotReady(sbPtr,MarinePistolChannel(sbPtr))){keyframeflags>>=1;continue;}
 			/* Fire a shot. */
 
 			/* look after the gun flash */
@@ -16476,9 +16468,9 @@ static STATE_RETURN_CONDITION Execute_MNS_PanicFirePistol(STRATEGYBLOCK *sbPtr)
 				shotvector.vz=65535;
 				shotvector=MarineAimDirection(sbPtr,&marineStatusPointer->My_Gunflash_Section->World_Offset);
 
-				CastLOSProjectile(sbPtr,&marineStatusPointer->My_Gunflash_Section->World_Offset,&shotvector, marineStatusPointer->My_Weapon->Ammo_Type, 1,1);
+				CastLOSProjectile(sbPtr,&marineStatusPointer->My_Gunflash_Section->World_Offset,&shotvector, MarineWeaponAmmo(sbPtr), 1,1);
 				if (marineStatusPointer->clipammo>0) {
-					marineStatusPointer->clipammo--;
+					marineStatusPointer->clipammo--;MarineShotCommitted(sbPtr,MarinePistolChannel(sbPtr));
 				}
 			}
 		}
@@ -16762,7 +16754,7 @@ static STATE_RETURN_CONDITION Execute_MNS_PanicFireShotgun(STRATEGYBLOCK *sbPtr)
 				VECTORCH world_vec;
 
 				RotateAndCopyVector(&ShotgunBlast[b],&world_vec,&marineStatusPointer->My_Gunflash_Section->SecMat);
-				CastLOSProjectile(sbPtr,&marineStatusPointer->My_Gunflash_Section->World_Offset,&world_vec, marineStatusPointer->My_Weapon->Ammo_Type, 1,0);
+				CastLOSProjectile(sbPtr,&marineStatusPointer->My_Gunflash_Section->World_Offset,&world_vec, MarineWeaponAmmo(sbPtr), 1,0);
 	
 				b++;
 			}
@@ -17951,7 +17943,7 @@ static STATE_RETURN_CONDITION Execute_MNS_DischargeSmartgun(STRATEGYBLOCK *sbPtr
 
 		volleytime=marineStatusPointer->My_Weapon->FiringTime-marineStatusPointer->stateTimer;
 		/* It was that or reverse the state timer for this state. */
-		volleyrounds=MUL_FIXED(volleytime,marineStatusPointer->My_Weapon->FiringRate);
+		volleyrounds=MUL_FIXED(volleytime,MarineWeaponRate(sbPtr));
 		volleyrounds>>=ONE_FIXED_SHIFT;
 
 		volleyrounds-=marineStatusPointer->volleySize;
@@ -18620,6 +18612,7 @@ static STATE_RETURN_CONDITION Execute_MNS_DischargeTwoPistols(STRATEGYBLOCK *sbP
 	range=VectorDistance((&marineStatusPointer->Target->DynPtr->Position),(&sbPtr->DynPtr->Position));
 
 	if (marineStatusPointer->volleySize==0) {
+        if(!MarineShotReady(sbPtr,MarinePistolChannel(sbPtr)))return SRC_No_Change;
 		
 		//marineStatusPointer->HModelController.Playing=0;
 		//marineStatusPointer->HModelController.sequence_timer=0;
@@ -18694,7 +18687,7 @@ static STATE_RETURN_CONDITION Execute_MNS_DischargeTwoPistols(STRATEGYBLOCK *sbP
 		marineStatusPointer->volleySize++;
 		marineStatusPointer->HModelController.Playing=1;
 		if (marineStatusPointer->clipammo>0) {
-			marineStatusPointer->clipammo--;
+			marineStatusPointer->clipammo--;MarineShotCommitted(sbPtr,MarinePistolChannel(sbPtr));
 		}
 		marineStatusPointer->roundsForThisTarget++;
 
@@ -18755,7 +18748,7 @@ static STATE_RETURN_CONDITION Execute_MNS_DischargeTwoPistols(STRATEGYBLOCK *sbP
 
 				dist=Approximate3dMagnitude(&rel_pos);
 
-				if (VerifyHitShot(sbPtr,marineStatusPointer->Target,&marineStatusPointer->My_Gunflash_Section->World_Offset,&shotvector, marineStatusPointer->My_Weapon->Ammo_Type, 1,dist)) {
+				if (VerifyHitShot(sbPtr,marineStatusPointer->Target,&marineStatusPointer->My_Gunflash_Section->World_Offset,&shotvector, MarineWeaponAmmo(sbPtr), 1,dist)) {
 
 					GetDirectionOfAttack(marineStatusPointer->Target,&rel_pos,&attack_dir);
 					/* Get hit location? */
@@ -18763,14 +18756,14 @@ static STATE_RETURN_CONDITION Execute_MNS_DischargeTwoPistols(STRATEGYBLOCK *sbP
 					marineStatusPointer->lasthitsection=HitLocationRoll(marineStatusPointer->Target,sbPtr);
 				
 					if (marineStatusPointer->lasthitsection) {
-						CauseDamageToHModel(marineStatusPointer->lasthitsection->my_controller, marineStatusPointer->Target,&TemplateAmmo[marineStatusPointer->My_Weapon->Ammo_Type].MaxDamage[AvP.Difficulty], ONE_FIXED, marineStatusPointer->lasthitsection,&attack_dir,NULL,0);
+						CauseDamageToHModel(marineStatusPointer->lasthitsection->my_controller, marineStatusPointer->Target,&TemplateAmmo[MarineWeaponAmmo(sbPtr)].MaxDamage[AvP.Difficulty], ONE_FIXED, marineStatusPointer->lasthitsection,&attack_dir,NULL,0);
 					} else {
-						CauseDamageToObject(marineStatusPointer->Target,&TemplateAmmo[marineStatusPointer->My_Weapon->Ammo_Type].MaxDamage[AvP.Difficulty], ONE_FIXED,&attack_dir);
+						CauseDamageToObject(marineStatusPointer->Target,&TemplateAmmo[MarineWeaponAmmo(sbPtr)].MaxDamage[AvP.Difficulty], ONE_FIXED,&attack_dir);
 					}
 				}
 			} else {
 				GLOBALASSERT(marineStatusPointer->My_Gunflash_Section);
-				MarineMissShot(sbPtr, marineStatusPointer->Target, &marineStatusPointer->My_Gunflash_Section->World_Offset,&marineStatusPointer->My_Gunflash_Section->SecMat, marineStatusPointer->My_Weapon->Ammo_Type, 1);
+				MarineMissShot(sbPtr, marineStatusPointer->Target, &marineStatusPointer->My_Gunflash_Section->World_Offset,&marineStatusPointer->My_Gunflash_Section->SecMat, MarineWeaponAmmo(sbPtr), 1);
 			}
 
 			/* Did we get him? */
@@ -19045,11 +19038,7 @@ static STATE_RETURN_CONDITION Execute_MNS_DischargeSkeeter(STRATEGYBLOCK *sbPtr)
 
 			LOCALASSERT(rocket_section);
 			
-			MarineLaunchFrisbee(sbPtr,&rocket_section->World_Offset);
-
-			if (marineStatusPointer->clipammo>0) {
-				marineStatusPointer->clipammo--;
-			}
+			if(MarineLaunchFrisbee(sbPtr,&rocket_section->World_Offset) && marineStatusPointer->clipammo>0) {marineStatusPointer->clipammo--;}
 		}
 
 		/* You must have fired already. */

@@ -1,3 +1,11 @@
+/* CRT shader adaptation: Inigo Quilez's postprocessing shader, via the
+ * MattiasCRT ReShade port and locally expanded MattiasCRT_Unlocked_Ex.fx.
+ * The supplied shader's notice is CC BY-NC-SA 3.0 Unported:
+ * https://creativecommons.org/licenses/by-nc-sa/3.0/
+ * Modifications: GLSL 1.20 translation, profile constants, preview/image controls
+ * and rounded-border optimization. See LICENSES/CC-BY-NC-SA-3.0.txt.
+ * Mattias Gustavsson/newpixie and HelelSingh/CRT-Guest-ReShade are credited
+ * references; the separate Guest shader's GPL code is not included here. */
 #include <stdio.h>
 #include <string.h>
 

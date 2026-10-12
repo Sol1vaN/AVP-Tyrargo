@@ -19,7 +19,7 @@
 
 - **[Mattias Gustavsson / newpixie](https://github.com/mattiasgustavsson/newpixie)**: CRT emulation work and GLSL reference. `crtemu.h` provides MIT/public-domain alternatives; the [MIT notice](LICENSES/newpixie-MIT.txt) is preserved here.
 - **[HelelSingh / CRT-Guest-ReShade](https://github.com/HelelSingh/CRT-Guest-ReShade)**: CRT shader reference and community port. Its `CRT-Guest-Advanced.fx` credits **guest(r)**, **Dr. Venom**, the **Libretro community**, and the ReShade port by **DevilSingh with guest(r)**. That shader declares GPL-2.0-or-later. Attribution here does not relabel GPL code as MIT or as the Rebellion license.
-- The integrated `src/crt_filter.c` identifies `MattiasCRT_Unlocked_Ex.fx` as its immediate port source. A complete mapping of the intermediate shader to its upstream notices remains a release-review item. Reference projects and actually bundled code are distinguished in [third-party notices](THIRD_PARTY_NOTICES.md).
+- **Iñigo Quilez**: postprocessing shader credited by the supplied MattiasCRT ReShade source. The integrated `src/crt_filter.c` translates the expanded `MattiasCRT_Unlocked_Ex.fx` into GLSL and retains its **CC BY-NC-SA 3.0 Unported** notice. Changes include GLSL translation, fixed profile values, previews/image controls and rounded-border optimization. [License](LICENSES/CC-BY-NC-SA-3.0.txt). The newpixie MIT reference and the separate Guest GPL shader are not used to relabel this adaptation.
 
 ## Libraries / Bibliotecas
 

@@ -6327,6 +6327,11 @@ void DoCredits(void)
 		ReadUserInput();
 	
 		FinishedCredits = !RollCreditsText(position,creditsPtr+4);
+        RenderSmallMenuText("libsmacker (C) 2012-2021 Greg Kennedy / LGPL 2.1+",MENU_CENTREX,410,ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
+        RenderSmallMenuText("libbinkdec (C) 2011 Barry Duncan; FFmpeg contributors / LGPL 2.1+",MENU_CENTREX,425,ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
+        RenderSmallMenuText("OpenAL Soft: Chris Robinson / LGPL 2+; see THIRD_PARTY_NOTICES.md",MENU_CENTREX,440,ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
+        RenderSmallMenuText("CRT: Inigo Quilez, Mattias Gustavsson, HelelSingh (see notices)",MENU_CENTREX,455,ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
+
 		ShowMenuFrameRate();
 
 		FlipBuffers();

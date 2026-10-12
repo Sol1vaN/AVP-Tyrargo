@@ -327,7 +327,7 @@ Tiempo fraccional, dirección local y recuperación de contacto corrigen casos e
 
 | `aliens-04` | feature | Alimentación del cadáver del jugador |
 
-| `aliens-05` | fix | Oscilación de aproximación y recuperación |
+| `aliens-05` | fix | Recuperar aproximación atascada sin descartar el objetivo |
 
 <a id="predators"></a>
 
@@ -375,11 +375,11 @@ Usar alterna follow/patrol con confirmación. Tareas compartidas, patrulla por e
 
 | `marines-07` | feature | Umbrales: salud/armadura 60%, ammo 30% |
 
-| `marines-08` | feature | Elección y recarga de arma según inventario |
+| `marines-08` | feature | Cadencia, recargas y combustible definidos como el jugador, con inventario privado |
 
-| `marines-09` | fix | Convergencia smartgun y exclusión de aliados |
+| `marines-09` | fix | Convergencia smartgun, exclusión de aliados y selección dentro del área válida |
 
-| `marines-10` | fix | Apuntado SADAR, granadas y por arma |
+| `marines-10` | fix | Apuntado por arma y consumo de munición al crear el proyectil |
 
 | `marines-11` | feature | Tarea de apoyo con torretas cercanas |
 
@@ -387,7 +387,7 @@ Usar alterna follow/patrol con confirmación. Tareas compartidas, patrulla por e
 
 | `marines-13` | feature | Armas recuperables al morir |
 
-| `marines-14` | fix | Vida de guardar/cargar inventario/planner |
+| `marines-14` | fix | Estado persistente de escuadrón, planner y temporizadores por arma |
 
 <a id="kernel"></a>
 

@@ -182,7 +182,7 @@ Native GLSL CRT, image controls and monitor noise are selectable. Constant or in
 scene framebuffer → GLSL image/CRT pass → selected presentation canvas
 ```
 
-[src/crt_filter.c:143](../../src/crt_filter.c#L143)
+[src/crt_filter.c:151](../../src/crt_filter.c#L151)
 
 ```c
 	if (CRTFilterVertexShader == 0 || CRTFilterFragmentShader == 0
@@ -514,6 +514,7 @@ static int MarineSupportControl(STRATEGYBLOCK*sb){
  MARINE_STATUS_BLOCK*m=sb->SBdataptr;
  if(!sb->containingModule || !NPCSupportCanCommand(sb) || !Player || !Player->ObStrategyBlock->DynPtr || !Player->ObStrategyBlock->containingModule)return 0;
  NPCInventoryInit(sb);NPCInventorySync(sb);NPC_MARINE_SQUAD*q=&m->squad;
+ MarineWeaponTick(sb);
   m->sentryGoalTimer-=NormalFrameTime;
  /* Legacy discharge states zero vertical speed: never run them mid jump. */
  if(q->jumpTimer>0 && !sb->DynPtr->IsInContactWithFloor){q->jumpTimer-=NormalFrameTime;if(q->jumpTimer<0)q->jumpTimer=0;m->IAmCrouched=q->movementCrouch;m->nearSpeed=q->airborneSpeed;m->acceleration=10000;NPCSetVelocity(sb,&q->airborneDirection,q->airborneSpeed);HandleMovingAnimations(sb);return 1;}
@@ -526,7 +527,6 @@ static int MarineSupportControl(STRATEGYBLOCK*sb){
    MARINE_STATUS_BLOCK*a=ally->SBdataptr;STRATEGYBLOCK*enemy=a->Target;
    if(!enemy || NPC_IsDead(enemy) || !enemy->DynPtr)continue;
    q->enemyMemory=5*ONE_FIXED;q->enemyPosition=enemy->DynPtr->Position;memcpy(q->enemyName,enemy->SBname,SB_NAME_LENGTH);
-   if(enemy->SBdptr && MarineCanSeeObject(sb,enemy)){m->Target=enemy;memcpy(m->Target_SBname,enemy->SBname,SB_NAME_LENGTH);}
 /* ... excerpt continues in the linked source ... */
 ```
 

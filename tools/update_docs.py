@@ -60,12 +60,22 @@ def outputs():
   out[folder+'features.md']='\n\n'.join(features)+'\n'
   out[folder+'technical.md']='\n\n'.join(technical)+'\n'
   out[folder+'roadmap.md']='\n\n'.join(road)+'\n'
-  intro=nav+'# '+('Development milestones' if en else 'Hitos del desarrollo')+'\n\n'+('Inventory of 249 local probe names. A probe can be a diagnostic experiment or revision of an existing feature; this is not 249 releases, nor 249 independent features. Original probe folders and private saves remain outside this repository. Git ancestry retains upstream history; the first Tyrargo commit imports the current snapshot.' if en else 'Inventario de nombres de 249 probes locales. Una probe puede ser diagnóstico o revisión de una función; no equivale a 249 releases ni 249 funciones independientes. Probes originales y saves privados quedan fuera del repositorio. Git conserva historia upstream; el primer commit Tyrargo importa el snapshot actual.')+'\n\n| Probe | Milestone |\n|---:|---|\n'
+  intro=nav+'# '+('Development milestones' if en else 'Hitos del desarrollo')+'\n\n'+('Inventory of local probe names. A probe can be a diagnostic experiment or revision of an existing feature; this is not 249 releases, nor 249 independent features. Original probe folders and private saves remain outside this repository. Git ancestry retains upstream history; the first Tyrargo commit imports the current snapshot.' if en else 'Inventario de nombres de probes locales. Una probe puede ser diagnóstico o revisión de una función; no equivale a 249 releases ni 249 funciones independientes. Probes originales y saves privados quedan fuera del repositorio. Git conserva historia upstream; el primer commit Tyrargo importa el snapshot actual.')+'\n\n| Probe | Milestone |\n|---:|---|\n'
   out[folder+'history.md']=intro+'\n'.join(f"| {x['probe']:03} | {x['title']} |" for x in hist)+'\n'
   gallery=[nav+'# '+('Showcase gallery' if en else 'Galería showcase'),('All supplied screenshots, resized into documentation copies; original game assets/maps are not bundled. Images may depict earlier iterations. CRT off/on is a matched pair; water/map scenes are illustrations, not matched performance comparisons.' if en else 'Todas las capturas suministradas, en copias para documentación; no incluye recursos/mapas originales. Imágenes pueden mostrar iteraciones previas. CRT off/on es un par comparable; agua/mapas son ejemplos, no comparaciones de rendimiento.')]
-  for x in media:
-   if x['file'] in ('banner.png','hero.png'):continue
-   gallery += [f"<details><summary>{x['original']}</summary>\n\n![{x['original']}](../media/{x['file']})\n\n</details>"]
+
+  categories=list(dict.fromkeys(x['category'] for x in media if 'category' in x))
+  gallery += [' · '.join(f"[{next(x['title'][lang] for x in media if x.get('category')==cat)}](#{cat})" for cat in categories)]
+  for cat in categories:
+   members=[x for x in media if x.get('category')==cat]
+   gallery += [f'<a id="{cat}"></a>\n\n## {members[0]["title"][lang]}']
+   last_group=None
+   for x in members:
+    sub='/'.join(x['original'].split('/')[2:-1])
+    if sub and sub!=last_group:gallery += ['### '+sub.replace('new delerectic','New Derelict').replace('marine','Marine').replace('predator','Predator').replace('alien','Alien')];last_group=sub
+    caption=x['original'].split('/')[-1]
+    if caption.lower() in ('before.png','after.png'):caption=('Before — CRT disabled' if caption.lower()=='before.png' else 'After — CRT enabled') if en else ('Antes — CRT desactivado' if caption.lower()=='before.png' else 'Después — CRT activado')
+    gallery += [f"<details><summary>{caption}</summary>\n\n![{caption}](../media/{x['file']})\n\n</details>"]
   out[folder+'gallery.md']='\n\n'.join(gallery)+'\n'
  out['README_TYRARGO.md']=f'# AVP: Tyrargo {version()}\n\nThis legacy entry point follows the current version header. See [English README](README.md), [README español](README.es.md), [build/versioning guide](docs/en/build.md) and [milestones](docs/en/history.md).\n'
  return out

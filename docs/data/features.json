@@ -1142,8 +1142,8 @@
       "category": "aliens",
       "type": "fix",
       "title": {
-        "en": "Approach oscillation and navigation recovery",
-        "es": "Oscilación de aproximación y recuperación"
+        "en": "Recover stalled approach without discarding the target",
+        "es": "Recuperar aproximación atascada sin descartar el objetivo"
       },
       "source": "src/avp/bh_alien.c",
       "status": "implemented"
@@ -1285,8 +1285,8 @@
       "category": "marines",
       "type": "feature",
       "title": {
-        "en": "Inventory-based weapon choice and reload",
-        "es": "Elección y recarga de arma según inventario"
+        "en": "Player-defined weapon cadence, reloads, fuel and private inventory",
+        "es": "Cadencia, recargas y combustible definidos como el jugador, con inventario privado"
       },
       "source": "src/avp/npc_support.c",
       "status": "implemented"
@@ -1296,8 +1296,8 @@
       "category": "marines",
       "type": "fix",
       "title": {
-        "en": "Smartgun convergence and ally exclusion",
-        "es": "Convergencia smartgun y exclusión de aliados"
+        "en": "Smartgun convergence, ally exclusion and valid capture-area selection",
+        "es": "Convergencia smartgun, exclusión de aliados y selección dentro del área válida"
       },
       "source": "src/avp/npc_support.c",
       "status": "implemented"
@@ -1307,8 +1307,8 @@
       "category": "marines",
       "type": "fix",
       "title": {
-        "en": "SADAR, grenade and weapon-specific aiming",
-        "es": "Apuntado SADAR, granadas y por arma"
+        "en": "Weapon-specific aiming and committed projectile ammunition",
+        "es": "Apuntado por arma y consumo de munición al crear el proyectil"
       },
       "source": "src/avp/npc_support.c",
       "status": "implemented"
@@ -1351,8 +1351,8 @@
       "category": "marines",
       "type": "fix",
       "title": {
-        "en": "Squad inventory/planner save-load lifecycle",
-        "es": "Vida de guardar/cargar inventario/planner"
+        "en": "Persisted squad, planner and per-weapon timing state",
+        "es": "Estado persistente de escuadrón, planner y temporizadores por arma"
       },
       "source": "src/avp/npc_support.c",
       "status": "implemented"

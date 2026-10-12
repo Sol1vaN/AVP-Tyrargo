@@ -1243,5 +1243,15 @@
     "probe": 249,
     "slug": "saved_world_performance_predator_gait",
     "title": "saved world performance predator gait"
+  },
+  {
+    "probe": 250,
+    "slug": "github_private_publication",
+    "title": "Private repository preparation, bilingual catalogs and preserved upstream ancestry"
+  },
+  {
+    "probe": 251,
+    "slug": "gameplay_weapon_rules_public_release",
+    "title": "Smartgun capture selection, alien route recovery, NPC weapon rules and first public Windows release candidate"
   }
 ]

@@ -8,9 +8,11 @@ This is an independent, non-commercial fan project, unaffiliated with Rebellion 
 
 ![Halos and lighting — the selected Tyrargo showcase screenshot](docs/media/hero.png)
 
+![Marine gameplay](docs/media/hero-marine.jpg)
+
 **Installation instructions are on the [How to install and play](docs/en/install-and-play.md) page.** Developers: [build from source](docs/en/build.md).
 
-Current source: **v6.249 RC1**, Windows x64 release candidate. Binary publication is manual and follows player testing and dependency-license review. There is no published binary release yet.
+Current release candidate: **v6.251 RC1**, Windows x64. **[Download binaries and release notes](https://github.com/Sol1vaN/AVP-Tyrargo/releases/tag/v6.251-rc1)**. Supply your own Gold CD or Classic Steam/GOG game data. The same release includes source, dependency sources and relinking materials. Broader player testing continues.
 
 ## Showcase
 
@@ -35,7 +37,7 @@ GitHub READMEs do not embed a YouTube player. This preview opens the video with 
 |---:|---:|---:|---:|
 | 52 | 17 | 46 | 115 |
 
-These are **consolidated implemented changes**, classified once each; counts are not promises of bug-free behavior. Repeated experiments are tracked in the [249-milestone development history](docs/en/history.md), not counted again as new features.
+These are **consolidated implemented changes**, classified once each; counts are not promises of bug-free behavior. Repeated experiments are tracked in the [development history](docs/en/history.md), not counted again as new features.
 
 - **[Mouse, keyboard and bindings](docs/en/features.md#input)** — Direct mouse-to-camera angles · Sub-angular yaw/pitch residuals (9).
 - **[Display modes and presentation](docs/en/features.md#display)** — Windowed, borderless and exclusive modes · Transactional video-mode switching (8).

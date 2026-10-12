@@ -30,7 +30,7 @@ static void MarineSmartRounds(STRATEGYBLOCK*sb,int rounds){
   double angle=(FastRandom()&65535)*(6.283185307179586/65536.),radius=sqrt((FastRandom()&65535)/65535.)*.006;
   int x=(int)(cos(angle)*radius*ONE_FIXED),y=(int)(sin(angle)*radius*ONE_FIXED);
   VECTORCH d={centre.vx+MUL_FIXED(aim.mat11,x)+MUL_FIXED(aim.mat21,y),centre.vy+MUL_FIXED(aim.mat12,x)+MUL_FIXED(aim.mat22,y),centre.vz+MUL_FIXED(aim.mat13,x)+MUL_FIXED(aim.mat23,y)};Normalise(&d);
-  CastLOSProjectile(sb,&m->My_Gunflash_Section->World_Offset,&d,m->My_Weapon->Ammo_Type,1,0);
+  CastLOSProjectile(sb,&m->My_Gunflash_Section->World_Offset,&d,MarineWeaponAmmo(sb),1,0);
  }
 }
 static int MarineProjectileAim(STRATEGYBLOCK*sb,VECTORCH*origin,int grenade,MATRIXCH*mat){
@@ -40,6 +40,6 @@ static int MarineProjectileAim(STRATEGYBLOCK*sb,VECTORCH*origin,int grenade,MATR
  if(!NPCAimSolve(offset,velocity,grenade==1?70000:grenade==2?20000:80000,grenade==1?GRAVITY_STRENGTH:0,dir,&flight))return 0;
  VECTORCH direction={(int)(dir[0]*ONE_FIXED),(int)(dir[1]*ONE_FIXED),(int)(dir[2]*ONE_FIXED)};Normalise(&direction);MakeMatrixFromDirection(&direction,mat);return 1;
 }
-static STRATEGYBLOCK*MarineLaunchRocket(STRATEGYBLOCK*sb,VECTORCH*origin){MATRIXCH aim;if(!MarineProjectileAim(sb,origin,0,&aim))return NULL;return CreateRocketKernel(origin,&aim,0);}
-static STRATEGYBLOCK*MarineLaunchGrenade(STRATEGYBLOCK*sb,AVP_BEHAVIOUR_TYPE type,VECTORCH*origin){MATRIXCH aim;if(!MarineProjectileAim(sb,origin,1,&aim))return NULL;return CreateGrenadeKernel(type,origin,&aim,0);}
-static STRATEGYBLOCK*MarineLaunchFrisbee(STRATEGYBLOCK*sb,VECTORCH*origin){MATRIXCH aim;if(!MarineProjectileAim(sb,origin,2,&aim))return NULL;return CreateFrisbeeKernel(origin,&aim,0);}
+static STRATEGYBLOCK*MarineLaunchRocket(STRATEGYBLOCK*sb,VECTORCH*origin){MATRIXCH aim;if(!MarineShotReady(sb,0) || !MarineProjectileAim(sb,origin,0,&aim))return NULL;STRATEGYBLOCK*shot=CreateRocketKernel(origin,&aim,0);if(shot)MarineShotCommitted(sb,0);return shot;}
+static STRATEGYBLOCK*MarineLaunchGrenade(STRATEGYBLOCK*sb,AVP_BEHAVIOUR_TYPE type,VECTORCH*origin){MATRIXCH aim;if(!MarineShotReady(sb,0) || !MarineProjectileAim(sb,origin,1,&aim))return NULL;STRATEGYBLOCK*shot=CreateGrenadeKernel(type,origin,&aim,0);if(shot)MarineShotCommitted(sb,0);return shot;}
+static STRATEGYBLOCK*MarineLaunchFrisbee(STRATEGYBLOCK*sb,VECTORCH*origin){MATRIXCH aim;if(!MarineShotReady(sb,0) || !MarineProjectileAim(sb,origin,2,&aim))return NULL;STRATEGYBLOCK*shot=CreateFrisbeeKernel(origin,&aim,0);if(shot)MarineShotCommitted(sb,0);return shot;}

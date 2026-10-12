@@ -121,6 +121,4 @@ Trabajo futuro, no funciones entregadas. Estado explícito, sin promesas de fech
 | Tarea | Estado |
 |---|---|
 
-| Completar procedencia shaders y revisión distribución binaria LGPL estática | `before-public-release` |
-
-| Prueba del candidato importado por jugadores | `before-public-release` |
+| Pruebas más amplias con jugadores en campañas, mapas custom y multiplayer | `ongoing-player-testing` |

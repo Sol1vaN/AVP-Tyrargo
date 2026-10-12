@@ -169,7 +169,7 @@ void NPCSupportSave(void){
   AcidPopulationSave(s);
   if(NPCSupportCanCommand(s)){
    NPCInventoryInit(s);NPCInventorySync(s);SQUAD_SAVE*b=GetPointerForSaveBlock(sizeof(*b));memset(b,0,sizeof(*b));
-   b->header.type=SaveBlock_NPCSupport;b->header.size=sizeof(*b);b->schema=246;memcpy(b->name,s->SBname,SB_NAME_LENGTH);b->squad=((MARINE_STATUS_BLOCK*)s->SBdataptr)->squad;
+   b->header.type=SaveBlock_NPCSupport;b->header.size=sizeof(*b);b->schema=251;memcpy(b->name,s->SBname,SB_NAME_LENGTH);b->squad=((MARINE_STATUS_BLOCK*)s->SBdataptr)->squad;
   }
   NPC_DAMAGE_SOURCE empty={0};
   if(!s->supportFollow && !s->supportKillsPending && !memcmp(s->combatOwner,empty.name,SB_NAME_LENGTH) && !memcmp(s->combatBurnOwner,empty.name,SB_NAME_LENGTH))continue;
@@ -184,12 +184,13 @@ void NPCSupportLoad(SAVE_BLOCK_HEADER *header){
  if(AcidPopulationLoad(header))return;
  if(header->size>=sizeof(SAVE_BLOCK_HEADER)+sizeof(int) && *(int*)(header+1)==244){ParticleSupportLoadOwners(header);return;}
  size_t oldSize=offsetof(SQUAD_SAVE,squad)+offsetof(NPC_MARINE_SQUAD,loadoutReady);
- if((header->size==sizeof(SQUAD_SAVE) && *(int*)(header+1)==246) || (header->size==oldSize && *(int*)(header+1)==245)){
+ size_t size246=offsetof(SQUAD_SAVE,squad)+offsetof(NPC_MARINE_SQUAD,shotDelay);
+ if((header->size==sizeof(SQUAD_SAVE) && *(int*)(header+1)==251) || (header->size==size246 && *(int*)(header+1)==246) || (header->size==oldSize && *(int*)(header+1)==245)){
   SQUAD_SAVE*b=(SQUAD_SAVE*)header;STRATEGYBLOCK*s=FindSBWithName(b->name);
   if(NPCSupportCanCommand(s) && b->squad.initialized==1 && b->squad.activeSlot>=-1 && b->squad.activeSlot<MAX_NO_OF_WEAPON_SLOTS){
    NPCInventoryInit(s);NPC_MARINE_SQUAD*q=&((MARINE_STATUS_BLOCK*)s->SBdataptr)->squad;
     for(int i=0;i<MAX_NO_OF_WEAPON_SLOTS;i++)if(q->weapons[i].WeaponIDNumber!=b->squad.weapons[i].WeaponIDNumber)return;
-    memset(q,0,sizeof(*q));memcpy(q,&b->squad,header->size==oldSize?offsetof(NPC_MARINE_SQUAD,loadoutReady):sizeof(*q));q->jumpTimer=q->tacticalTimer=q->patrolTimer=0;
+    memset(q,0,sizeof(*q));memcpy(q,&b->squad,header->size-offsetof(SQUAD_SAVE,squad));q->jumpTimer=q->tacticalTimer=q->patrolTimer=0;
   }return;
  }
  if(header->size!=sizeof(SUPPORT_SAVE))return;SUPPORT_SAVE *b=(SUPPORT_SAVE*)header;

@@ -29,7 +29,8 @@ for x in feature['items']:
  if x['status']!='implemented':errors.append('Non-implemented item in implemented count: '+x['id'])
  if x['category'] not in feature['categories']:errors.append('Unknown category: '+x['id'])
  if set(x['title'])!={'en','es'}:errors.append('Missing translation: '+x['id'])
-for x in (ROOT/'docs/media').iterdir():
+for x in (ROOT/'docs/media').rglob('*'):
+ if not x.is_file():continue
  if x.stat().st_size>5*1024*1024:errors.append('Oversized documentation media: '+x.name)
 if errors:print('\n'.join(errors).replace('→','->'));sys.exit(1)
 print(f'PASS: {len(files)} Markdown files, bilingual generation, links/anchors, {len(feature["items"])} unique implemented entries and media limits.')

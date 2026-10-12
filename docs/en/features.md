@@ -327,7 +327,7 @@ Fractional timing, local steering and support/contact recovery address tested ve
 
 | `aliens-04` | feature | Player-corpse feeding behavior |
 
-| `aliens-05` | fix | Approach oscillation and navigation recovery |
+| `aliens-05` | fix | Recover stalled approach without discarding the target |
 
 <a id="predators"></a>
 
@@ -375,11 +375,11 @@ Use commands toggle follow/patrol with acknowledgment. Shared jobs, staged patro
 
 | `marines-07` | feature | Resource thresholds: health/armor 60%, ammo 30% |
 
-| `marines-08` | feature | Inventory-based weapon choice and reload |
+| `marines-08` | feature | Player-defined weapon cadence, reloads, fuel and private inventory |
 
-| `marines-09` | fix | Smartgun convergence and ally exclusion |
+| `marines-09` | fix | Smartgun convergence, ally exclusion and valid capture-area selection |
 
-| `marines-10` | fix | SADAR, grenade and weapon-specific aiming |
+| `marines-10` | fix | Weapon-specific aiming and committed projectile ammunition |
 
 | `marines-11` | feature | Nearby sentry support task |
 
@@ -387,7 +387,7 @@ Use commands toggle follow/patrol with acknowledgment. Shared jobs, staged patro
 
 | `marines-13` | feature | Recoverable weapon drops on death |
 
-| `marines-14` | fix | Squad inventory/planner save-load lifecycle |
+| `marines-14` | fix | Persisted squad, planner and per-weapon timing state |
 
 <a id="kernel"></a>
 

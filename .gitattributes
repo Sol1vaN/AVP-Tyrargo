@@ -13,3 +13,6 @@
 *.png binary
 *.jpg binary
 *.gif binary
+
+# Preserve upstream license documents verbatim.
+LICENSES/** -text

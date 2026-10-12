@@ -2,7 +2,7 @@
 
 # Hitos del desarrollo
 
-Inventario de nombres de 249 probes locales. Una probe puede ser diagnóstico o revisión de una función; no equivale a 249 releases ni 249 funciones independientes. Probes originales y saves privados quedan fuera del repositorio. Git conserva historia upstream; el primer commit Tyrargo importa el snapshot actual.
+Inventario de nombres de probes locales. Una probe puede ser diagnóstico o revisión de una función; no equivale a 249 releases ni 249 funciones independientes. Probes originales y saves privados quedan fuera del repositorio. Git conserva historia upstream; el primer commit Tyrargo importa el snapshot actual.
 
 | Probe | Milestone |
 |---:|---|
@@ -255,3 +255,5 @@ Inventario de nombres de 249 probes locales. Una probe puede ser diagnóstico o 
 | 247 | squad follow supply motion |
 | 248 | squad exploration motion drops |
 | 249 | saved world performance predator gait |
+| 250 | Private repository preparation, bilingual catalogs and preserved upstream ancestry |
+| 251 | Smartgun capture selection, alien route recovery, NPC weapon rules and first public Windows release candidate |

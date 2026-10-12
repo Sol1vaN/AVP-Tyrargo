@@ -18,6 +18,9 @@ typedef struct {
  int loadoutReady,additionalPicked,loadoutTimer;unsigned int loadoutMask;
  int paceTimer,desiredPace;VECTORCH paceDirection;
  int perceptionTimer;int sightTimer,enemyMemory;VECTORCH enemyPosition;char enemyName[SB_NAME_LENGTH];
+ /* Appended schema-251 weapon clocks; old squad prefixes remain unchanged. */
+ int shotDelay[MAX_NO_OF_WEAPON_SLOTS][2],reloadDelay;
+ unsigned int fuelCarryLow,fuelCarryHigh;
 } NPC_MARINE_SQUAD;
 void NPCInventoryReset(void);
 int NPCInventoryCanResupply(STRATEGYBLOCK *sb);

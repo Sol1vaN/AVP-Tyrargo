@@ -8,9 +8,11 @@ Es un proyecto independiente de fans, no comercial, sin afiliación con Rebellio
 
 ![Halos e iluminación — captura elegida de Tyrargo](docs/media/hero.png)
 
+![Marine gameplay](docs/media/hero-marine.jpg)
+
 **Las instrucciones están en [Cómo instalar y jugar](docs/es/install-and-play.md).** Desarrolladores: [compilar desde el código](docs/es/build.md).
 
-Código actual: **v6.249 RC1**, candidato Windows x64. Publicar binarios es un paso manual posterior a pruebas de jugadores y revisión de licencias. Aún no hay un binario publicado.
+Candidato actual: **v6.251 RC1**, Windows x64. **[Descargar binarios y notas de versión](https://github.com/Sol1vaN/AVP-Tyrargo/releases/tag/v6.251-rc1)**. Debes suministrar los datos de Gold CD o Classic Steam/GOG. La misma release incluye código, fuentes de dependencias y materiales para volver a enlazar. Continúan las pruebas más amplias con jugadores.
 
 ## Showcase
 
@@ -35,7 +37,7 @@ GitHub no permite incrustar un reproductor YouTube en el README. Esta vista prev
 |---:|---:|---:|---:|
 | 52 | 17 | 46 | 115 |
 
-Son **cambios implementados consolidados**, contados una sola vez; no prometen ausencia de bugs. Experimentos repetidos se conservan en el [historial de 249 hitos](docs/es/history.md), sin volver a contarlos como funciones nuevas.
+Son **cambios implementados consolidados**, contados una sola vez; no prometen ausencia de bugs. Experimentos repetidos se conservan en el [historial del desarrollo](docs/es/history.md), sin volver a contarlos como funciones nuevas.
 
 - **[Mouse, teclado y binds](docs/es/features.md#input)** — Ángulos directos del mouse a la cámara · Restos subangulares yaw/pitch (9).
 - **[Modos de pantalla y presentación](docs/es/features.md#display)** — Modos ventana, sin bordes y exclusivo · Cambios transaccionales de modo de vídeo (8).

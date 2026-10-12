@@ -2,7 +2,7 @@
 
 # Trabajar localmente y publicar manualmente
 
-**Sol1vaN/AVP-Tyrargo** comienza privado e independiente en GitHub. Conserva historia Git de NakedAVP 1.2.3 y remote `upstream` de referencia. Un fork GitHub de un proyecto público también debe ser público; por eso usamos una repo independiente en esta revisión. [Reglas de forks](https://docs.github.com/en/pull-requests/reference/forks).
+**Sol1vaN/AVP-Tyrargo** es un repositorio público e independiente en GitHub. Conserva la historia Git de NakedAVP 1.2.3 y el remote `upstream` de referencia. Se preparó de forma privada antes de la primera publicación; no pertenece a la red de forks de GitHub.
 
 Proyecto original, probes e instalación del juego siguen separados de la copia de publicación. Git/repo remota no borran esas carpetas. Git conserva archivos confirmados; no respalda automáticamente saves, assets o probes ignorados. Mantener sus respaldos habituales.
 
@@ -57,10 +57,10 @@ Usar hash existente y revisado. Para deshacer algo ya compartido, preferir commi
 
 Las 249 probes no se inventan como 249 commits: quedan locales y tienen un inventario de hitos rastreado. La historia upstream sí se conserva como antecesora.
 
-## Revisión privada y primera publicación
+## Revisión y publicación
 
 Revisar presentación/procedencia, probar gameplay y completar avisos/materiales de distribución. Después decidir explícitamente hacer pública la repo y publicar un release. Mientras tanto solo colaboradores autorizados ven el contenido. Nada modifica la repo de atsb.
 
 ## Avisar a atsb
 
-Issue/discussion para un aviso breve si su política lo admite; PR para una contribución de código concreta; Projects organiza planificación. Hay un [borrador local](../../MAINTAINER_MESSAGE_DRAFT.md), todavía sin enviar. Antes de invitarlo a revisar, hacer accesible la repo o acordar acceso privado.
+Issue/discussion para un aviso breve si su política lo admite; PR para una contribución de código concreta; Projects organiza planificación. Hay un [borrador local](../../MAINTAINER_MESSAGE_DRAFT.md), todavía sin enviar. El borrador ya puede incluir los enlaces públicos a la repo y la release. NakedAVP tiene Issues habilitados y Discussions deshabilitados; revisar su política antes de publicar un aviso.

@@ -4,24 +4,29 @@
 
 ## What you need
 
-A legal installation of Aliens versus Predator Gold/Classic and a Windows x64 Tyrargo package approved by the maintainer. The source repository does not include original maps, textures, movies, audio or custom maps. This repository currently contains a release-candidate source snapshot; there is no public binary download yet. Developers can [compile it](build.md).
+Tyrargo uses data from these editions:
 
-## Install a reviewed Windows package
+- **Aliens versus Predator Gold Edition — retail CD** (installed game data).
+- **Aliens versus Predator Classic 2000 — Steam or GOG**.
 
-1. Close the game. Back up its existing executable/runtime DLLs, `.avp`, profile folders and saves. If the engine uses a user configuration directory, back up that directory too.
-2. Extract the Tyrargo package into a copy of your existing game installation. Keep the package's runtime DLLs next to `avpt.exe`; keep the included license notices.
-3. Verify that `avp_rifs/temple.rif` and `fastfile/ffinfo.txt` exist. Preserve the game's `avp_huds`, `graphics`, `Text`, `FMVs` and other supplied data directories.
-4. Run `avpt.exe` with the game folder as its working directory. If data is stored elsewhere, point `AVP_DATA` at the folder containing `avp_rifs` and `fastfile`.
-5. Create/select your profile, open Audio/Video and choose display mode, resolution and pacing. Configure species controls and FOV/interface scales to taste.
+You must own and install the game. The package supplies the port and its runtime libraries; it does not supply commercial maps, textures, audio, movies or custom maps. Windows x64 is the supported binary target. [Downloads](https://github.com/Sol1vaN/AVP-Tyrargo/releases) · [Compile from source](build.md).
 
-A folder containing only the executable and DLLs is not a complete game installation.
+## Install and play
+
+1. Close the game and back up your profiles/saves. Extract the Windows x64 ZIP **into the existing game directory**, keeping the package's directories and license notices. You may instead use a separate copy of the game directory.
+2. The supplied launcher is **`avpt.exe`**. It has a distinct name from the stock game executables; keep those original executables. Keep the supplied runtime DLLs next to `avpt.exe`. If the destination already contains a previous Tyrargo build, replace that build's matching files together.
+3. Check that `avp_rifs/temple.rif` and `fastfile/ffinfo.txt` exist. Preserve all installed game-data directories. Some editions package graphics/audio in `fastfile`; a separate `graphics` directory is not required in that case.
+4. Start `avpt.exe` from that game directory. Select/create your profile and configure Audio/Video and species controls. The stock launcher can still start the original game.
+
+For Steam, a typical destination is `Steam/steamapps/common/Aliens versus Predator Classic`. For Gold CD and GOG, use the directory you selected during installation. Steam/GOG availability does not mean the port runs through the original executable automatically.
+
+Alternatively, keep the port in its own directory and select an existing data installation:
 
 ```powershell
-$env:AVP_DATA = 'D:\Games\Aliens versus Predator Classic'
-.\avpt.exe
+.\avpt.exe -p 'D:\Games\Aliens versus Predator Classic'
 ```
 
-The engine's configuration resolver may use the local `.avp` folder or a user `.avp` folder according to the environment. Do not delete an existing profile just to change executables.
+`-p` selects the data directory. Configuration/profile location is resolved separately by the engine and environment; preserve `.avp` and existing user profiles when upgrading. `AVP_DATA` is another supported way to select data. A directory containing only the port and DLLs is not a complete game.
 
 ## Basic Tyrargo options
 

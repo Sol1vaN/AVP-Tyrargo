@@ -2,7 +2,7 @@
 
 # Keep local work and publish manually
 
-The repository is **Sol1vaN/AVP-Tyrargo**, initially private and independent on GitHub. It retains NakedAVP 1.2.3 as Git ancestry and an `upstream` remote for reference. A GitHub fork of a public repository must itself be public, so a private independent repository is appropriate for this review phase. [GitHub fork rules](https://docs.github.com/en/pull-requests/reference/forks).
+The repository is **Sol1vaN/AVP-Tyrargo**, public and independent on GitHub. It retains NakedAVP 1.2.3 as Git ancestry and an `upstream` remote for reference. It was prepared privately before its first public release; it is not in GitHub’s fork network.
 
 The original local project, probes and game installation are separate from the publication checkout. Creating Git commits or a remote repository does not erase those folders. Git tracks committed files; it does not automatically back up ignored saves, assets or old probe folders. Continue backing those up normally.
 
@@ -61,8 +61,8 @@ The first Tyrargo import preserves upstream commits, but the 249 historical prob
 
 ## Private review and first public release
 
-Review documentation and provenance, test the candidate in-game, prepare complete distribution notices and relinking materials where required, then deliberately choose public visibility and release publication. Until then, links to this private repository are visible only to authorized collaborators. Nothing modifies atsb's repository.
+Review documentation and provenance, test the candidate in-game, prepare complete distribution notices and relinking materials where required, then deliberately choose public visibility and release publication. Visibility and release publication are manual actions, authorized by the maintainer. Nothing modifies atsb's repository.
 
 ## Contacting atsb
 
-An issue/discussion can carry a brief announcement if the project's contribution policy welcomes it; a pull request is for a concrete proposed code contribution, and Projects are planning boards. A local [announcement draft](../../MAINTAINER_MESSAGE_DRAFT.md) is prepared, not sent. Make the repository accessible or arrange private access before asking others to inspect it.
+An issue/discussion can carry a brief announcement if the project's contribution policy welcomes it; a pull request is for a concrete proposed code contribution, and Projects are planning boards. A local [announcement draft](../../MAINTAINER_MESSAGE_DRAFT.md) is prepared, not sent. The repository and release links can now be included in that draft. NakedAVP currently has Issues enabled and Discussions disabled; check its contribution policy before posting an announcement.

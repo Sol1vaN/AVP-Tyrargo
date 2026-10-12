@@ -378,7 +378,7 @@ void NearAlienBehaviour(STRATEGYBLOCK *sbPtr)
             alienStatusPointer->huntingModule=NULL;
             alienStatusPointer->CurveTimeOut=0;
             alienStatusPointer->NearStateTimer=0;
-            alienStatusPointer->BehaviourState=ABS_Wander;
+            alienStatusPointer->BehaviourState=alienStatusPointer->Target?ABS_Approach:ABS_Wander;
         }
     }
 
@@ -1178,6 +1178,21 @@ static void AlienNearState_Approach(STRATEGYBLOCK *sbPtr)
 		//textprint("non curving alien \n");
 
 		NPCGetMovementDirection(sbPtr, &velocityDirection, &targetPos,&alienStatusPointer->waypointManager);
+        /* A stalled floor-edge route may point along a tunnel wall forever.
+         * Retry the visible target itself for the bounded recovery interval.
+         * Native dynamics still resolve the full collision hull and support. */
+        if(alienStatusPointer->motion.recoveryTime>0 && alienStatusPointer->Target->SBdptr) {
+            VECTORCH from,goal,direct;
+            GetTargetingPointOfObject_Far(sbPtr,&from);
+            GetTargetingPointOfObject_Far(alienStatusPointer->Target,&goal);
+            direct=goal;SubVector(&from,&direct);int distance=Magnitude(&direct);
+            if(distance>0 && IsThisObjectVisibleFromThisPosition_WithIgnore(alienStatusPointer->Target->SBdptr,sbPtr->SBdptr,&from,distance+100)) {
+                direct=alienStatusPointer->Target->DynPtr->Position;SubVector(&dynPtr->Position,&direct);
+                if(!AlienIsCrawling(sbPtr))direct.vy=0;
+                Normalise(&direct);velocityDirection=direct;
+            }
+        }
+
 		if (AlienIsEncouragedToCrawl()&&(alienStatusPointer->EnableWaypoints)) {
 			if (AlienIsAbleToClimb(sbPtr)) {
 				AlienNavigationGravity(sbPtr,1);

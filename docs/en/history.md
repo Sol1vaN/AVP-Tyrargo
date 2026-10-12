@@ -2,7 +2,7 @@
 
 # Development milestones
 
-Inventory of 249 local probe names. A probe can be a diagnostic experiment or revision of an existing feature; this is not 249 releases, nor 249 independent features. Original probe folders and private saves remain outside this repository. Git ancestry retains upstream history; the first Tyrargo commit imports the current snapshot.
+Inventory of local probe names. A probe can be a diagnostic experiment or revision of an existing feature; this is not 249 releases, nor 249 independent features. Original probe folders and private saves remain outside this repository. Git ancestry retains upstream history; the first Tyrargo commit imports the current snapshot.
 
 | Probe | Milestone |
 |---:|---|
@@ -255,3 +255,5 @@ Inventory of 249 local probe names. A probe can be a diagnostic experiment or re
 | 247 | squad follow supply motion |
 | 248 | squad exploration motion drops |
 | 249 | saved world performance predator gait |
+| 250 | Private repository preparation, bilingual catalogs and preserved upstream ancestry |
+| 251 | Smartgun capture selection, alien route recovery, NPC weapon rules and first public Windows release candidate |

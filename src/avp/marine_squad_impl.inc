@@ -77,6 +77,7 @@ static int MarineSupportControl(STRATEGYBLOCK*sb){
  MARINE_STATUS_BLOCK*m=sb->SBdataptr;
  if(!sb->containingModule || !NPCSupportCanCommand(sb) || !Player || !Player->ObStrategyBlock->DynPtr || !Player->ObStrategyBlock->containingModule)return 0;
  NPCInventoryInit(sb);NPCInventorySync(sb);NPC_MARINE_SQUAD*q=&m->squad;
+ MarineWeaponTick(sb);
   m->sentryGoalTimer-=NormalFrameTime;
  /* Legacy discharge states zero vertical speed: never run them mid jump. */
  if(q->jumpTimer>0 && !sb->DynPtr->IsInContactWithFloor){q->jumpTimer-=NormalFrameTime;if(q->jumpTimer<0)q->jumpTimer=0;m->IAmCrouched=q->movementCrouch;m->nearSpeed=q->airborneSpeed;m->acceleration=10000;NPCSetVelocity(sb,&q->airborneDirection,q->airborneSpeed);HandleMovingAnimations(sb);return 1;}
@@ -101,7 +102,6 @@ static int MarineSupportControl(STRATEGYBLOCK*sb){
      Pose evaluation is guarded by GlobalFrameCounter, so rendering cannot
      advance the animation twice. */
   ProveHModel_Far(&m->HModelController,sb);WanderMission_Control(sb);return 1;default:break;}
- if(m->clipammo==0 && (m->My_Weapon->id==MNPCW_SADAR || m->My_Weapon->id==MNPCW_Skeeter)){m->clipammo=NPCInventoryReload(sb);if(m->clipammo>0)Marine_Enter_Wait_State(sb);}
  if(m->clipammo==0 && q->activeSlot>=0 && (q->weapons[q->activeSlot].PrimaryMagazinesRemaining || q->weapons[q->activeSlot].SecondaryMagazinesRemaining)){Marine_Enter_Reload_State(sb);return 1;}
  /* A fixed formation slot can be inside a wall even though the human is
     reachable. Try the next stable slot only after sustained lack of actual
@@ -158,7 +158,7 @@ static int MarineSupportControl(STRATEGYBLOCK*sb){
    }
    VECTORCH movingVelocity=sb->DynPtr->LinVelocity;
    WanderMission_Control(sb);NPCInventorySync(sb);
-   if(!q->retreating && !regroup)return 1;
+   if(m->behaviourState==MBS_Reloading || m->behaviourState==MBS_PumpAction || (!q->retreating && !regroup))return 1;
    /* Native fire functions stop feet while firing. Tactical movement must
       accelerate from the preceding velocity, not restart at zero each shot. */
    sb->DynPtr->LinVelocity=movingVelocity;

@@ -121,6 +121,4 @@ Future work, not shipped functionality. Status is explicit; no release-date prom
 | Task | Status |
 |---|---|
 
-| Complete shader provenance and static LGPL binary distribution review | `before-public-release` |
-
-| Player acceptance testing of the imported release candidate | `before-public-release` |
+| Broader player testing across campaigns, custom maps and multiplayer | `ongoing-player-testing` |

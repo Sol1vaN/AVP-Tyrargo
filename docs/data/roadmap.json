@@ -170,17 +170,9 @@
   {
     "category": "release",
     "title": {
-      "en": "Complete shader provenance and static LGPL binary distribution review",
-      "es": "Completar procedencia shaders y revisión distribución binaria LGPL estática"
+      "en": "Broader player testing across campaigns, custom maps and multiplayer",
+      "es": "Pruebas más amplias con jugadores en campañas, mapas custom y multiplayer"
     },
-    "status": "before-public-release"
-  },
-  {
-    "category": "release",
-    "title": {
-      "en": "Player acceptance testing of the imported release candidate",
-      "es": "Prueba del candidato importado por jugadores"
-    },
-    "status": "before-public-release"
+    "status": "ongoing-player-testing"
   }
 ]

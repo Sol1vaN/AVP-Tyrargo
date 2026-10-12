@@ -549,6 +549,19 @@ void SmartTarget(int speed,int projectile_speed)
 
 #define SMART_TRACKABLE_TARGETS 100
 
+/* Reject candidates outside the sight's actual capture rectangle before
+ * ranking distance. An off-axis near enemy must not hide an aimable enemy. */
+static int SmartTarget_InCaptureArc(const VECTORCH *view){
+ extern VIEWDESCRIPTORBLOCK *ActiveVDBList[];
+ extern SCREENDESCRIPTORBLOCK ScreenDescriptorBlock;
+ VIEWDESCRIPTORBLOCK*v=ActiveVDBList[0];int x,y;
+ if(!v || view->vz<=0)return 0;
+ x=WideMulNarrowDiv(view->vx,v->VDB_ProjX,view->vz);
+ y=(int)(((int64_t)view->vy*4*v->VDB_ProjY)/((int64_t)view->vz*3));
+ int rx=ScreenDescriptorBlock.SDB_Width*14/32,ry=ScreenDescriptorBlock.SDB_Height*14/32;
+ return x>-rx && x<rx && y>-ry && y<ry;
+}
+
 DISPLAYBLOCK *SmartTarget_GetNewTarget(void) {
 
 	int a,b,c;
@@ -577,7 +590,7 @@ DISPLAYBLOCK *SmartTarget_GetNewTarget(void) {
 			VECTORCH viewPos;
 			/* Arc reject. */
 			SmartTarget_GetCofM(objectPtr,&viewPos);
-			if (viewPos.vz>0) {
+			if (SmartTarget_InCaptureArc(&viewPos)) {
 				if (SmartTarget_TargetFilter(sbPtr))	{
 					if (a<SMART_TRACKABLE_TARGETS) {
 						track_array[a]=objectPtr;
