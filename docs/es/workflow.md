@@ -63,4 +63,4 @@ Revisar presentación/procedencia, probar gameplay y completar avisos/materiales
 
 ## Avisar a atsb
 
-Issue/discussion para un aviso breve si su política lo admite; PR para una contribución de código concreta; Projects organiza planificación. Hay un [borrador local](../../MAINTAINER_MESSAGE_DRAFT.md), todavía sin enviar. El borrador ya puede incluir los enlaces públicos a la repo y la release. NakedAVP tiene Issues habilitados y Discussions deshabilitados; revisar su política antes de publicar un aviso.
+Issue/discussion para un aviso breve si su política lo admite; PR para una contribución de código concreta; Projects organiza planificación. El responsable del proyecto ya publicó el aviso de Tyrargo en los Issues de NakedAVP.

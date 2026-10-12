@@ -65,4 +65,4 @@ Review documentation and provenance, test the candidate in-game, prepare complet
 
 ## Contacting atsb
 
-An issue/discussion can carry a brief announcement if the project's contribution policy welcomes it; a pull request is for a concrete proposed code contribution, and Projects are planning boards. A local [announcement draft](../../MAINTAINER_MESSAGE_DRAFT.md) is prepared, not sent. The repository and release links can now be included in that draft. NakedAVP currently has Issues enabled and Discussions disabled; check its contribution policy before posting an announcement.
+An issue/discussion can carry a brief announcement if the project's contribution policy welcomes it; a pull request is for a concrete proposed code contribution, and Projects are planning boards. The project owner has published the Tyrargo announcement in NakedAVP's Issues.
