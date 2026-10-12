@@ -1,3 +1,4 @@
+#include "event_latency.h"
 /* bh_corpse.c 19/8/98 */
 #include "3dc.h"
 
@@ -57,7 +58,7 @@ void MakeCorpseNear(STRATEGYBLOCK *sbPtr)
 {
 	extern MODULEMAPBLOCK AlienDefaultMap;
 	NETCORPSEDATABLOCK *corpseData = (NETCORPSEDATABLOCK *)sbPtr->SBdataptr;
-	MODULE tempModule;
+	MODULE tempModule = {0};
 	DISPLAYBLOCK *dPtr;
 	DYNAMICSBLOCK *dynPtr = sbPtr->DynPtr;
 
@@ -529,7 +530,7 @@ void Convert_Xenoborg_To_Corpse(STRATEGYBLOCK *sbPtr,DEATH_DATA *this_death) {
 
 }
 
-void CorpseBehaveFun(STRATEGYBLOCK *sbPtr)
+static void CorpseBehaveFun_MeasuredBody(STRATEGYBLOCK *sbPtr)
 {
 	
 	/* Just count down. */
@@ -556,8 +557,8 @@ void CorpseBehaveFun(STRATEGYBLOCK *sbPtr)
 		if(corpseDataPtr->SoundHandle4 != SOUND_NOACTIVEINDEX) Sound_Stop(corpseDataPtr->SoundHandle4);
 
 		/* Remove corpse. */
+		if(AvP.Network!=I_No_Network)AddNetMsg_LocalObjectDestroyed(sbPtr);
 		DestroyAnyStrategyBlock(sbPtr);
-		AddNetMsg_LocalObjectDestroyed(sbPtr);
 		return;
 	}
 	else
@@ -696,6 +697,17 @@ void CorpseBehaveFun(STRATEGYBLOCK *sbPtr)
 		}
 	}
 }
+
+void CorpseBehaveFun(STRATEGYBLOCK *sbPtr)
+{
+ EVENT_TICK stamp=EventLatencyBegin();
+ NETCORPSEDATABLOCK *corpse=(NETCORPSEDATABLOCK*)sbPtr->SBdataptr;
+ int type=corpse->Type,expiring=corpse->timer<=0;
+ EVENT_TICK id=EventLatencyId(sbPtr->SBname);
+ CorpseBehaveFun_MeasuredBody(sbPtr);
+ EventLatencyEnd(stamp,"corpse behaviour detail",type,expiring,id,0,0);
+}
+
 
 void SetCorpseAnimSequence_Core(STRATEGYBLOCK *sbPtr,HMODEL_SEQUENCE_TYPES type, int subtype, int length, int tweeningtime)
 {

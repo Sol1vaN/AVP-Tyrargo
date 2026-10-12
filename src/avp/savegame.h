@@ -6,6 +6,7 @@ extern int LoadGameRequest; //slot number of game to be loaded
 extern int SaveGameRequest;	//slot number of game to be saved
 
 extern int NumberOfSavesLeft;
+extern int UnlimitedSaveGames;
 
 typedef enum save_block_type
 {
@@ -29,6 +30,10 @@ typedef enum save_block_type
 	SaveBlock_MessageHistory,
 	SaveBlock_WeaponsCGlobals,
 	SaveBlock_SoundState,
+    SaveBlock_MolecularAcid,
+    SaveBlock_OptimizedAmmo,
+    SaveBlock_CampaignEntry,
+    SaveBlock_NPCSupport,
 }SAVE_BLOCK_TYPE;
 
 
@@ -65,6 +70,8 @@ typedef struct level_save_block
 	unsigned char	Difficulty;
 	unsigned char 	NumberOfSavesLeft;//For Load/Save menu only (if it gets used)
 
+    unsigned char AcidTier;
+    unsigned char Reserved;
 }LEVEL_SAVE_BLOCK;
 
 
@@ -92,6 +99,7 @@ extern SAVE_BLOCK_HEADER* GetNextBlockIfOfType(SAVE_BLOCK_TYPE type);
 	COPY_NAME(block->header.SBname,sbPtr->SBname);
 
 
+extern void RequestQuickSave();
 extern void SaveGame();
 extern void LoadSavedGame();
 extern void ResetNumberOfSaves();

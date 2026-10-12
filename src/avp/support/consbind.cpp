@@ -754,6 +754,11 @@ static SCString* GetMethodString(BindableKey inPhysicalKey)
 {
 	TextID theTextID;
 
+	if (inPhysicalKey == KEY_MOUSEBUTTON5)
+	{
+		return new SCString("MOUSE5");
+	}
+
 	if
 	(
 		GetKeyLabel

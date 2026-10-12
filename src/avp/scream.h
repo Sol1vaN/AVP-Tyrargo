@@ -65,6 +65,7 @@ void LoadAlienScreamSounds();
 void LoadPredatorScreamSounds();
 void LoadQueenScreamSounds();
 
+void PlayMarineCommandSound(int following,int* ExternalRef,VECTORCH* Location);
 void PlayMarineScream(int VoiceType,int SoundCategory,int PitchShift,int* ExternalRef,VECTORCH* Location);
 void PlayAlienSound(int VoiceType,int SoundCategory,int PitchShift,int* ExternalRef,VECTORCH* Location);
 void PlayPredatorSound(int VoiceType,int SoundCategory,int PitchShift,int* ExternalRef,VECTORCH* Location);

@@ -1,12 +1,28 @@
+#include "event_latency.h"
+#include "hud_motion.h"
+#include "fmv_backend.h"
+#include "tyrargo_version.h"
+#include "menu_preview.h"
+#include "fire_batch.h"
+#include "water_effect.h"
+#include <math.h>
+#include "coplanar_depth.h"
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "oglfunc.h"
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_opengl_glext.h>
+#include <stddef.h>
 
 #include "fixer.h"
 
 #include "3dc.h"
+#include "fmv.h"
+#include "projection.h"
+#include "viewmodel.h"
 #include "platform.h"
 #include "inline.h"
 #include "module.h"
@@ -21,6 +37,7 @@
 #include "d3d_hud.h"
 #include "hud_layout.h"
 #include "avp_userprofile.h"
+#include "avp/win95/text_encoding.h"
 #include "aw.h"
 #include "opengl.h"
 
@@ -44,13 +61,105 @@ extern int FMVParticleColour;
 extern int HUDScaleFactor;
 extern int CloakingPhase;
 
+int NoiseOverlayScaleMode = NOISE_OVERLAY_SCALE_1X;
+int HUDTextureFilterMode = HUD_TEXTURE_FILTER_BILINEAR;
+
+int OpenGLAntiAliasingMode = 2;
+/* Global scene-presentation colour depth. 32-bit is the modern default. */
+int OpenGLColorBitDepthMode = OPENGL_COLOR_BIT_DEPTH_32;
+int OpenGLAnisotropyMode = 3;
+int OpenGLTextureFilterMode = 2;
 static D3DTexture *CurrTextureHandle;
+
+
+
 
 
 static enum TRANSLUCENCY_TYPE CurrentTranslucencyMode = TRANSLUCENCY_OFF;
 static enum FILTERING_MODE_ID CurrentFilteringMode = FILTERING_BILINEAR_OFF;
-static GLenum TextureMinFilter = GL_LINEAR_MIPMAP_LINEAR;
+static GLenum TextureMinFilter = GL_LINEAR_MIPMAP_NEAREST;
 static D3DTexture *CurrentlyBoundTexture = NULL;
+static int CurrentCoplanarTrimBatch=0;
+
+static int LastAnisotropyMode = -1;
+static unsigned int TextureQualityGeneration = 1;
+
+static GLenum RequestedTextureMagFilter(void)
+{
+    return (OpenGLTextureFilterMode == 0) ? GL_NEAREST : GL_LINEAR;
+}
+
+static GLenum RequestedTextureMinFilter(void)
+{
+    switch (OpenGLTextureFilterMode)
+    {
+    case 0: return GL_NEAREST;
+    case 1: return GL_LINEAR_MIPMAP_NEAREST;
+    default: return GL_LINEAR_MIPMAP_LINEAR;
+    }
+}
+
+/* RIM colour-key masks need level-zero sampling. Averaged mip alpha can
+ * remove every zero-alpha texel in a small hole; the alpha > 0 cutout then
+ * writes depth across it. AvPx also samples these textures at one level.
+ * Keep the selected nearest/bilinear filter and opaque-texture mipmaps. */
+static GLenum TextureMinFilterForTexture(const D3DTexture *tex)
+{
+    if (tex->hasAlpha && tex->transparentPixels != 0)
+        return RequestedTextureMagFilter();
+    return TextureMinFilter;
+}
+
+static void ApplyCurrentAnisotropy(void)
+{
+    GLfloat maximumAnisotropy;
+    GLfloat requestedAnisotropy;
+
+    if (!ogl_use_texture_filter_anisotropic)
+    {
+        return;
+    }
+
+    if (OpenGLAnisotropyMode <= 0)
+    {
+        pglTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 1.0f);
+        return;
+    }
+
+    pglGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &maximumAnisotropy);
+    if (maximumAnisotropy <= 1.0f)
+    {
+        return;
+    }
+
+    switch (OpenGLAnisotropyMode)
+    {
+    case 1: requestedAnisotropy = 2.0f; break;
+    case 2: requestedAnisotropy = 4.0f; break;
+    case 3: requestedAnisotropy = 8.0f; break;
+    default: requestedAnisotropy = 16.0f; break;
+    }
+
+    if (requestedAnisotropy > maximumAnisotropy)
+    {
+        requestedAnisotropy = maximumAnisotropy;
+    }
+    pglTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, requestedAnisotropy);
+}
+
+static int LastFMVFilterMode=-1;
+static void RefreshTextureQualityState(void)
+{
+	GLenum requestedMinFilter = RequestedTextureMinFilter();
+	if (TextureMinFilter != requestedMinFilter || LastAnisotropyMode != OpenGLAnisotropyMode || LastFMVFilterMode != FMVFilterMode)
+	{
+		TextureMinFilter = requestedMinFilter;
+		LastAnisotropyMode = OpenGLAnisotropyMode;
+        LastFMVFilterMode=FMVFilterMode;
+        TextureQualityGeneration++;
+        if (TextureQualityGeneration == 0) TextureQualityGeneration = 1;
+	}
+}
 
 #if defined(_MSC_VER)
 #define ALIGN16 __declspec(align(16))
@@ -89,6 +198,52 @@ static int varrc, tarrc;
 static ALIGN16 TriangleArray starr[TA_MAXTRIANGLES];
 static TriangleArray *starrp = starr;
 static int starrc;
+
+/* GL 1.5 ordered streaming. Each upload replaces the buffer storage so pending
+   GPU draws keep their own data; no waiting for a reused client array. Geometry,
+   precision, specular passes and transparency order remain unchanged. */
+#if !defined(USE_OPENGL_ES)
+static GLuint streamVertex,streamIndex;
+static PFNGLGENBUFFERSPROC streamGen;
+static PFNGLBINDBUFFERPROC streamBind;
+static PFNGLBUFFERDATAPROC streamData;
+static PFNGLDELETEBUFFERSPROC streamDelete;
+void GeometryStreamRelease(void){
+ if(streamDelete){if(streamVertex)streamDelete(1,&streamVertex);if(streamIndex)streamDelete(1,&streamIndex);}
+ streamVertex=streamIndex=0;streamGen=NULL;streamBind=NULL;streamData=NULL;streamDelete=NULL;
+}
+static void GeometryStreamInit(void){
+ GeometryStreamRelease();
+ streamGen=(PFNGLGENBUFFERSPROC)SDL_GL_GetProcAddress("glGenBuffers");
+ streamBind=(PFNGLBINDBUFFERPROC)SDL_GL_GetProcAddress("glBindBuffer");
+ streamData=(PFNGLBUFFERDATAPROC)SDL_GL_GetProcAddress("glBufferData");
+ streamDelete=(PFNGLDELETEBUFFERSPROC)SDL_GL_GetProcAddress("glDeleteBuffers");
+ if(!streamGen || !streamBind || !streamData || !streamDelete)return;
+ streamGen(1,&streamVertex);streamGen(1,&streamIndex);
+}
+static void GeometryStreamDraw(TriangleArray*indices,int triangles,int vertices,int specular){
+ if(!streamVertex || !streamIndex){pglDrawElements(GL_TRIANGLES,triangles*3,GL_UNSIGNED_SHORT,indices);return;}
+ streamBind(GL_ARRAY_BUFFER,streamVertex);
+ streamData(GL_ARRAY_BUFFER,(GLsizeiptr)vertices*sizeof(varr[0]),varr,GL_STREAM_DRAW);
+ streamBind(GL_ELEMENT_ARRAY_BUFFER,streamIndex);
+ streamData(GL_ELEMENT_ARRAY_BUFFER,(GLsizeiptr)triangles*sizeof(indices[0]),indices,GL_STREAM_DRAW);
+ pglVertexPointer(4,GL_FLOAT,sizeof(varr[0]),(void*)offsetof(VertexArray,v));
+ pglTexCoordPointer(2,GL_FLOAT,sizeof(varr[0]),(void*)offsetof(VertexArray,t));
+ pglColorPointer(4,GL_UNSIGNED_BYTE,sizeof(varr[0]),(void*)(specular?offsetof(VertexArray,s):offsetof(VertexArray,c)));
+ pglDrawElements(GL_TRIANGLES,triangles*3,GL_UNSIGNED_SHORT,NULL);
+ streamBind(GL_ARRAY_BUFFER,0);streamBind(GL_ELEMENT_ARRAY_BUFFER,0);
+ pglVertexPointer(4,GL_FLOAT,sizeof(varr[0]),varr[0].v);
+ pglTexCoordPointer(2,GL_FLOAT,sizeof(varr[0]),varr[0].t);
+ pglColorPointer(4,GL_UNSIGNED_BYTE,sizeof(varr[0]),specular?varr[0].s:varr[0].c);
+}
+
+#else
+void GeometryStreamRelease(void){}
+static void GeometryStreamInit(void){}
+static void GeometryStreamDraw(TriangleArray*indices,int triangles,int vertices,int specular){
+ (void)vertices;(void)specular;pglDrawElements(GL_TRIANGLES,triangles*3,GL_UNSIGNED_SHORT,indices);
+}
+#endif
 
 /* Do not call this directly! */
 static void SetTranslucencyMode(enum TRANSLUCENCY_TYPE mode)
@@ -139,6 +294,9 @@ static void SetSecondPassTranslucencyMode(enum TRANSLUCENCY_TYPE mode)
 			if (TRIPTASTIC_CHEATMODE||MOTIONBLUR_CHEATMODE) {
 				pglBlendFunc(GL_ONE_MINUS_SRC_ALPHA, GL_ONE);
 			} else {
+				/* Match the base pass cutout: zero-alpha texels must not add
+				 * specular colour or depth over geometry behind the texture. */
+				pglEnable(GL_ALPHA_TEST);
 				pglBlendFunc(GL_ONE, GL_ONE);
 			}
 			break;
@@ -180,6 +338,8 @@ A few things:
 
 void InitOpenGL()
 {
+ GeometryStreamInit();
+    FireBatchAvailable(); /* Compile once during renderer setup, not the first explosion. */
         pglHint( GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST );
         pglHint( GL_GENERATE_MIPMAP_HINT, GL_NICEST );
 
@@ -200,6 +360,7 @@ void InitOpenGL()
 	pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                         
 	CurrentlyBoundTexture = NULL;
+    CurrentCoplanarTrimBatch=0;
 	pglBindTexture(GL_TEXTURE_2D, 0);
 	
 	pglEnableClientState(GL_VERTEX_ARRAY);
@@ -221,10 +382,18 @@ void InitOpenGL()
 	starrp = starr;
 }
 
-static void FlushTriangleBuffers(int backup)
+static void FlushTriangleBuffers_MeasuredBody(int backup)
 {
+    FireBatchFlush();
+    int batchVertices=varrc;
+    int trimOffset=CurrentCoplanarTrimBatch && (tarrc || starrc);
+    if(trimOffset) {
+        pglPushAttrib(GL_POLYGON_BIT | GL_ENABLE_BIT);
+        pglEnable(GL_POLYGON_OFFSET_FILL);
+        pglPolygonOffset(COPLANAR_TRIM_OFFSET_FACTOR,COPLANAR_TRIM_OFFSET_UNITS);
+    }
 	if (tarrc) {
-		pglDrawElements(GL_TRIANGLES, tarrc*3, GL_UNSIGNED_SHORT, tarr);
+		{ EVENT_TICK stamp=EventLatencyBegin(); EventLatencyCount(EL_BATCHES,1); EventLatencyCount(EL_TRIANGLES,tarrc); GeometryStreamDraw(tarr,tarrc,batchVertices,0); EventLatencyEnd(stamp,"GL draw submission",0,tarrc,0,0,0); }
 		
 		tarrc = 0;
 		tarrp = tarr;
@@ -262,7 +431,7 @@ static void FlushTriangleBuffers(int backup)
 		//pglDisableClientState(GL_TEXTURE_COORD_ARRAY);
 		pglColorPointer(4, GL_UNSIGNED_BYTE, sizeof(varr[0]), varr[0].s);
 
-		pglDrawElements(GL_TRIANGLES, starrc*3, GL_UNSIGNED_SHORT, starr);
+		{ EVENT_TICK stamp=EventLatencyBegin(); EventLatencyCount(EL_BATCHES,1); EventLatencyCount(EL_TRIANGLES,starrc); GeometryStreamDraw(starr,starrc,batchVertices,1); EventLatencyEnd(stamp,"GL draw submission",0,starrc,0,0,0); }
 
 		//pglEnableClientState(GL_TEXTURE_COORD_ARRAY);
 		pglColorPointer(4, GL_UNSIGNED_BYTE, sizeof(varr[0]), varr[0].c);
@@ -283,11 +452,19 @@ static void FlushTriangleBuffers(int backup)
 		starrc = 0;
 		starrp = starr;
 	}
+    if(trimOffset)pglPopAttrib();
 }
+static void FlushTriangleBuffers(int backup)
+{
+ EVENT_TICK stamp=EventLatencyBegin();
+ FlushTriangleBuffers_MeasuredBody(backup);
+ EventLatencyEnd(stamp,"GL batch flush and state",0,backup,0,0,0);
+}
+
 
 static void CheckBoundTextureIsCorrect(D3DTexture *tex)
 {
-	if (tex == CurrentlyBoundTexture)
+	if (tex == CurrentlyBoundTexture && (tex == NULL || tex->qualityGeneration == TextureQualityGeneration))
 		return;
 
 	FlushTriangleBuffers(1);
@@ -300,23 +477,32 @@ static void CheckBoundTextureIsCorrect(D3DTexture *tex)
 		return;
 	} 
 	
-	pglBindTexture(GL_TEXTURE_2D, tex->id);
+	{ EVENT_TICK span=EventLatencyBegin(); pglBindTexture(GL_TEXTURE_2D, tex->id); EventLatencyEnd(span,"GL bind texture",0,tex->id,0,0,0); }
 
-	if (tex->filter != CurrentFilteringMode) {
-		switch(CurrentFilteringMode) {
+	if (tex->filter != CurrentFilteringMode || tex->qualityGeneration != TextureQualityGeneration) {
+        EVENT_TICK samplerSpan=EventLatencyBegin();
+		if(FMV_IsPanelTexture(tex)){
+            GLenum filter=FMVFilterMode==0?GL_NEAREST:GL_LINEAR;
+            pglTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,filter);
+            pglTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,filter);
+            if(ogl_use_texture_filter_anisotropic)pglTexParameterf(GL_TEXTURE_2D,GL_TEXTURE_MAX_ANISOTROPY_EXT,1.0f);
+        } else switch(CurrentFilteringMode) {
 			case FILTERING_BILINEAR_OFF:
 				pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 				pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 				break;
 			case FILTERING_BILINEAR_ON:
-				pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-				pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, TextureMinFilter);
+    pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, RequestedTextureMagFilter());
+				pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, TextureMinFilterForTexture(tex));
+				ApplyCurrentAnisotropy();
 				break;
 			default:
 				break;
 		}
 		
 		tex->filter = CurrentFilteringMode;
+        tex->qualityGeneration = TextureQualityGeneration;
+        EventLatencyEnd(samplerSpan,"GL texture filter state",0,tex->id,0,0,0);
 	}
 	
 	CurrentlyBoundTexture = tex;
@@ -326,23 +512,30 @@ static void CheckFilteringModeIsCorrect(enum FILTERING_MODE_ID filter)
 {
 	CurrentFilteringMode = filter;
 	
-	if (CurrentlyBoundTexture && CurrentlyBoundTexture->filter != CurrentFilteringMode) {
+	if (CurrentlyBoundTexture && (CurrentlyBoundTexture->filter != CurrentFilteringMode || CurrentlyBoundTexture->qualityGeneration != TextureQualityGeneration)) {
 		FlushTriangleBuffers(1);
 		
-		switch(CurrentFilteringMode) {
+		if(FMV_IsPanelTexture(CurrentlyBoundTexture)){
+            GLenum videoFilter=FMVFilterMode==0?GL_NEAREST:GL_LINEAR;
+            pglTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,videoFilter);
+            pglTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,videoFilter);
+            if(ogl_use_texture_filter_anisotropic)pglTexParameterf(GL_TEXTURE_2D,GL_TEXTURE_MAX_ANISOTROPY_EXT,1.0f);
+        } else switch(CurrentFilteringMode) {
 			case FILTERING_BILINEAR_OFF:
 				pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 				pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 				break;
 			case FILTERING_BILINEAR_ON:
-				pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-				pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, TextureMinFilter);
+    pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, RequestedTextureMagFilter());
+				pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, TextureMinFilterForTexture(CurrentlyBoundTexture));
+				ApplyCurrentAnisotropy();
 				break;
 			default:
 				break;
 		}
 		
 		CurrentlyBoundTexture->filter = CurrentFilteringMode;
+        CurrentlyBoundTexture->qualityGeneration = TextureQualityGeneration;
 	}
 }
 		
@@ -358,8 +551,13 @@ static void CheckTranslucencyModeIsCorrect(enum TRANSLUCENCY_TYPE mode)
 	CurrentTranslucencyMode = mode;
 }
 
-static void CheckTriangleBuffer(int rver, int sver, int rtri, int stri, D3DTexture *tex, enum TRANSLUCENCY_TYPE mode, enum FILTERING_MODE_ID filter)
+static void CheckTriangleBuffer(int rver, int sver, int rtri, int stri, D3DTexture *tex, enum TRANSLUCENCY_TYPE mode, enum FILTERING_MODE_ID filter, int coplanarTrim)
 {
+    FireBatchFlush(); /* Preserve ordering before any ordinary geometry. */
+    if(CurrentCoplanarTrimBatch!=coplanarTrim) {
+        FlushTriangleBuffers(1);
+        CurrentCoplanarTrimBatch=coplanarTrim;
+    }
 	if ((rver+varrc) >= TA_MAXVERTICES) {
 		FlushTriangleBuffers(0);
 	} else if (rtri == 0 && ((rver-2+tarrc) >= TA_MAXTRIANGLES)) {
@@ -463,7 +661,16 @@ static unsigned int PowerOfTwo(unsigned int v) {
     return v + 1;
 }
 
-GLuint CreateOGLTexture(D3DTexture *tex, unsigned char *buf)
+static GLuint CreateOGLTextureLatencyBody(D3DTexture *tex, unsigned char *buf);
+GLuint CreateOGLTexture(D3DTexture *tex, unsigned char *buf) {
+ EVENT_TICK start=EventLatencyBegin();
+ EVENT_TICK id=0;
+ int eventType=0, eventMessage=0;
+ GLuint result=CreateOGLTextureLatencyBody(tex,buf);
+ EventLatencyEnd(start,"texture upload",eventType,eventMessage,id,0,1);
+ return result;
+}
+static GLuint CreateOGLTextureLatencyBody(D3DTexture *tex, unsigned char *buf)
 {
 	if (buf == NULL) {
 	    // converting DDSurface to D3DTexture
@@ -475,6 +682,8 @@ GLuint CreateOGLTexture(D3DTexture *tex, unsigned char *buf)
 	}
 
 	int i;
+	tex->transparentPixels = 0;
+	tex->opaquePixels = 0;
 	int l = tex->w * tex->h;
 	for (i = 0; i < l; i++) {
 		int o = i*4;
@@ -490,6 +699,9 @@ GLuint CreateOGLTexture(D3DTexture *tex, unsigned char *buf)
 			r = 0;
 			g = 0;
 			b = 0;
+			++tex->transparentPixels;
+		} else {
+			++tex->opaquePixels;
 		}
 
 		buf[o+0] = r;
@@ -506,8 +718,8 @@ GLuint CreateOGLTexture(D3DTexture *tex, unsigned char *buf)
 	tex->IsNpot = (PotWidth != tex->TexWidth) || (PotHeight != tex->TexHeight);
 
 	GLuint h;
-	GLfloat max_anisotropy;
-	
+
+	RefreshTextureQualityState();
 	FlushTriangleBuffers(1);
 
 	pglGenTextures(1, &h);
@@ -522,19 +734,16 @@ GLuint CreateOGLTexture(D3DTexture *tex, unsigned char *buf)
         // OpenGL 1.x compatibility
         tex->TexWidth = PotWidth;
         tex->TexHeight = PotHeight;
-
-		pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-		pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-
+    pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, RequestedTextureMagFilter());
+        pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, RequestedTextureMagFilter());
 		pglTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex->TexWidth, tex->TexHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 		pglTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, tex->w, tex->h, GL_RGBA, GL_UNSIGNED_BYTE, buf);
     } else {
-		pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
+    pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, RequestedTextureMagFilter());
 		if (tex->IsNpot) {
 			pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 		} else {
-			pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, TextureMinFilter);
+			pglTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, TextureMinFilterForTexture(tex));
 		}
 
 		pglTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex->w, tex->h, 0, GL_RGBA, GL_UNSIGNED_BYTE, buf);
@@ -545,14 +754,10 @@ GLuint CreateOGLTexture(D3DTexture *tex, unsigned char *buf)
     tex->buf = NULL;
 	tex->id = h;
 	tex->filter = FILTERING_BILINEAR_ON;
+    tex->qualityGeneration = TextureQualityGeneration;
 	tex->RecipW = 1.0f / (float) tex->TexWidth;
 	tex->RecipH = 1.0f / (float) tex->TexHeight;
-
-	if ( ogl_use_texture_filter_anisotropic )
-	{
-		pglGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT, &max_anisotropy);
-		pglTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, max_anisotropy);
-	}
+	ApplyCurrentAnisotropy();
 	
 	if ( CurrentlyBoundTexture != NULL )
 	{
@@ -572,6 +777,16 @@ void ReleaseD3DTexture(void *tex)
 	if (TextureHandle == NULL) {
 		return;
 	}
+
+	/* A context restart releases every image.  Do not leave renderer cache
+	 * pointers referring to an object that is about to be freed. */
+	if (CurrentlyBoundTexture == TextureHandle) {
+		CurrentlyBoundTexture = NULL;
+	}
+	if (CurrTextureHandle == TextureHandle) {
+		CurrTextureHandle = NULL;
+	}
+
 
 	if (TextureHandle->id != 0) {
 		pglDeleteTextures(1, (GLuint*) &(TextureHandle->id));
@@ -603,7 +818,13 @@ void ReleaseDDSurface(void* DDSurface)
 
 void ThisFramesRenderingHasBegun()
 {
-	CheckFilteringModeIsCorrect(FILTERING_BILINEAR_ON);	        
+#ifdef GL_MULTISAMPLE
+ /* Reassert the requested scene state after fullscreen presentation passes. */
+ if(OpenGLAntiAliasingMode>0)pglEnable(GL_MULTISAMPLE);else pglDisable(GL_MULTISAMPLE);
+#endif
+
+	RefreshTextureQualityState();
+	CheckFilteringModeIsCorrect(FILTERING_BILINEAR_ON);
 }
 
 void ThisFramesRenderingHasFinished()
@@ -614,6 +835,18 @@ void ThisFramesRenderingHasFinished()
 }
         
 /* ** */
+
+/* No scene preview: discard any previous scaled UI before drawing the pause menu. */
+void ClearPausedMenuBackground(void)
+{
+                    FlushTriangleBuffers(0);
+                    pglPushAttrib(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT|GL_SCISSOR_BIT);
+                    pglDisable(GL_SCISSOR_TEST);
+                    pglDepthMask(GL_TRUE);
+                    pglClearColor(0,0,0,0);
+                    pglClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
+                    pglPopAttrib();
+}
 
 void FlushD3DZBuffer()
 {
@@ -660,7 +893,7 @@ void D3D_Rectangle(int x0, int y0, int x1, int y1, int r, int g, int b, int a)
 	if (y1 <= y0)
 		return;
 
-	CheckTriangleBuffer(4, 0, 0, 0, NULL, TRANSLUCENCY_GLOWING, -1);
+	CheckTriangleBuffer(4, 0, 0, 0, NULL, TRANSLUCENCY_GLOWING, -1, 0);
 
 	x[0] = x0;
 	x[0] =  (x[0] - ScreenDescriptorBlock.SDB_CentreX)/ScreenDescriptorBlock.SDB_CentreX;
@@ -708,6 +941,17 @@ void D3D_Rectangle(int x0, int y0, int x1, int y1, int r, int g, int b, int a)
 
 /* ** */
 
+/* Homogeneous projection without divide-to-NDC/multiply-back round trips.
+   The GPU receives one final float conversion per component. */
+static void ProjectRenderPosition(GLfloat out[4],const RENDERVERTEX*v,int weapon,double nearZ,double offset,int depthMode){
+ double x=weapon?v->ViewX:v->X,y=weapon?v->ViewY:v->Y,z=weapon?v->ViewZ:v->Z;
+ out[0]=(GLfloat)(x*AvpProjectionX(Global_VDB_Ptr)/ScreenDescriptorBlock.SDB_CentreX);
+ out[1]=(GLfloat)(-y*AvpProjectionY(Global_VDB_Ptr)/ScreenDescriptorBlock.SDB_CentreY);
+ out[3]=(GLfloat)z;
+ if(depthMode)out[2]=(GLfloat)(z*(depthMode==2?1.0:depthMode>0?.99999:-.99999));
+ else out[2]=(GLfloat)(offset==0?z-2.0*nearZ:z-2.0*nearZ*z/(z+offset));
+}
+
 void D3D_ZBufferedGouraudTexturedPolygon_Output(POLYHEADER *inputPolyPtr, RENDERVERTEX *renderVerticesPtr)
 {
 	int texoffset;
@@ -716,7 +960,7 @@ void D3D_ZBufferedGouraudTexturedPolygon_Output(POLYHEADER *inputPolyPtr, RENDER
 	GLfloat ZNear;
 	float RecipW, RecipH;
 		
-	ZNear = (GLfloat) (Global_VDB_Ptr->VDB_ClipZ * GlobalScale);
+	ZNear = (GLfloat) (ViewmodelShapeActive && AvP.PlayerType==I_Marine ? ViewmodelNearClip() : Global_VDB_Ptr->VDB_ClipZ * GlobalScale);
 	
 	texoffset = inputPolyPtr->PolyColour & ClrTxDefn;
 	if (texoffset) {
@@ -730,28 +974,25 @@ void D3D_ZBufferedGouraudTexturedPolygon_Output(POLYHEADER *inputPolyPtr, RENDER
 	RecipW = TextureHandle->RecipW / 65536.0f;
 	RecipH = TextureHandle->RecipH / 65536.0f;
 
-	CheckTriangleBuffer(RenderPolygon.NumberOfVertices, RenderPolygon.NumberOfVertices, 0, 0, TextureHandle, RenderPolygon.TranslucencyMode, -1);
+	CheckTriangleBuffer(RenderPolygon.NumberOfVertices, RenderPolygon.NumberOfVertices, 0, 0, TextureHandle, RenderPolygon.TranslucencyMode, -1, !ViewmodelShapeActive && (inputPolyPtr->PolyFlags&iflag_coplanar_trim) && RenderPolygon.TranslucencyMode==TRANSLUCENCY_OFF);
 	
 	for (i = 0; i < RenderPolygon.NumberOfVertices; i++) {
 		RENDERVERTEX *vertices = &renderVerticesPtr[i];
 		GLfloat x, y, z;
 		GLfloat s, t;
-		GLfloat w = (float)vertices->Z;
+		GLfloat w = (ViewmodelShapeActive ? vertices->ViewZ : vertices->Z);
 		GLfloat zvalue;
 		
 		s = TEXCOORD_FIXED(vertices->U, RecipW);
 		t = TEXCOORD_FIXED(vertices->V, RecipH);
 
-		x =  ((float)vertices->X*((float)Global_VDB_Ptr->VDB_ProjX+1.0f))/((float)vertices->Z*(float)ScreenDescriptorBlock.SDB_CentreX);
-		y = -((float)vertices->Y*((float)Global_VDB_Ptr->VDB_ProjY+1.0f))/((float)vertices->Z*(float)ScreenDescriptorBlock.SDB_CentreY);
+		x =  ((ViewmodelShapeActive ? vertices->ViewX : vertices->X)*((float)AvpProjectionX(Global_VDB_Ptr)))/((ViewmodelShapeActive ? vertices->ViewZ : vertices->Z)*(float)ScreenDescriptorBlock.SDB_CentreX);
+		y = -((ViewmodelShapeActive ? vertices->ViewY : vertices->Y)*((float)AvpProjectionY(Global_VDB_Ptr)))/((ViewmodelShapeActive ? vertices->ViewZ : vertices->Z)*(float)ScreenDescriptorBlock.SDB_CentreY);
 		
-		zvalue = vertices->Z+HeadUpDisplayZOffset;
+		zvalue = (ViewmodelShapeActive ? vertices->ViewZ : vertices->Z)+HeadUpDisplayZOffset;
 		z = 1.0f - 2.0f*ZNear/zvalue;
 		
-		varrp->v[0] = x*w;
-		varrp->v[1] = y*w;
-		varrp->v[2] = z*w;
-		varrp->v[3] = w;
+		ProjectRenderPosition(varrp->v,vertices,ViewmodelShapeActive,ZNear,HeadUpDisplayZOffset,0);
 		
 		varrp->t[0] = s;
 		varrp->t[1] = t;
@@ -785,7 +1026,7 @@ void D3D_SkyPolygon_Output(POLYHEADER *inputPolyPtr, RENDERVERTEX *renderVertice
 	RecipW = TextureHandle->RecipW / 65536.0f;
 	RecipH = TextureHandle->RecipH / 65536.0f;
 	
-	CheckTriangleBuffer(RenderPolygon.NumberOfVertices, 0, 0, 0, TextureHandle, RenderPolygon.TranslucencyMode, -1);
+	CheckTriangleBuffer(RenderPolygon.NumberOfVertices, 0, 0, 0, TextureHandle, RenderPolygon.TranslucencyMode, -1, 0);
 	
 	for (i = 0; i < RenderPolygon.NumberOfVertices; i++) {
 		RENDERVERTEX *vertices = &renderVerticesPtr[i];
@@ -798,15 +1039,12 @@ void D3D_SkyPolygon_Output(POLYHEADER *inputPolyPtr, RENDERVERTEX *renderVertice
 		s = TEXCOORD_FIXED(vertices->U, RecipW);
 		t = TEXCOORD_FIXED(vertices->V, RecipH);
 
-		x =  ((float)vertices->X*((float)Global_VDB_Ptr->VDB_ProjX+1.0f))/((float)vertices->Z*(float)ScreenDescriptorBlock.SDB_CentreX);
-		y = -((float)vertices->Y*((float)Global_VDB_Ptr->VDB_ProjY+1.0f))/((float)vertices->Z*(float)ScreenDescriptorBlock.SDB_CentreY);
+		x =  ((float)vertices->X*((float)AvpProjectionX(Global_VDB_Ptr)))/((float)vertices->Z*(float)ScreenDescriptorBlock.SDB_CentreX);
+		y = -((float)vertices->Y*((float)AvpProjectionY(Global_VDB_Ptr)))/((float)vertices->Z*(float)ScreenDescriptorBlock.SDB_CentreY);
 
 		z = 1.0f;
 
-		varrp->v[0] = x*w;
-		varrp->v[1] = y*w;
-		varrp->v[2] = z*w;
-		varrp->v[3] = w;
+		ProjectRenderPosition(varrp->v,vertices,0,0,0,2);
 		
 		varrp->t[0] = s;
 		varrp->t[1] = t;
@@ -836,7 +1074,7 @@ void D3D_ZBufferedCloakedPolygon_Output(POLYHEADER *inputPolyPtr, RENDERVERTEX *
 	float ZNear;
 	float RecipW, RecipH;
 	
-	ZNear = (float) (Global_VDB_Ptr->VDB_ClipZ * GlobalScale);
+	ZNear = (float) (ViewmodelShapeActive && AvP.PlayerType==I_Marine ? ViewmodelNearClip() : Global_VDB_Ptr->VDB_ClipZ * GlobalScale);
 	
 	flags = inputPolyPtr->PolyFlags;
 	texoffset = (inputPolyPtr->PolyColour & ClrTxDefn);
@@ -847,7 +1085,7 @@ void D3D_ZBufferedCloakedPolygon_Output(POLYHEADER *inputPolyPtr, RENDERVERTEX *
 	RecipW = TextureHandle->RecipW / 65536.0f;
 	RecipH = TextureHandle->RecipH / 65536.0f;
 	
-	CheckTriangleBuffer(RenderPolygon.NumberOfVertices, 0, 0, 0, TextureHandle, TRANSLUCENCY_NORMAL, -1);
+	CheckTriangleBuffer(RenderPolygon.NumberOfVertices, 0, 0, 0, TextureHandle, TRANSLUCENCY_NORMAL, -1, 0);
 	
 	for (i = 0; i < RenderPolygon.NumberOfVertices; i++) {
 		RENDERVERTEX *vertices = &renderVerticesPtr[i];
@@ -857,21 +1095,18 @@ void D3D_ZBufferedCloakedPolygon_Output(POLYHEADER *inputPolyPtr, RENDERVERTEX *
 		GLfloat w;
 		GLfloat zvalue;
 		
-		w = (float)vertices->Z;
+		w = (ViewmodelShapeActive ? vertices->ViewZ : vertices->Z);
 		
 		s = TEXCOORD_FIXED(vertices->U, RecipW);
 		t = TEXCOORD_FIXED(vertices->V, RecipH);
 
-		x =  ((float)vertices->X*((float)Global_VDB_Ptr->VDB_ProjX+1.0f))/((float)vertices->Z*(float)ScreenDescriptorBlock.SDB_CentreX);
-		y = -((float)vertices->Y*((float)Global_VDB_Ptr->VDB_ProjY+1.0f))/((float)vertices->Z*(float)ScreenDescriptorBlock.SDB_CentreY);
+		x =  ((ViewmodelShapeActive ? vertices->ViewX : vertices->X)*((float)AvpProjectionX(Global_VDB_Ptr)))/((ViewmodelShapeActive ? vertices->ViewZ : vertices->Z)*(float)ScreenDescriptorBlock.SDB_CentreX);
+		y = -((ViewmodelShapeActive ? vertices->ViewY : vertices->Y)*((float)AvpProjectionY(Global_VDB_Ptr)))/((ViewmodelShapeActive ? vertices->ViewZ : vertices->Z)*(float)ScreenDescriptorBlock.SDB_CentreY);
 		
-		zvalue = vertices->Z+HeadUpDisplayZOffset;
+		zvalue = (ViewmodelShapeActive ? vertices->ViewZ : vertices->Z)+HeadUpDisplayZOffset;
 		z = 1.0 - 2*ZNear/zvalue;
 
-		varrp->v[0] = x*w;
-		varrp->v[1] = y*w;
-		varrp->v[2] = z*w;
-		varrp->v[3] = w;
+		ProjectRenderPosition(varrp->v,vertices,ViewmodelShapeActive,ZNear,HeadUpDisplayZOffset,0);
 		
 		varrp->t[0] = s;
 		varrp->t[1] = t;
@@ -902,7 +1137,7 @@ void D3D_Decal_Output(DECAL *decalPtr, RENDERVERTEX *renderVerticesPtr)
 	float RecipW, RecipH;
 	int r, g, b, a;
 	
-	ZNear = (float) (Global_VDB_Ptr->VDB_ClipZ * GlobalScale);
+	ZNear = (float) (ViewmodelShapeActive && AvP.PlayerType==I_Marine ? ViewmodelNearClip() : Global_VDB_Ptr->VDB_ClipZ * GlobalScale);
 
 		
 	if (decalPtr->DecalID == DECAL_FMV) {
@@ -943,7 +1178,7 @@ void D3D_Decal_Output(DECAL *decalPtr, RENDERVERTEX *renderVerticesPtr)
 		a = decalDescPtr->Alpha;
 	}
 	
-	CheckTriangleBuffer(RenderPolygon.NumberOfVertices, 0, 0, 0, TextureHandle, decalDescPtr->TranslucencyType, -1);
+	CheckTriangleBuffer(RenderPolygon.NumberOfVertices, 0, 0, 0, TextureHandle, decalDescPtr->TranslucencyType, -1, 0);
 	
 	for (i = 0; i < RenderPolygon.NumberOfVertices; i++) {
 		RENDERVERTEX *vertices = &renderVerticesPtr[i];
@@ -954,8 +1189,8 @@ void D3D_Decal_Output(DECAL *decalPtr, RENDERVERTEX *renderVerticesPtr)
 		
 		w = (float)vertices->Z;
 		
-		x =  ((float)vertices->X*((float)Global_VDB_Ptr->VDB_ProjX+1.0f))/((float)vertices->Z*(float)ScreenDescriptorBlock.SDB_CentreX);
-		y = -((float)vertices->Y*((float)Global_VDB_Ptr->VDB_ProjY+1.0f))/((float)vertices->Z*(float)ScreenDescriptorBlock.SDB_CentreY);
+		x =  ((float)vertices->X*((float)AvpProjectionX(Global_VDB_Ptr)))/((float)vertices->Z*(float)ScreenDescriptorBlock.SDB_CentreX);
+		y = -((float)vertices->Y*((float)AvpProjectionY(Global_VDB_Ptr)))/((float)vertices->Z*(float)ScreenDescriptorBlock.SDB_CentreY);
 		
 		s = TEXCOORD_FIXED(vertices->U, RecipW);
 		t = TEXCOORD_FIXED(vertices->V, RecipH);
@@ -963,10 +1198,7 @@ void D3D_Decal_Output(DECAL *decalPtr, RENDERVERTEX *renderVerticesPtr)
 		zvalue = vertices->Z+HeadUpDisplayZOffset;
 		z = 1.0f - 2.0f*ZNear/zvalue;
 
-		varrp->v[0] = x*w;
-		varrp->v[1] = y*w;
-		varrp->v[2] = z*w;
-		varrp->v[3] = w;
+		ProjectRenderPosition(varrp->v,vertices,0,ZNear,HeadUpDisplayZOffset,0);
 		
 		varrp->t[0] = s;
 		varrp->t[1] = t;
@@ -994,11 +1226,16 @@ void D3D_Particle_Output(PARTICLE *particlePtr, RENDERVERTEX *renderVerticesPtr)
 	int i;
 	float RecipW, RecipH;
 	int r, g, b, a;
+    FireBatchVertex fireVertices[16];
+    const int batchMode = particleDescPtr->TranslucencyType == TRANSLUCENCY_GLOWING ? 0 :
+        particleDescPtr->TranslucencyType == TRANSLUCENCY_INVCOLOUR ? 1 :
+        particleDescPtr->TranslucencyType == TRANSLUCENCY_NORMAL ? 2 : -1;
+    const int fastFire = batchMode >= 0 && RenderPolygon.NumberOfVertices <= 16 && FireBatchAvailable();
 	
 	D3DTexture *TextureHandle;
 
 
-	ZNear = (GLfloat) (Global_VDB_Ptr->VDB_ClipZ * GlobalScale);	
+	ZNear = (GLfloat) (ViewmodelShapeActive && AvP.PlayerType==I_Marine ? ViewmodelNearClip() : Global_VDB_Ptr->VDB_ClipZ * GlobalScale);	
 	
 	TextureHandle = ImageHeaderArray[texoffset].D3DTexture;
 	
@@ -1035,33 +1272,42 @@ void D3D_Particle_Output(PARTICLE *particlePtr, RENDERVERTEX *renderVerticesPtr)
 		a = particleDescPtr->Alpha;
 	}
 
-	CheckTriangleBuffer(RenderPolygon.NumberOfVertices, 0, 0, 0, TextureHandle, particleDescPtr->TranslucencyType, -1);
+	if (fastFire) {
+        if (!FireBatchPending()) {
+            FlushTriangleBuffers(1);
+            CheckBoundTextureIsCorrect(TextureHandle);
+        }
+    } else CheckTriangleBuffer(RenderPolygon.NumberOfVertices, 0, 0, 0, TextureHandle, particleDescPtr->TranslucencyType, -1, 0);
 	
 	for (i = 0; i < RenderPolygon.NumberOfVertices; i++) {
 		RENDERVERTEX *vertices = &renderVerticesPtr[i];
 		
 		GLfloat x, y, z;
 		GLfloat s, t;
-		GLfloat w = (float)vertices->Z;
+		GLfloat w = (float)(ViewmodelMuzzleActive ? vertices->ViewZ : vertices->Z);
 		
 		s = TEXCOORD_FIXED(vertices->U, RecipW);
 		t = TEXCOORD_FIXED(vertices->V, RecipH);
 		
-		x =  ((float)vertices->X*((float)Global_VDB_Ptr->VDB_ProjX+1.0f))/((float)vertices->Z*(float)ScreenDescriptorBlock.SDB_CentreX);
-		y = -((float)vertices->Y*((float)Global_VDB_Ptr->VDB_ProjY+1.0f))/((float)vertices->Z*(float)ScreenDescriptorBlock.SDB_CentreY);		
+		x =  ((float)(ViewmodelMuzzleActive ? vertices->ViewX : vertices->X)*((float)AvpProjectionX(Global_VDB_Ptr)))/((float)(ViewmodelMuzzleActive ? vertices->ViewZ : vertices->Z)*(float)ScreenDescriptorBlock.SDB_CentreX);
+		y = -((float)(ViewmodelMuzzleActive ? vertices->ViewY : vertices->Y)*((float)AvpProjectionY(Global_VDB_Ptr)))/((float)(ViewmodelMuzzleActive ? vertices->ViewZ : vertices->Z)*(float)ScreenDescriptorBlock.SDB_CentreY);		
 		
 		if (particleDescPtr->IsDrawnInFront) {
 			z = -0.99999f; /* ... */
 		} else if (particleDescPtr->IsDrawnAtBack) {
 			z = 0.99999f;
 		} else {
-			z = 1.0 - 2.0*ZNear/((float)vertices->Z); /* currently maps [ZNear, inf) to [-1, 1], probably could be more precise with a ZFar */
+			z = 1.0 - 2.0*ZNear/((float)(ViewmodelMuzzleActive ? vertices->ViewZ : vertices->Z)); /* currently maps [ZNear, inf) to [-1, 1], probably could be more precise with a ZFar */
 		}
 
-		varrp->v[0] = x*w;
-		varrp->v[1] = y*w;
-		varrp->v[2] = z*w;
-		varrp->v[3] = w;
+        if (fastFire) {
+            FireBatchVertex *v=&fireVertices[i];
+            ProjectRenderPosition(v->position,vertices,ViewmodelMuzzleActive,ZNear,0,particleDescPtr->IsDrawnInFront?-1:particleDescPtr->IsDrawnAtBack?1:0);
+            v->uvMode[0]=s;v->uvMode[1]=t;v->uvMode[2]=(float)batchMode;
+            v->colour[0]=r;v->colour[1]=g;v->colour[2]=b;v->colour[3]=a;
+            continue;
+        }
+		ProjectRenderPosition(varrp->v,vertices,ViewmodelMuzzleActive,ZNear,0,particleDescPtr->IsDrawnInFront?-1:particleDescPtr->IsDrawnAtBack?1:0);
 		
 		varrp->t[0] = s;
 		varrp->t[1] = t;
@@ -1079,15 +1325,16 @@ void D3D_Particle_Output(PARTICLE *particlePtr, RENDERVERTEX *renderVerticesPtr)
 		varrp++;
 		varrc++;
 	}
+    if(fastFire)FireBatchAppend(fireVertices,RenderPolygon.NumberOfVertices,TextureHandle->id);
 }
 
 void D3D_PredatorThermalVisionPolygon_Output(POLYHEADER *inputPolyPtr, RENDERVERTEX *renderVerticesPtr)
 {
 	float ZNear;
 	int i;
-	ZNear = (float) (Global_VDB_Ptr->VDB_ClipZ * GlobalScale);
+	ZNear = (float) (ViewmodelShapeActive && AvP.PlayerType==I_Marine ? ViewmodelNearClip() : Global_VDB_Ptr->VDB_ClipZ * GlobalScale);
 	
-	CheckTriangleBuffer(RenderPolygon.NumberOfVertices, 0, 0, 0, NULL, TRANSLUCENCY_OFF, -1);
+	CheckTriangleBuffer(RenderPolygon.NumberOfVertices, 0, 0, 0, NULL, TRANSLUCENCY_OFF, -1, 0);
 	
 	for (i = 0; i < RenderPolygon.NumberOfVertices; i++) {
 		RENDERVERTEX *vertices = &renderVerticesPtr[i];
@@ -1096,18 +1343,15 @@ void D3D_PredatorThermalVisionPolygon_Output(POLYHEADER *inputPolyPtr, RENDERVER
 		GLfloat w;
 		GLfloat zvalue;
 		
-		x =  ((float)vertices->X*((float)Global_VDB_Ptr->VDB_ProjX+1.0f))/((float)vertices->Z*(float)ScreenDescriptorBlock.SDB_CentreX);
-		y = -((float)vertices->Y*((float)Global_VDB_Ptr->VDB_ProjY+1.0f))/((float)vertices->Z*(float)ScreenDescriptorBlock.SDB_CentreY);
+		x =  ((ViewmodelShapeActive ? vertices->ViewX : vertices->X)*((float)AvpProjectionX(Global_VDB_Ptr)))/((ViewmodelShapeActive ? vertices->ViewZ : vertices->Z)*(float)ScreenDescriptorBlock.SDB_CentreX);
+		y = -((ViewmodelShapeActive ? vertices->ViewY : vertices->Y)*((float)AvpProjectionY(Global_VDB_Ptr)))/((ViewmodelShapeActive ? vertices->ViewZ : vertices->Z)*(float)ScreenDescriptorBlock.SDB_CentreY);
 		
-		zvalue = vertices->Z+HeadUpDisplayZOffset;
+		zvalue = (ViewmodelShapeActive ? vertices->ViewZ : vertices->Z)+HeadUpDisplayZOffset;
 		z = 1.0 - 2*ZNear/zvalue;
 		
-		w = (float)vertices->Z;
+		w = (ViewmodelShapeActive ? vertices->ViewZ : vertices->Z);
 
-		varrp->v[0] = x*w;
-		varrp->v[1] = y*w;
-		varrp->v[2] = z*w;
-		varrp->v[3] = w;
+		ProjectRenderPosition(varrp->v,vertices,ViewmodelShapeActive,ZNear,HeadUpDisplayZOffset,0);
 		
 		varrp->c[0] = vertices->R;
 		varrp->c[1] = vertices->G;
@@ -1129,11 +1373,11 @@ void D3D_ZBufferedGouraudPolygon_Output(POLYHEADER *inputPolyPtr, RENDERVERTEX *
 	int flags, i;
 	float ZNear;
 	
-	ZNear = (float) (Global_VDB_Ptr->VDB_ClipZ * GlobalScale);
+	ZNear = (float) (ViewmodelShapeActive && AvP.PlayerType==I_Marine ? ViewmodelNearClip() : Global_VDB_Ptr->VDB_ClipZ * GlobalScale);
 	
 	flags = inputPolyPtr->PolyFlags;
 	
-	CheckTriangleBuffer(RenderPolygon.NumberOfVertices, 0, 0, 0, NULL, RenderPolygon.TranslucencyMode, -1);
+	CheckTriangleBuffer(RenderPolygon.NumberOfVertices, 0, 0, 0, NULL, RenderPolygon.TranslucencyMode, -1, 0);
 	
 	for (i = 0; i < RenderPolygon.NumberOfVertices; i++) {
 		RENDERVERTEX *vertices = &renderVerticesPtr[i];	
@@ -1141,18 +1385,15 @@ void D3D_ZBufferedGouraudPolygon_Output(POLYHEADER *inputPolyPtr, RENDERVERTEX *
 		GLfloat w;
 		GLfloat zvalue;
 				
-		zvalue = vertices->Z+HeadUpDisplayZOffset;
+		zvalue = (ViewmodelShapeActive ? vertices->ViewZ : vertices->Z)+HeadUpDisplayZOffset;
 		z = 1.0 - 2*ZNear/zvalue;
 				
-		w = (float)vertices->Z;
+		w = (ViewmodelShapeActive ? vertices->ViewZ : vertices->Z);
 
-		x =  ((float)vertices->X*((float)Global_VDB_Ptr->VDB_ProjX+1.0f))/((float)vertices->Z*(float)ScreenDescriptorBlock.SDB_CentreX);
-		y = -((float)vertices->Y*((float)Global_VDB_Ptr->VDB_ProjY+1.0f))/((float)vertices->Z*(float)ScreenDescriptorBlock.SDB_CentreY);	
+		x =  ((ViewmodelShapeActive ? vertices->ViewX : vertices->X)*((float)AvpProjectionX(Global_VDB_Ptr)))/((ViewmodelShapeActive ? vertices->ViewZ : vertices->Z)*(float)ScreenDescriptorBlock.SDB_CentreX);
+		y = -((ViewmodelShapeActive ? vertices->ViewY : vertices->Y)*((float)AvpProjectionY(Global_VDB_Ptr)))/((ViewmodelShapeActive ? vertices->ViewZ : vertices->Z)*(float)ScreenDescriptorBlock.SDB_CentreY);	
 
-		varrp->v[0] = x*w;
-		varrp->v[1] = y*w;
-		varrp->v[2] = z*w;
-		varrp->v[3] = w;
+		ProjectRenderPosition(varrp->v,vertices,ViewmodelShapeActive,ZNear,HeadUpDisplayZOffset,0);
 		
 		varrp->c[0] = vertices->R;
 		varrp->c[1] = vertices->G;
@@ -1209,7 +1450,7 @@ void D3D_PlayerOnFireOverlay()
 	s[3] = u;
 	t[3] = v + 1.0f;
 	
-	CheckTriangleBuffer(4, 0, 0, 0, TextureHandle, TRANSLUCENCY_GLOWING, FILTERING_BILINEAR_ON);
+	CheckTriangleBuffer(4, 0, 0, 0, TextureHandle, TRANSLUCENCY_GLOWING, FILTERING_BILINEAR_ON, 0);
 	
 	for (i = 0; i < 4; i++) {
 		varrp->v[0] = x[i];
@@ -1266,7 +1507,7 @@ void D3D_PlayerDamagedOverlay(int intensity)
 		GLfloat x[4], y[4], s[4], t[4];
 		
 		if (i == 0) {
-			CheckTriangleBuffer(4, 0, 0, 0, TextureHandle, TRANSLUCENCY_INVCOLOUR, FILTERING_BILINEAR_ON);
+			CheckTriangleBuffer(4, 0, 0, 0, TextureHandle, TRANSLUCENCY_INVCOLOUR, FILTERING_BILINEAR_ON, 0);
 
 			colour = 0xffffff - baseColour + (intensity<<24);
 			
@@ -1275,7 +1516,7 @@ void D3D_PlayerDamagedOverlay(int intensity)
 			r = (colour >> 16) & 0xFF;
 			a = (colour >> 24) & 0xFF;
 		} else {
-			CheckTriangleBuffer(4, 0, 0, 0, TextureHandle, TRANSLUCENCY_GLOWING, FILTERING_BILINEAR_ON);
+			CheckTriangleBuffer(4, 0, 0, 0, TextureHandle, TRANSLUCENCY_GLOWING, FILTERING_BILINEAR_ON, 0);
 
 			colour = baseColour + (intensity<<24);
 			
@@ -1333,18 +1574,23 @@ void D3D_PlayerDamagedOverlay(int intensity)
 void DrawNoiseOverlay(int tr)
 {
 	GLfloat x[4], y[4], s[4], t[4], u, v;
+	float uSpan, vSpan, noiseScale;
 	int r, g, b;
 	D3DTexture *tex;
-	int size;
 	int j;
 
 	r = 255;
 	g = 255;
 	b = 255;
 
-	size = 256;
-
 	tex = ImageHeaderArray[StaticImageNumber].D3DTexture;
+
+	/* The original overlay sampled one 256x256 noise tile over a 640x480
+	 * framebuffer.  Preserve that physical grain density, rather than
+	 * magnifying its texels as the selected video mode becomes larger. */
+	noiseScale = (NoiseOverlayScaleMode == NOISE_OVERLAY_SCALE_HALF) ? 0.5f : 1.0f;
+	uSpan = 256.0f * ((float)ScreenDescriptorBlock.SDB_Width / 640.0f) / noiseScale;
+	vSpan = 256.0f * ((float)ScreenDescriptorBlock.SDB_Height / 480.0f) / noiseScale;
 
 	u = FastRandom()&255;
 	v = FastRandom()&255;
@@ -1355,20 +1601,20 @@ void DrawNoiseOverlay(int tr)
 	t[0] = v / 256.0f;
 	x[1] =  1.0f;
 	y[1] = -1.0f;
-	s[1] = (u + size) / 256.0f;
+	s[1] = (u + uSpan) / 256.0f;
 	t[1] = v / 256.0f;
 	x[2] =  1.0f;
 	y[2] =  1.0f;
-	s[2] = (u + size) / 256.0f;
-	t[2] = (v + size) / 256.0f;
+	s[2] = (u + uSpan) / 256.0f;
+	t[2] = (v + vSpan) / 256.0f;
 	x[3] = -1.0f;
 	y[3] =  1.0f;
 	s[3] = u / 256.0f;
-	t[3] = (v + size) / 256.0f;
+	t[3] = (v + vSpan) / 256.0f;
 
 	// changing the depth func manually, so flush now
 	FlushTriangleBuffers(0);
-	CheckTriangleBuffer(4, 0, 0, 0, tex, TRANSLUCENCY_GLOWING, FILTERING_BILINEAR_ON);
+	CheckTriangleBuffer(4, 0, 0, 0, tex, TRANSLUCENCY_GLOWING, FILTERING_BILINEAR_ON, 0);
 
 	for (j = 0; j < 4; j++) {
 		varrp->v[0] = x[j];
@@ -1414,9 +1660,9 @@ void D3D_ScreenInversionOverlay()
 		GLfloat x[4], y[4], s[4], t[4];
 		
 		if (i == 0) {
-			CheckTriangleBuffer(4, 0, 0, 0, tex, TRANSLUCENCY_DARKENINGCOLOUR, FILTERING_BILINEAR_ON);
+			CheckTriangleBuffer(4, 0, 0, 0, tex, TRANSLUCENCY_DARKENINGCOLOUR, FILTERING_BILINEAR_ON, 0);
 		} else {
-			CheckTriangleBuffer(4, 0, 0, 0, tex, TRANSLUCENCY_COLOUR, FILTERING_BILINEAR_ON);
+			CheckTriangleBuffer(4, 0, 0, 0, tex, TRANSLUCENCY_COLOUR, FILTERING_BILINEAR_ON, 0);
 		}
 
 		float sin = (GetSin(theta[i]))/65536.0f/16.0f;
@@ -1470,7 +1716,7 @@ void D3D_PredatorScreenInversionOverlay()
 
 	// changing the depth func manually, so flush now
 	FlushTriangleBuffers(0);
-	CheckTriangleBuffer(4, 0, 0, 0, NULL, TRANSLUCENCY_DARKENINGCOLOUR, -1);
+	CheckTriangleBuffer(4, 0, 0, 0, NULL, TRANSLUCENCY_DARKENINGCOLOUR, -1, 0);
 	
 	for (j = 0; j < 4; j++) {
 
@@ -1522,7 +1768,7 @@ void DrawScanlinesOverlay(float level)
 {
 	D3DTexture *tex;
 	GLfloat x[4], y[4], s[4], t[4];
-	float v, size;
+	float v, size, verticalScale, noiseScale;
 	int c;
 	int a;
 	int j;
@@ -1534,6 +1780,13 @@ void DrawScanlinesOverlay(float level)
 	
 	v = 128.0f;
 	size = 128.0f*(1.0f-level*0.8f);
+
+	/* Scanline spacing was authored against a 480-line framebuffer.  Tile the
+	 * source band vertically with the real framebuffer height so each line
+	 * keeps its intended raster density at modern resolutions. */
+	verticalScale = (float)ScreenDescriptorBlock.SDB_Height / 480.0f;
+	noiseScale = (NoiseOverlayScaleMode == NOISE_OVERLAY_SCALE_HALF) ? 0.5f : 1.0f;
+	size *= verticalScale / noiseScale;
 
 	x[0] = -1.0f;
 	y[0] = -1.0f;
@@ -1554,7 +1807,7 @@ void DrawScanlinesOverlay(float level)
 	
 	// changing the depth func manually, so flush now
 	FlushTriangleBuffers(0);
-	CheckTriangleBuffer(4, 0, 0, 0, tex, TRANSLUCENCY_NORMAL, FILTERING_BILINEAR_ON);
+	CheckTriangleBuffer(4, 0, 0, 0, tex, TRANSLUCENCY_NORMAL, FILTERING_BILINEAR_ON, 0);
 
 	for (j = 0; j < 4; j++) {
 		varrp->v[0] = x[j];
@@ -1594,7 +1847,7 @@ void D3D_FadeDownScreen(int brightness, int colour)
 	if (t<0) t = 0;
 	colour = (t<<24)+colour;
 	
-	CheckTriangleBuffer(4, 0, 0, 0, NULL, TRANSLUCENCY_NORMAL, -1);
+	CheckTriangleBuffer(4, 0, 0, 0, NULL, TRANSLUCENCY_NORMAL, -1, 0);
 	
 	b = (colour >> 0)  & 0xFF;
 	g = (colour >> 8)  & 0xFF;
@@ -1634,6 +1887,12 @@ void D3D_FadeDownScreen(int brightness, int colour)
 	}
 }
 
+static enum FILTERING_MODE_ID HUDTextureFilteringMode(void)
+{
+	return (HUDTextureFilterMode == HUD_TEXTURE_FILTER_NEAREST)
+		? FILTERING_BILINEAR_OFF : FILTERING_BILINEAR_ON;
+}
+
 void D3D_HUD_Setup()
 {
 	FlushTriangleBuffers(1);
@@ -1643,17 +1902,39 @@ void D3D_HUD_Setup()
 	pglDepthFunc(GL_LEQUAL);	
 }
 
-void D3D_HUDQuad_Output(int imageNumber, struct VertexTag *quadVerticesPtr, unsigned int colour)
+/* Scoped only to help-text outlines. The luminance of the existing font
+ * darkens the destination, keeping its antialiased edge and transparent cell.
+ * Black in the additive HUD path would be invisible. */
+static int HUDTextOutlinePass;
+static int HUDQuickLoadText;
+static int HUDTextIsolateCells;
+void D3D_HUDPolygonFloat_Output(int imageNumber, const struct HUDVertexF *quadVerticesPtr, int count, unsigned int colour)
 {
+	if(count<3 || count>5)return;
 	float RecipW, RecipH;
 	int i;
 	D3DTexture *tex = ImageHeaderArray[imageNumber].D3DTexture;
 	GLfloat x, y, s, t;
 	int r, g, b, a;
 
+	/* Asset restoration failures must be diagnosable, never an access
+	 * violation in the HUD path. */
+	if (tex == NULL) {
+		static int lastMissingHudImage = -1;
+		if (lastMissingHudImage != imageNumber)
+		{
+			fprintf(stderr, "OGL_HUD_TEXTURE_MISSING image=%d name=%s (reported once until recovery)\n", imageNumber, ImageHeaderArray[imageNumber].ImageName);
+			lastMissingHudImage = imageNumber;
+		}
+		return;
+	}
+
+
 /* possibly use polygon offset? (predator hud) */
 
-	CheckTriangleBuffer(4, 0, 0, 0, tex, TRANSLUCENCY_GLOWING, -1);
+	/* The HUD owns its sampling state.  This prevents numeric/text paths from
+	   inheriting whichever filter the preceding world or HUD draw selected. */
+	CheckTriangleBuffer(count, 0, 0, 0, tex, HUDTextOutlinePass ? TRANSLUCENCY_INVCOLOUR : TRANSLUCENCY_GLOWING, HUDTextureFilteringMode(), 0);
 	
 	RecipW = tex->RecipW / 65536.0f;
 	RecipH = tex->RecipH / 65536.0f;
@@ -1663,19 +1944,92 @@ void D3D_HUDQuad_Output(int imageNumber, struct VertexTag *quadVerticesPtr, unsi
 	r = (colour >> 16) & 0xFF;
 	a = (colour >> 24) & 0xFF;
 
-	for (i = 0; i < 4; i++) {
-		x = quadVerticesPtr[i].X;
-		x =  (x - ScreenDescriptorBlock.SDB_CentreX)/ScreenDescriptorBlock.SDB_CentreX;
-		y = quadVerticesPtr[i].Y;
-		y = -(y - ScreenDescriptorBlock.SDB_CentreY)/ScreenDescriptorBlock.SDB_CentreY;
+	{
+		int hudAnchored = HUD_AnchorIsActive();
+		int layoutWidth = 0, layoutHeight = 0, hudScale = ONE_FIXED;
+		int anchorX = 0, anchorY = 0;
+		if (hudAnchored) {
+			float minX = quadVerticesPtr[0].X, maxX = quadVerticesPtr[0].X;
+			float minY = quadVerticesPtr[0].Y, maxY = quadVerticesPtr[0].Y;
+			layoutWidth = HUD_GetLayoutWidth();
+			layoutHeight = HUD_GetLayoutHeight();
+			hudScale = HUD_GetUserScaleFixed();
+			for (i = 1; i < count; i++) {
+				if (quadVerticesPtr[i].X < minX) minX = quadVerticesPtr[i].X;
+				if (quadVerticesPtr[i].X > maxX) maxX = quadVerticesPtr[i].X;
+				if (quadVerticesPtr[i].Y < minY) minY = quadVerticesPtr[i].Y;
+				if (quadVerticesPtr[i].Y > maxY) maxY = quadVerticesPtr[i].Y;
+			}
+			/* Preserve the nearest local HUD edge.  Middle HUD material remains
+			 * centred; corner blocks remain framed by their selected HUD canvas. */
+			switch (HUD_GetScaleAnchor()) {
+				case HUD_SCALE_ANCHOR_TOP_LEFT: anchorX = 0; anchorY = 0; break;
+				case HUD_SCALE_ANCHOR_TOP_RIGHT: anchorX = layoutWidth; anchorY = 0; break;
+				case HUD_SCALE_ANCHOR_BOTTOM_LEFT: anchorX = 0; anchorY = layoutHeight; break;
+				case HUD_SCALE_ANCHOR_BOTTOM_RIGHT: anchorX = layoutWidth; anchorY = layoutHeight; break;
+				case HUD_SCALE_ANCHOR_CENTRE: anchorX = layoutWidth / 2; anchorY = layoutHeight / 2; break;
+				case HUD_SCALE_ANCHOR_AUTO:
+				default:
+					if ((minX + maxX) < layoutWidth / 2) anchorX = 0;
+					else if ((minX + maxX) > (layoutWidth * 3) / 2) anchorX = layoutWidth;
+					else anchorX = layoutWidth / 2;
+					if ((minY + maxY) < layoutHeight / 2) anchorY = 0;
+					else if ((minY + maxY) > (layoutHeight * 3) / 2) anchorY = layoutHeight;
+					else anchorY = layoutHeight / 2;
+					break;
+			}
+		}
+		for (i = 0; i < count; i++) {
+            float hudW=1.0f;
+			if (hudAnchored) {
+				x = anchorX + (hudScale/(float)ONE_FIXED)*(quadVerticesPtr[i].X - anchorX) + HUD_GetLayoutOffsetX();
+				y = anchorY + (hudScale/(float)ONE_FIXED)*(quadVerticesPtr[i].Y - anchorY) + HUD_GetLayoutOffsetY();
+			}
+			else {
+				x = quadVerticesPtr[i].X;
+				y = quadVerticesPtr[i].Y;
+			}
+        s = (float)quadVerticesPtr[i].U;
+        t = (float)quadVerticesPtr[i].V;
+        if ((HUDTextIsolateCells || D3D_IsFPSCounterTextRenderActive() || D3D_IsBriefingOrConsoleTextRenderActive() || D3D_IsInGameMenuTextRenderActive() || D3D_IsStatisticsTextRenderActive() || hudAnchored) && imageNumber == AAFontImageNumber)
+        {
+            /* The old 17x17 quad straddled 16x16 cells. Bound samples to texel
+               centres inside this cell, adjusting geometry by the same amount:
+               no neighbouring glyphs, no stretching of the letter itself. */
+            float u0=(float)quadVerticesPtr[0].U, v0=(float)quadVerticesPtr[0].V;
+            float du=(float)(quadVerticesPtr[1].U-quadVerticesPtr[0].U);
+            float dv=(float)(quadVerticesPtr[3].V-quadVerticesPtr[0].V);
+            float cleanU=(i==0 || i==3)?u0+0.5f:u0+15.5f;
+            float cleanV=(i<2)?v0+0.5f:v0+15.5f;
+            if (D3D_IsBriefingOrConsoleTextRenderActive())
+            {
+                /* A console line can already be clipped at the screen top.
+                 * Recover its atlas cell from the bottom edge; never expand
+                 * that clipped interval back into a complete glyph. */
+                float cellU=floorf(u0/16.0f)*16.0f;
+                float cellV=floorf(((float)quadVerticesPtr[3].V-2.0f)/16.0f)*16.0f;
+                cleanU=fminf(fmaxf(s,cellU+0.5f),cellU+15.5f);
+                cleanV=fminf(fmaxf(t,cellV+0.5f),cellV+15.5f);
+            }
+            float ux=du?(quadVerticesPtr[1].X-quadVerticesPtr[0].X)/du:0;
+            float uy=du?(quadVerticesPtr[1].Y-quadVerticesPtr[0].Y)/du:0;
+            float vx=dv?(quadVerticesPtr[3].X-quadVerticesPtr[0].X)/dv:0;
+            float vy=dv?(quadVerticesPtr[3].Y-quadVerticesPtr[0].Y)/dv:0;
+            float scale=hudAnchored?hudScale/(float)ONE_FIXED:1.0f;
+            x+=((cleanU-s)*ux+(cleanV-t)*vx)*scale;
+            y+=((cleanU-s)*uy+(cleanV-t)*vy)*scale;
+            s=cleanU; t=cleanV;
+        }
+        if(hudAnchored)hudW=MarineHUDMotionTransform(&x,&y);
+        x=(x-ScreenDescriptorBlock.SDB_CentreX)/ScreenDescriptorBlock.SDB_CentreX;
+        y=-(y-ScreenDescriptorBlock.SDB_CentreY)/ScreenDescriptorBlock.SDB_CentreY;
+        s*=65536.0f*RecipW;
+        t*=65536.0f*RecipH;
 
-		s = TEXCOORD_FIXED(quadVerticesPtr[i].U<<16, RecipW);
-		t = TEXCOORD_FIXED(quadVerticesPtr[i].V<<16, RecipH);
-
-		varrp->v[0] = x;
-		varrp->v[1] = y;
-		varrp->v[2] = -1.0f;
-		varrp->v[3] = 1.0f;
+		varrp->v[0] = x*hudW;
+		varrp->v[1] = y*hudW;
+		varrp->v[2] = -hudW;
+		varrp->v[3] = hudW;
 		
 		varrp->t[0] = s;
 		varrp->t[1] = t;
@@ -1692,13 +2046,22 @@ void D3D_HUDQuad_Output(int imageNumber, struct VertexTag *quadVerticesPtr, unsi
 
 		varrp++;
 		varrc++;
+		}
 	}
 }
+void D3D_HUDQuad_Output(int imageNumber, struct VertexTag *vertices, unsigned int colour)
+{
+ struct HUDVertexF v[4];
+ for(int i=0;i<4;i++){v[i].X=vertices[i].X;v[i].Y=vertices[i].Y;v[i].U=vertices[i].U;v[i].V=vertices[i].V;}
+ D3D_HUDPolygonFloat_Output(imageNumber,v,4,colour);
+}
+
 
 void D3D_RenderHUDNumber_Centred(unsigned int number,int x,int y,int colour)
 {
 	struct VertexTag quadVertices[4];
 	int noOfDigits=3;
+	for(unsigned int n=number/1000;n;n/=10)++noOfDigits;
 	int h = MUL_FIXED(HUDScaleFactor,HUD_DIGITAL_NUMBERS_HEIGHT);
 	int w = MUL_FIXED(HUDScaleFactor,HUD_DIGITAL_NUMBERS_WIDTH);
 
@@ -1707,7 +2070,7 @@ void D3D_RenderHUDNumber_Centred(unsigned int number,int x,int y,int colour)
 	quadVertices[2].Y = y + h;
 	quadVertices[3].Y = y + h;
 	
-	x += (3*w)/2;
+	x += (noOfDigits*w)/2;
 	
 	CheckFilteringModeIsCorrect(FILTERING_BILINEAR_OFF);
 	
@@ -1746,8 +2109,48 @@ void D3D_RenderHUDNumber_Centred(unsigned int number,int x,int y,int colour)
 	} while (--noOfDigits);
 }
 
+void D3D_DrawSolidRect(int left,int top,int right,int bottom,unsigned int colour,int additive)
+{
+ int i;const int xs[4]={left,right,right,left},ys[4]={top,top,bottom,bottom};
+ if(right<=left||bottom<=top)return;
+ CheckTriangleBuffer(4,0,0,0,NULL,additive?TRANSLUCENCY_GLOWING:TRANSLUCENCY_NORMAL,-1, 0);
+ for(i=0;i<4;i++){
+  varrp->v[0]=2.0f*xs[i]/ScreenDescriptorBlock.SDB_Width-1.0f;
+  varrp->v[1]=1.0f-2.0f*ys[i]/ScreenDescriptorBlock.SDB_Height;
+  varrp->v[2]=-1.0f;varrp->v[3]=1.0f;varrp->t[0]=varrp->t[1]=0;
+  varrp->c[0]=(colour>>16)&255;varrp->c[1]=(colour>>8)&255;varrp->c[2]=colour&255;varrp->c[3]=colour>>24;
+  varrp->s[0]=varrp->s[1]=varrp->s[2]=varrp->s[3]=0;varrp++;varrc++;
+ }
+}
+/* Map the mark through the same UV-to-screen transform as its base glyph.
+ * This also preserves vertical HUD text and partially clipped console rows. */
+static void D3D_HUDQuad_OutputAccent(int imageNumber, struct VertexTag *quadVertices, unsigned char base, unsigned char accent, int colour)
+{
+	int i;
+	int deltaU;
+	int deltaV;
+
+	if (!accent) return;
+	deltaU = (((accent - 32) & 15) - ((base - 32) & 15)) * 16;
+	deltaV = (((accent - 32) >> 4) - ((base - 32) >> 4)) * 16;
+	for (i = 0; i < 4; ++i)
+	{
+		quadVertices[i].U += deltaU;
+		quadVertices[i].V += deltaV;
+	}
+	D3D_HUDQuad_Output(imageNumber, quadVertices, colour);
+}
 void D3D_RenderHUDString(char *stringPtr,int x,int y,int colour)
 {
+	const int textOriginX = x;
+	const int textOriginY = y;
+	const int textScaleFixed = D3D_GetActiveConsoleTextScaleFixed();
+	/* Statistics retain their established columns, but expand rows from the
+	   top baseline so scaled lines never overlap. */
+	if (D3D_IsStatisticsTextRenderActive())
+	{
+		y = 20 + MUL_FIXED(y - 20, textScaleFixed);
+	}
 	struct VertexTag quadVertices[4];
 
 	if (stringPtr == NULL)
@@ -1755,16 +2158,17 @@ void D3D_RenderHUDString(char *stringPtr,int x,int y,int colour)
 		return;
 	}
 
-	quadVertices[0].Y = y-1;
-	quadVertices[1].Y = y-1;
-	quadVertices[2].Y = y + HUD_FONT_HEIGHT + 1;
-	quadVertices[3].Y = y + HUD_FONT_HEIGHT + 1;
+	quadVertices[0].Y = y-MUL_FIXED(1, textScaleFixed);
+	quadVertices[1].Y = y-MUL_FIXED(1, textScaleFixed);
+	quadVertices[2].Y = y + MUL_FIXED(HUD_FONT_HEIGHT + 1, textScaleFixed);
+	quadVertices[3].Y = y + MUL_FIXED(HUD_FONT_HEIGHT + 1, textScaleFixed);
 	
 	CheckFilteringModeIsCorrect(FILTERING_BILINEAR_OFF);
 
 	while( *stringPtr )
 	{
-		char c = *stringPtr++;
+		unsigned char accent;
+		unsigned char c = AvPTextNextGlyphWithAccent(&stringPtr, &accent);
 
 		{
 			int topLeftU = 1+((c-32)&15)*16;
@@ -1779,24 +2183,71 @@ void D3D_RenderHUDString(char *stringPtr,int x,int y,int colour)
 			quadVertices[3].U = topLeftU - 1;
 			quadVertices[3].V = topLeftV + HUD_FONT_HEIGHT + 1;
 			
-			quadVertices[0].X = x - 1;
-			quadVertices[3].X = x - 1;
-			quadVertices[1].X = x + HUD_FONT_WIDTH + 1;
-			quadVertices[2].X = x + HUD_FONT_WIDTH + 1;
-				
-			D3D_HUDQuad_Output
-			(
-				AAFontImageNumber,
-				quadVertices,
-				colour
-			);
+			quadVertices[0].X = x - MUL_FIXED(1, textScaleFixed);
+			quadVertices[3].X = x - MUL_FIXED(1, textScaleFixed);
+			quadVertices[1].X = x + MUL_FIXED(HUD_FONT_WIDTH + 1, textScaleFixed);
+			quadVertices[2].X = x + MUL_FIXED(HUD_FONT_WIDTH + 1, textScaleFixed);
+			D3D_HUDQuad_Output(AAFontImageNumber, quadVertices, colour);
+			D3D_HUDQuad_OutputAccent(AAFontImageNumber, quadVertices, c, accent, colour);
 		}
-		x += AAFontWidths[(unsigned char)c];
+		x += MUL_FIXED(AAFontWidths[(unsigned char)c], textScaleFixed);
 	}
 }
 
+static void D3D_RenderQuickLoadString(char *text,int x,int y,unsigned int colour)
+{
+ int saved=HUDTextOutlinePass,savedCells=HUDTextIsolateCells;
+ unsigned int a=colour>>24;
+ HUDTextIsolateCells=1;
+ /* Same glyph at the same coordinates: attenuate by coverage, then add the foreground colour.
+  * This implements over compositing without an outline or a different atlas. */
+ HUDTextOutlinePass=1;
+ D3D_RenderHUDString(text,x,y,(a<<24)|(a<<16)|(a<<8)|a);
+ HUDTextOutlinePass=0;
+ D3D_RenderHUDString(text,x,y,colour);
+ HUDTextOutlinePass=saved;
+ HUDTextIsolateCells=savedCells;
+}
+
+void D3D_RenderHUDStringOutlined(char *text,int x,int y,int colour,int radius)
+{
+ int dx,dy;
+ int saved=HUDTextOutlinePass;
+ int savedCells=HUDTextIsolateCells;
+ HUDTextIsolateCells=1;
+ if(radius<1)radius=1;
+ if(radius>3)radius=3;
+ HUDTextOutlinePass=1;
+ /* Complete the contour before the foreground, so adjacent glyphs cannot
+  * darken each other. INVCOLOUR multiplies the background by (1-mask). */
+ for(dy=-1;dy<=1;dy++)for(dx=-1;dx<=1;dx++)
+  if(dx || dy)D3D_RenderHUDString(text,x+dx*radius,y+dy*radius,0xffffffff);
+ HUDTextOutlinePass=saved;
+ D3D_RenderHUDString(text,x,y,colour);
+ HUDTextIsolateCells=savedCells;
+}
+
+void D3D_RenderConsoleVersion(int left,int top,int right,int bottom,int alpha)
+{
+ char label[]=TYRARGO_CONSOLE_VERSION;
+ int scale=D3D_GetActiveConsoleTextScaleFixed();
+ int width=MUL_FIXED(AvPTextStringWidth(label,AAFontWidths),scale);
+ int pad=MUL_FIXED(3,scale),x=right-pad-width,y=top+pad;
+ if(x<left+pad || y+MUL_FIXED(HUD_FONT_HEIGHT+2,scale)>bottom)return;
+ /* Subdued blue core and a much lighter halo; both share the opening fade. */
+ if(alpha<=0)return;
+ unsigned int core=((unsigned int)MUL_FIXED(210,alpha)<<24)|0x58b8e8u;
+ unsigned int halo=((unsigned int)MUL_FIXED(20,alpha)<<24)|0x0050c0u;
+ D3D_RenderHUDString(label,x-1,y,halo);
+ D3D_RenderHUDString(label,x+1,y,halo);
+ D3D_RenderHUDString(label,x,y-1,halo);
+ D3D_RenderHUDString(label,x,y+1,halo);
+ D3D_RenderHUDString(label,x,y,core);
+}
 void D3D_RenderHUDString_Clipped(char *stringPtr,int x,int y,int colour)
 {
+	const int textOriginX = x;
+	const int textScaleFixed = D3D_GetActiveConsoleTextScaleFixed();
 	struct VertexTag quadVertices[4];
 
 // 	LOCALASSERT(y<=0);
@@ -1807,74 +2258,96 @@ void D3D_RenderHUDString_Clipped(char *stringPtr,int x,int y,int colour)
 
 	CheckFilteringModeIsCorrect(FILTERING_BILINEAR_OFF);
 
-	quadVertices[2].Y = y + HUD_FONT_HEIGHT + 1;
-	quadVertices[3].Y = y + HUD_FONT_HEIGHT + 1;
+	quadVertices[2].Y = y + MUL_FIXED(HUD_FONT_HEIGHT + 1, textScaleFixed);
+	quadVertices[3].Y = y + MUL_FIXED(HUD_FONT_HEIGHT + 1, textScaleFixed);
 	
 	quadVertices[0].Y = 0;
 	quadVertices[1].Y = 0;
 
 	while ( *stringPtr )
 	{
-		char c = *stringPtr++;
+		unsigned char accent;
+		unsigned char c = AvPTextNextGlyphWithAccent(&stringPtr, &accent);
 
 		{
 			int topLeftU = 1+((c-32)&15)*16;
 			int topLeftV = 1+((c-32)>>4)*16;
 
 			quadVertices[0].U = topLeftU - 1;
-			quadVertices[0].V = topLeftV - y;
+			quadVertices[0].V = topLeftV - ((y << 16) / textScaleFixed);
 			quadVertices[1].U = topLeftU + HUD_FONT_WIDTH+1;
-			quadVertices[1].V = topLeftV - y;
+			quadVertices[1].V = topLeftV - ((y << 16) / textScaleFixed);
 			quadVertices[2].U = topLeftU + HUD_FONT_WIDTH+1;
 			quadVertices[2].V = topLeftV + HUD_FONT_HEIGHT+1;
 			quadVertices[3].U = topLeftU - 1;
 			quadVertices[3].V = topLeftV + HUD_FONT_HEIGHT+1;
 			
-			quadVertices[0].X = x - 1;
-			quadVertices[3].X = x - 1;
-			quadVertices[1].X = x + HUD_FONT_WIDTH + 1;
-			quadVertices[2].X = x + HUD_FONT_WIDTH + 1;
-				
-			D3D_HUDQuad_Output
-			(
-				AAFontImageNumber,
-				quadVertices,
-				colour
-			);
+			quadVertices[0].X = x - MUL_FIXED(1, textScaleFixed);
+			quadVertices[3].X = x - MUL_FIXED(1, textScaleFixed);
+			quadVertices[1].X = x + MUL_FIXED(HUD_FONT_WIDTH + 1, textScaleFixed);
+			quadVertices[2].X = x + MUL_FIXED(HUD_FONT_WIDTH + 1, textScaleFixed);
+			D3D_HUDQuad_Output(AAFontImageNumber, quadVertices, colour);
+			D3D_HUDQuad_OutputAccent(AAFontImageNumber, quadVertices, c, accent, colour);
 		}
-		x += AAFontWidths[(unsigned char)c];
+		x += MUL_FIXED(AAFontWidths[(unsigned char)c], textScaleFixed);
 	}
+}
+
+/* Glyph quads overlap because advance widths are smaller than atlas cells.
+ * With projective shake, z=-w can round to slightly different window depths
+ * across those overlapping quads. Even black additive texels used to write
+ * depth and reject the next letter. Draw the label as an overlay, then restore
+ * both depth states. Flush on each boundary so queued world/HUD geometry
+ * never inherits the label's policy. No change to sampling, motion or MSAA. */
+typedef struct HUD_LABEL_DEPTH {
+ GLint function,writeMask;
+} HUD_LABEL_DEPTH;
+static HUD_LABEL_DEPTH HUDLabelDepthBegin(void)
+{
+ HUD_LABEL_DEPTH previous;
+ FlushTriangleBuffers(1);
+ pglGetIntegerv(GL_DEPTH_FUNC,&previous.function);
+ pglGetIntegerv(GL_DEPTH_WRITEMASK,&previous.writeMask);
+ pglDepthFunc(GL_ALWAYS);
+ pglDepthMask(GL_FALSE);
+ return previous;
+}
+static void HUDLabelDepthEnd(HUD_LABEL_DEPTH previous)
+{
+ FlushTriangleBuffers(1);
+ pglDepthFunc(previous.function);
+ pglDepthMask(previous.writeMask!=0);
 }
 
 void D3D_RenderHUDString_Centred(char *stringPtr, int centreX, int y, int colour)
 {
-	int x, length = 0;
+	float x, length = 0;
+ const float scale=HUDScaleFactor/(float)ONE_FIXED;
 	char *ptr = stringPtr;
-	struct VertexTag quadVertices[4];
+	struct HUDVertexF quadVertices[4];
 
 	if (stringPtr == NULL)
 	{
 		return;
 	}
 	
-	while(*ptr)
-	{
-		length+=AAFontWidths[(unsigned char)*ptr++];
-	}
-	length = MUL_FIXED(HUDScaleFactor,length);
+ HUD_LABEL_DEPTH previousDepth=HUDLabelDepthBegin();
+	length = AvPTextStringWidth(ptr, AAFontWidths);
+	length = scale*length;
 
 	x = centreX-length/2;
 
-	quadVertices[0].Y = y-MUL_FIXED(HUDScaleFactor,1);
-	quadVertices[1].Y = y-MUL_FIXED(HUDScaleFactor,1);
-	quadVertices[2].Y = y + MUL_FIXED(HUDScaleFactor,HUD_FONT_HEIGHT + 1);
-	quadVertices[3].Y = y + MUL_FIXED(HUDScaleFactor,HUD_FONT_HEIGHT + 1);
+	quadVertices[0].Y = y-(scale*(1));
+	quadVertices[1].Y = y-(scale*(1));
+	quadVertices[2].Y = y + (scale*(HUD_FONT_HEIGHT + 1));
+	quadVertices[3].Y = y + (scale*(HUD_FONT_HEIGHT + 1));
 	
 	CheckFilteringModeIsCorrect(FILTERING_BILINEAR_OFF);
 
 	while( *stringPtr )
 	{
-		char c = *stringPtr++;
+		unsigned char accent;
+		unsigned char c = AvPTextNextGlyphWithAccent(&stringPtr, &accent);
 
 		{
 			int topLeftU = 1+((c-32)&15)*16;
@@ -1889,25 +2362,27 @@ void D3D_RenderHUDString_Centred(char *stringPtr, int centreX, int y, int colour
 			quadVertices[3].U = topLeftU - 1;
 			quadVertices[3].V = topLeftV + HUD_FONT_HEIGHT + 1;
 
-			quadVertices[0].X = x - MUL_FIXED(HUDScaleFactor,1);
-			quadVertices[3].X = x - MUL_FIXED(HUDScaleFactor,1);
-			quadVertices[1].X = x + MUL_FIXED(HUDScaleFactor,HUD_FONT_WIDTH + 1);
-			quadVertices[2].X = x + MUL_FIXED(HUDScaleFactor,HUD_FONT_WIDTH + 1);
+			quadVertices[0].X = x - (scale*(1));
+			quadVertices[3].X = x - (scale*(1));
+			quadVertices[1].X = x + (scale*(HUD_FONT_WIDTH + 1));
+			quadVertices[2].X = x + (scale*(HUD_FONT_WIDTH + 1));
 				
-			D3D_HUDQuad_Output
-			(
-				AAFontImageNumber,
-				quadVertices,
-				colour
-			);
+			D3D_HUDPolygonFloat_Output(AAFontImageNumber, quadVertices, 4, colour);
+			if(accent){
+                float du=(((accent-32)&15)-((c-32)&15))*16;
+                float dv=(((accent-32)>>4)-((c-32)>>4))*16;
+                for(int i=0;i<4;i++){quadVertices[i].U+=du;quadVertices[i].V+=dv;}
+                D3D_HUDPolygonFloat_Output(AAFontImageNumber,quadVertices,4,colour);
+            }
 		}
-		x += MUL_FIXED(HUDScaleFactor,AAFontWidths[(unsigned char)c]);
+		x += scale*AAFontWidths[(unsigned char)c];
 	}
+ HUDLabelDepthEnd(previousDepth);
 }
 
 void RenderString(char *stringPtr, int x, int y, int colour)
 {
-	D3D_RenderHUDString(stringPtr,x,y,colour);
+	D3D_RenderHUDString(stringPtr, x, y, colour);
 }
 
 void RenderStringCentred(char *stringPtr, int centreX, int y, int colour)
@@ -1915,11 +2390,8 @@ void RenderStringCentred(char *stringPtr, int centreX, int y, int colour)
 	int length = 0;
 	char *ptr = stringPtr;
 
-	while(*ptr)
-	{
-		length+=AAFontWidths[(unsigned char)*ptr++];
-	}
-	D3D_RenderHUDString(stringPtr,centreX-length/2,y,colour);
+	length = MUL_FIXED(AvPTextStringWidth(ptr, AAFontWidths), D3D_GetActiveConsoleTextScaleFixed());
+	D3D_RenderHUDString(stringPtr, centreX-length/2, y, colour);
 }
 
 void RenderStringVertically(char *stringPtr, int centreX, int bottomY, int colour)
@@ -1935,7 +2407,8 @@ void RenderStringVertically(char *stringPtr, int centreX, int bottomY, int colou
 	CheckFilteringModeIsCorrect(FILTERING_BILINEAR_OFF);
 	while( *stringPtr )
 	{
-		char c = *stringPtr++;
+		unsigned char accent;
+		unsigned char c = AvPTextNextGlyphWithAccent(&stringPtr, &accent);
 
 		{
 			int topLeftU = 1+((c-32)&15)*16;
@@ -1955,12 +2428,8 @@ void RenderStringVertically(char *stringPtr, int centreX, int bottomY, int colou
 			quadVertices[2].Y = y - HUD_FONT_WIDTH*1 -1;
 			quadVertices[3].Y = y ;
 				
-			D3D_HUDQuad_Output
-			(								  
-				AAFontImageNumber,
-				quadVertices,
-				colour
-			);
+			D3D_HUDQuad_Output(AAFontImageNumber, quadVertices, colour);
+			D3D_HUDQuad_OutputAccent(AAFontImageNumber, quadVertices, c, accent, colour);
 		}
 	   	y -= AAFontWidths[(unsigned char)c];
 	}
@@ -1968,6 +2437,7 @@ void RenderStringVertically(char *stringPtr, int centreX, int bottomY, int colou
 
 int Hardware_RenderSmallMenuText(char *textPtr, int x, int y, int alpha, enum AVPMENUFORMAT_ID format) 
 {
+	int anchorX = x;
 	switch(format)
 	{
 		default:
@@ -1982,12 +2452,13 @@ int Hardware_RenderSmallMenuText(char *textPtr, int x, int y, int alpha, enum AV
 		case AVPMENUFORMAT_RIGHTJUSTIFIED:
 		{
 			int length = 0;
-			signed char *ptr = (signed char*) textPtr;
+			char *ptr = textPtr;
 
-			while(*ptr)
-			{
-				length+=AAFontWidths[*ptr++];
-			}
+			/* The HUD renderer scales glyph quads for console, briefing and
+			   in-game menu scopes.  Justification must use that same width,
+			   otherwise scaled right-aligned labels cross into slider columns. */
+			length = MUL_FIXED(AvPTextStringWidth(ptr, AAFontWidths),
+			                   D3D_GetActiveConsoleTextScaleFixed());
 
 			x -= length;
 			break;
@@ -1995,12 +2466,10 @@ int Hardware_RenderSmallMenuText(char *textPtr, int x, int y, int alpha, enum AV
 		case AVPMENUFORMAT_CENTREJUSTIFIED:
 		{
 			int length = 0;
-			signed char *ptr = (signed char*) textPtr;
+			char *ptr = textPtr;
 
-			while(*ptr)
-			{
-				length+=AAFontWidths[*ptr++];
-			}
+			length = MUL_FIXED(AvPTextStringWidth(ptr, AAFontWidths),
+			                   D3D_GetActiveConsoleTextScaleFixed());
 
 			x -= length/2;
 			break;
@@ -2013,13 +2482,14 @@ int Hardware_RenderSmallMenuText(char *textPtr, int x, int y, int alpha, enum AV
 		unsigned int colour = alpha>>8;
 		if (colour>255) colour = 255;
 		colour = (colour<<24)+0xffffff;
-		D3D_RenderHUDString(textPtr,x,y,colour);
+		D3D_RenderHUDString(textPtr, x, y, colour);
 	}
 	return x;
 }
 
 int Hardware_RenderSmallMenuText_Coloured(char *textPtr, int x, int y, int alpha, enum AVPMENUFORMAT_ID format, int red, int green, int blue)
 {
+	int anchorX = x;
 	switch(format)
 	{
 		default:
@@ -2034,12 +2504,13 @@ int Hardware_RenderSmallMenuText_Coloured(char *textPtr, int x, int y, int alpha
 		case AVPMENUFORMAT_RIGHTJUSTIFIED:
 		{
 			int length = 0;
-			signed char *ptr = (signed char*) textPtr;
+			char *ptr = textPtr;
 
-			while(*ptr)
-			{
-				length+=AAFontWidths[*ptr++];
-			}
+			/* The HUD renderer scales glyph quads for console, briefing and
+			   in-game menu scopes.  Justification must use that same width,
+			   otherwise scaled right-aligned labels cross into slider columns. */
+			length = MUL_FIXED(AvPTextStringWidth(ptr, AAFontWidths),
+			                   D3D_GetActiveConsoleTextScaleFixed());
 
 			x -= length;
 			break;
@@ -2047,12 +2518,10 @@ int Hardware_RenderSmallMenuText_Coloured(char *textPtr, int x, int y, int alpha
 		case AVPMENUFORMAT_CENTREJUSTIFIED:
 		{
 			int length = 0;
-			signed char *ptr = (signed char*) textPtr;
+			char *ptr = textPtr;
 
-			while(*ptr)
-			{
-				length+=AAFontWidths[*ptr++];
-			}
+			length = MUL_FIXED(AvPTextStringWidth(ptr, AAFontWidths),
+			                   D3D_GetActiveConsoleTextScaleFixed());
 
 			x -= length/2;
 			break;
@@ -2068,15 +2537,31 @@ int Hardware_RenderSmallMenuText_Coloured(char *textPtr, int x, int y, int alpha
 		colour += MUL_FIXED(red,255)<<16;
 		colour += MUL_FIXED(green,255)<<8;
 		colour += MUL_FIXED(blue,255);
-		D3D_RenderHUDString(textPtr,x,y,colour);
+		if(HUDQuickLoadText)D3D_RenderQuickLoadString(textPtr,x,y,colour);
+        else D3D_RenderHUDString(textPtr, x, y, colour);
 	}
 	return x;
 }
 
-void Hardware_RenderKeyConfigRectangle(int alpha)
+int Hardware_RenderSmallMenuText_QuickLoad(char *text,int x,int y,int alpha,enum AVPMENUFORMAT_ID format)
+{
+ int saved=HUDQuickLoadText;HUDQuickLoadText=1;
+ int result=Hardware_RenderSmallMenuText_Coloured(text,x,y,alpha,format,178*ONE_FIXED/255,24*ONE_FIXED/255,240*ONE_FIXED/255);
+ HUDQuickLoadText=saved;
+ return result;
+}
+
+/* The caller derives the top edge from the real lower edge of the two
+   configuration options, then supplies the remaining safe area. */
+void Hardware_RenderKeyConfigRectangle(int alpha, int topY, int bottomY)
 {
 	extern void D3D_DrawRectangle(int x, int y, int w, int h, int alpha);
-	D3D_DrawRectangle(10,ScreenDescriptorBlock.SDB_Height/2+25-115,ScreenDescriptorBlock.SDB_Width-20,250,alpha);
+	int textScope = D3D_IsInGameMenuTextRenderActive();
+	if (bottomY <= topY) return;
+	/* The frame shares AAFont but is not a 16x16 glyph cell. */
+	D3D_SetInGameMenuTextRenderActive(0);
+	D3D_DrawRectangle(10, topY, ScreenDescriptorBlock.SDB_Width-20, bottomY-topY, alpha);
+	D3D_SetInGameMenuTextRenderActive(textScope);
 }
 
 void Hardware_RenderHighlightRectangle(int x1,int y1,int x2,int y2,int r, int g, int b)
@@ -2088,6 +2573,22 @@ void D3D_DrawSliderBar(int x, int y, int alpha)
 {
 	struct VertexTag quadVertices[4];
 	int sliderHeight = 11;
+	
+int sliderScale = D3D_GetActiveConsoleTextScaleFixed();
+	
+int scaledSliderHeight = MUL_FIXED(sliderHeight, sliderScale);
+	
+int scaledTwo = MUL_FIXED(2, sliderScale);
+	
+int scaledNine = MUL_FIXED(9, sliderScale);
+	
+int scaledBarWidth = MUL_FIXED(215, sliderScale);
+	
+int sliderCentreX = ScreenDescriptorBlock.SDB_Width/2;
+	
+
+	
+x = sliderCentreX + MUL_FIXED(x-sliderCentreX, sliderScale);
 	unsigned int colour = alpha>>8;
 
 	if (colour>255) colour = 255;
@@ -2095,8 +2596,8 @@ void D3D_DrawSliderBar(int x, int y, int alpha)
 
 	quadVertices[0].Y = y;
 	quadVertices[1].Y = y;
-	quadVertices[2].Y = y + sliderHeight;
-	quadVertices[3].Y = y + sliderHeight;
+	quadVertices[2].Y = y + scaledSliderHeight;
+	quadVertices[3].Y = y + scaledSliderHeight;
 	
 	CheckFilteringModeIsCorrect(FILTERING_BILINEAR_OFF);
 	{
@@ -2114,9 +2615,8 @@ void D3D_DrawSliderBar(int x, int y, int alpha)
 		
 		quadVertices[0].X = x;
 		quadVertices[3].X = x;
-		quadVertices[1].X = x + 2;
-		quadVertices[2].X = x + 2;
-			
+		quadVertices[1].X = x + scaledTwo;
+		quadVertices[2].X = x + scaledTwo;
 		D3D_HUDQuad_Output
 		(
 			HUDFontsImageNumber,
@@ -2137,11 +2637,10 @@ void D3D_DrawSliderBar(int x, int y, int alpha)
 		quadVertices[3].U = topLeftU;
 		quadVertices[3].V = topLeftV + sliderHeight;
 		
-		quadVertices[0].X = x+213+2;
-		quadVertices[3].X = x+213+2;
-		quadVertices[1].X = x+2 +213+2;
-		quadVertices[2].X = x+2 +213+2;
-			
+		quadVertices[0].X = x + scaledBarWidth;
+		quadVertices[3].X = x + scaledBarWidth;
+		quadVertices[1].X = x + scaledBarWidth + scaledTwo;
+		quadVertices[2].X = x + scaledBarWidth + scaledTwo;
 		D3D_HUDQuad_Output
 		(
 			HUDFontsImageNumber,
@@ -2149,8 +2648,8 @@ void D3D_DrawSliderBar(int x, int y, int alpha)
 			colour
 		);
 	}
-	quadVertices[2].Y = y + 2;
-	quadVertices[3].Y = y + 2;
+	quadVertices[2].Y = y + scaledTwo;
+	quadVertices[3].Y = y + scaledTwo;
 
 	{
 		int topLeftU = 5;
@@ -2165,11 +2664,10 @@ void D3D_DrawSliderBar(int x, int y, int alpha)
 		quadVertices[3].U = topLeftU;
 		quadVertices[3].V = topLeftV + 2;
 		
-		quadVertices[0].X = x + 2;
-		quadVertices[3].X = x + 2;
-		quadVertices[1].X = x + 215;
-		quadVertices[2].X = x + 215;
-			
+		quadVertices[0].X = x + scaledTwo;
+		quadVertices[3].X = x + scaledTwo;
+		quadVertices[1].X = x + scaledBarWidth;
+		quadVertices[2].X = x + scaledBarWidth;
 		D3D_HUDQuad_Output
 		(
 			HUDFontsImageNumber,
@@ -2177,10 +2675,10 @@ void D3D_DrawSliderBar(int x, int y, int alpha)
 			colour
 		);
 	}
-	quadVertices[0].Y = y + 9;
-	quadVertices[1].Y = y + 9;
-	quadVertices[2].Y = y + 11;
-	quadVertices[3].Y = y + 11;
+	quadVertices[0].Y = y + scaledNine;
+	quadVertices[1].Y = y + scaledNine;
+	quadVertices[2].Y = y + scaledSliderHeight;
+	quadVertices[3].Y = y + scaledSliderHeight;
 
 	{
 		int topLeftU = 5;
@@ -2195,11 +2693,10 @@ void D3D_DrawSliderBar(int x, int y, int alpha)
 		quadVertices[3].U = topLeftU;
 		quadVertices[3].V = topLeftV + 2;
 		
-		quadVertices[0].X = x + 2;
-		quadVertices[3].X = x + 2;
-		quadVertices[1].X = x + 215;
-		quadVertices[2].X = x + 215;
-			
+		quadVertices[0].X = x + scaledTwo;
+		quadVertices[3].X = x + scaledTwo;
+		quadVertices[1].X = x + scaledBarWidth;
+		quadVertices[2].X = x + scaledBarWidth;
 		D3D_HUDQuad_Output
 		(
 			HUDFontsImageNumber,
@@ -2213,6 +2710,18 @@ void D3D_DrawSlider(int x, int y, int alpha)
 {
 	struct VertexTag quadVertices[4];
 	int sliderHeight = 5;
+	
+int sliderScale = D3D_GetActiveConsoleTextScaleFixed();
+	
+int scaledSliderHeight = MUL_FIXED(sliderHeight, sliderScale);
+	
+int scaledSliderWidth = MUL_FIXED(9, sliderScale);
+	
+int sliderCentreX = ScreenDescriptorBlock.SDB_Width/2;
+	
+
+	
+x = sliderCentreX + MUL_FIXED(x-sliderCentreX, sliderScale);
 	unsigned int colour = alpha>>8;
 
 	if (colour>255) colour = 255;
@@ -2220,8 +2729,8 @@ void D3D_DrawSlider(int x, int y, int alpha)
 
 	quadVertices[0].Y = y;
 	quadVertices[1].Y = y;
-	quadVertices[2].Y = y + sliderHeight;
-	quadVertices[3].Y = y + sliderHeight;
+	quadVertices[2].Y = y + scaledSliderHeight;
+	quadVertices[3].Y = y + scaledSliderHeight;
 	
 	CheckFilteringModeIsCorrect(FILTERING_BILINEAR_OFF);
 	{
@@ -2239,9 +2748,8 @@ void D3D_DrawSlider(int x, int y, int alpha)
 		
 		quadVertices[0].X = x;
 		quadVertices[3].X = x;
-		quadVertices[1].X = x + 9;
-		quadVertices[2].X = x + 9;
-			
+		quadVertices[1].X = x + scaledSliderWidth;
+		quadVertices[2].X = x + scaledSliderWidth;
 		D3D_HUDQuad_Output
 		(
 			HUDFontsImageNumber,
@@ -2478,7 +2986,7 @@ void D3D_DrawRectangle(int x, int y, int w, int h, int alpha)
 	}
 }
 
-void D3D_DrawColourBar(int yTop, int yBottom, int rScale, int gScale, int bScale)
+void D3D_DrawColourBarAlpha(int yTop, int yBottom, int rScale, int gScale, int bScale, int alpha)
 {
 	extern unsigned char GammaValues[256];
 	GLfloat x[2], y[2];
@@ -2489,7 +2997,7 @@ void D3D_DrawColourBar(int yTop, int yBottom, int rScale, int gScale, int bScale
 	int a;
 	int start;
 
-	CheckTriangleBuffer(256*2, 0, 255*2, 0, NULL, TRANSLUCENCY_OFF, -1);
+	CheckTriangleBuffer(256*2, 0, 255*2, 0, NULL, TRANSLUCENCY_NORMAL, -1, 0);
 
 	start = varrc;
 
@@ -2500,10 +3008,9 @@ void D3D_DrawColourBar(int yTop, int yBottom, int rScale, int gScale, int bScale
 		r = MUL_FIXED(c,rScale);
 		g = MUL_FIXED(c,gScale);
 		b = MUL_FIXED(c,bScale);
-		a = 255;
+		a = MUL_FIXED(255,alpha);
 
-		x[0] = (Global_VDB_Ptr->VDB_ClipRight*i)/255;
-		x[0] =  (x[0] - ScreenDescriptorBlock.SDB_CentreX)/ScreenDescriptorBlock.SDB_CentreX;
+		x[0] = -1.0f + 2.0f*(float)i/255.0f;
 		y[0] = yTop;
 		y[0] = -(y[0] - ScreenDescriptorBlock.SDB_CentreY)/ScreenDescriptorBlock.SDB_CentreY;
 		
@@ -2567,6 +3074,9 @@ void D3D_DrawColourBar(int yTop, int yBottom, int rScale, int gScale, int bScale
 		tarrc++;
 	}
 }
+void D3D_DrawColourBar(int yTop,int yBottom,int rScale,int gScale,int bScale)
+{D3D_DrawColourBarAlpha(yTop,yBottom,rScale,gScale,bScale,65536);}
+
 
 void ColourFillBackBuffer(int FillColour)
 {
@@ -2593,7 +3103,7 @@ void ColourFillBackBufferQuad(int FillColour, int x0, int y0, int x1, int y1)
 	if (y1 <= y0)
 		return;
 	
-	CheckTriangleBuffer(4, 0, 0, 0, NULL, TRANSLUCENCY_OFF, -1);
+	CheckTriangleBuffer(4, 0, 0, 0, NULL, TRANSLUCENCY_OFF, -1, 0);
 	
 	b = ((FillColour >> 0)  & 0xFF);
 	g = ((FillColour >> 8)  & 0xFF);
@@ -2666,7 +3176,7 @@ void D3D_DrawBackdrop()
 		DISPLAYBLOCK *objectPtr = ActiveBlockList[numOfObjects];
 		MODULE *modulePtr = objectPtr->ObMyModule;
 		
-		if (modulePtr && (ModuleCurrVisArray[modulePtr->m_index] == 2) && modulePtr->m_flags&MODULEFLAG_SKY) {
+		if (modulePtr && ModuleIsVisibleForRendering(modulePtr->m_index) && modulePtr->m_flags&MODULEFLAG_SKY) {
 			needToDrawBackdrop = 1;
 			break;
 		}	
@@ -2741,7 +3251,7 @@ void BltImage(RECT *dest, DDSurface *image, RECT *src)
 	s[3] = src->left * image->RecipW;
 	t[3] = src->bottom * image->RecipH;
 
-    CheckTriangleBuffer(4, 0, 0, 0, image, TRANSLUCENCY_OFF, -1);
+    CheckTriangleBuffer(4, 0, 0, 0, image, TRANSLUCENCY_OFF, -1, 0);
 
 	for (i = 0; i < 4; i++) {
 		varrp->v[0] = x[i];
@@ -2832,16 +3342,16 @@ void D3D_DrawParticle_Rain(PARTICLE *particlePtr,VECTORCH *prevPositionPtr)
 		TranslatePointIntoViewspace(&vertices[1]);
 		TranslatePointIntoViewspace(&vertices[2]);
 
-		ZNear = (float) (Global_VDB_Ptr->VDB_ClipZ * GlobalScale);
+		ZNear = (float) (ViewmodelShapeActive && AvP.PlayerType==I_Marine ? ViewmodelNearClip() : Global_VDB_Ptr->VDB_ClipZ * GlobalScale);
 
-		CheckTriangleBuffer(3, 0, 0, 0, NULL, TRANSLUCENCY_NORMAL, -1);
+		CheckTriangleBuffer(3, 0, 0, 0, NULL, TRANSLUCENCY_NORMAL, -1, 0);
 				
 		for (i = 0; i < 3; i++) {
 			GLfloat xf, yf, zf;
 			GLfloat w;
 			
-			xf =  ((float)vertices[i].vx*((float)Global_VDB_Ptr->VDB_ProjX+1.0f))/((float)vertices[i].vz*(float)ScreenDescriptorBlock.SDB_CentreX);
-			yf = -((float)vertices[i].vy*((float)Global_VDB_Ptr->VDB_ProjY+1.0f))/((float)vertices[i].vz*(float)ScreenDescriptorBlock.SDB_CentreY);
+			xf =  ((float)vertices[i].vx*((float)AvpProjectionX(Global_VDB_Ptr)))/((float)vertices[i].vz*(float)ScreenDescriptorBlock.SDB_CentreX);
+			yf = -((float)vertices[i].vy*((float)AvpProjectionY(Global_VDB_Ptr)))/((float)vertices[i].vz*(float)ScreenDescriptorBlock.SDB_CentreY);
 			
 			zf = 1.0f - 2.0f*ZNear/(float)vertices[i].vz;
 			w = (float)vertices[i].vz;
@@ -2876,6 +3386,8 @@ void D3D_DrawParticle_Rain(PARTICLE *particlePtr,VECTORCH *prevPositionPtr)
 
 void PostLandscapeRendering()
 {
+ extern char LevelName[];
+ { EVENT_TICK span=EventLatencyBegin(); WaterRenderBeginFrame(); EventLatencyEnd(span,"water begin frame",0,0,0,LevelName,0); }
 	extern int NumOnScreenBlocks;
 	extern DISPLAYBLOCK *OnScreenBlockList[];
 	int numOfObjects = NumOnScreenBlocks;
@@ -2957,7 +3469,7 @@ void PostLandscapeRendering()
 			MeshZScale = (105385-93696);
 			{
 				extern void CheckForObjectsInWater(int minX, int maxX, int minZ, int maxZ, int averageY);
-				CheckForObjectsInWater(x, x+MeshXScale, z, z+MeshZScale, y);
+				{ EVENT_TICK span=EventLatencyBegin(); CheckForObjectsInWater(x, x+MeshXScale, z, z+MeshZScale, y); EventLatencyEnd(span,"water object interactions",0,0,0,LevelName,0); }
 			}
 
 			WaterXOrigin=x;
@@ -2968,7 +3480,7 @@ void PostLandscapeRendering()
 		 	MeshZScale/=2;
 			
 			CurrTextureHandle = ImageHeaderArray[ChromeImageNumber].D3DTexture;
-			CheckTriangleBuffer(0, 0, 0, 0, CurrTextureHandle, TRANSLUCENCY_NORMAL, -1);
+			CheckTriangleBuffer(0, 0, 0, 0, CurrTextureHandle, TRANSLUCENCY_NORMAL, -1, 0);
 			
 		 	D3D_DrawWaterPatch(x, y, z);		 	
 		 	D3D_DrawWaterPatch(x+MeshXScale, y, z);
@@ -2989,7 +3501,7 @@ void PostLandscapeRendering()
 			MeshZScale = (105385-93696);
 			{
 				extern void CheckForObjectsInWater(int minX, int maxX, int minZ, int maxZ, int averageY);
-				CheckForObjectsInWater(x, x+MeshXScale, z, z+MeshZScale, y);
+				{ EVENT_TICK span=EventLatencyBegin(); CheckForObjectsInWater(x, x+MeshXScale, z, z+MeshZScale, y); EventLatencyEnd(span,"water object interactions",0,0,0,LevelName,0); }
 			}
 
 			WaterXOrigin=x;
@@ -3000,7 +3512,7 @@ void PostLandscapeRendering()
 		 	MeshZScale/=2;
 			
 			CurrTextureHandle = ImageHeaderArray[ChromeImageNumber].D3DTexture;
-			CheckTriangleBuffer(0, 0, 0, 0, CurrTextureHandle, TRANSLUCENCY_NORMAL, -1);
+			CheckTriangleBuffer(0, 0, 0, 0, CurrTextureHandle, TRANSLUCENCY_NORMAL, -1, 0);
 			
 		 	D3D_DrawWaterPatch(x, y, z);		 	
 		 	D3D_DrawWaterPatch(x+MeshXScale, y, z);
@@ -3329,7 +3841,7 @@ void PostLandscapeRendering()
 			MeshZScale = (41927-30238);
 			{
 				extern void CheckForObjectsInWater(int minX, int maxX, int minZ, int maxZ, int averageY);
-				CheckForObjectsInWater(x, x+MeshXScale, z, z+MeshZScale, y);
+				{ EVENT_TICK span=EventLatencyBegin(); CheckForObjectsInWater(x, x+MeshXScale, z, z+MeshZScale, y); EventLatencyEnd(span,"water object interactions",0,0,0,LevelName,0); }
 			}
 
 			WaterXOrigin=x;
@@ -3340,7 +3852,7 @@ void PostLandscapeRendering()
 		 	MeshZScale/=2;
 			
 			CurrTextureHandle = ImageHeaderArray[ChromeImageNumber].D3DTexture;
-			CheckTriangleBuffer(0, 0, 0, 0, CurrTextureHandle, TRANSLUCENCY_NORMAL, -1);
+			CheckTriangleBuffer(0, 0, 0, 0, CurrTextureHandle, TRANSLUCENCY_NORMAL, -1, 0);
 		 	D3D_DrawWaterPatch(x, y, z);
 		 	D3D_DrawWaterPatch(x+MeshXScale, y, z);		 	
 		 	D3D_DrawWaterPatch(x+MeshXScale*2, y, z);
@@ -3359,7 +3871,7 @@ void PostLandscapeRendering()
 			MeshZScale = (55875-36392);
 			{
 				extern void CheckForObjectsInWater(int minX, int maxX, int minZ, int maxZ, int averageY);
-				CheckForObjectsInWater(x, x+MeshXScale, z, z+MeshZScale, y);
+				{ EVENT_TICK span=EventLatencyBegin(); CheckForObjectsInWater(x, x+MeshXScale, z, z+MeshZScale, y); EventLatencyEnd(span,"water object interactions",0,0,0,LevelName,0); }
 			}
 			WaterXOrigin=x;
 			WaterZOrigin=z;
@@ -3369,7 +3881,7 @@ void PostLandscapeRendering()
 		 	MeshZScale/=2;
 			
 			CurrTextureHandle = ImageHeaderArray[WaterShaftImageNumber].D3DTexture;
-			CheckTriangleBuffer(0, 0, 0, 0, CurrTextureHandle, TRANSLUCENCY_NORMAL, -1);
+			CheckTriangleBuffer(0, 0, 0, 0, CurrTextureHandle, TRANSLUCENCY_NORMAL, -1, 0);
 		 	D3D_DrawWaterPatch(x, y, z);
 		 	D3D_DrawWaterPatch(x+MeshXScale, y, z);
 		 	D3D_DrawWaterPatch(x+MeshXScale*2, y, z);
@@ -3402,7 +3914,7 @@ void PostLandscapeRendering()
 				{
 					extern void HandleRainShaft(MODULE *modulePtr, int bottomY, int topY, int numberOfRaindrops);
 					drawWater = 1;
-					HandleRainShaft(modulePtr, 32000, 0, 16);
+					{ EVENT_TICK span=EventLatencyBegin(); HandleRainShaft(modulePtr, 32000, 0, 16); EventLatencyEnd(span,"Derelict rain shaft",0,0,0,LevelName,0); }
 				}
 			}
 		}	
@@ -3412,9 +3924,9 @@ void PostLandscapeRendering()
 			extern void RenderMirrorSurface(void);
 			extern void RenderMirrorSurface2(void);
 			extern void RenderParticlesInMirror(void);
-			RenderParticlesInMirror();
-			RenderMirrorSurface();
-			RenderMirrorSurface2();
+			{ EVENT_TICK span=EventLatencyBegin(); RenderParticlesInMirror(); EventLatencyEnd(span,"Derelict mirror particles",0,0,0,LevelName,0); }
+			{ EVENT_TICK span=EventLatencyBegin(); RenderMirrorSurface(); EventLatencyEnd(span,"Derelict mirror surface 1",0,0,0,LevelName,0); }
+			{ EVENT_TICK span=EventLatencyBegin(); RenderMirrorSurface2(); EventLatencyEnd(span,"Derelict mirror surface 2",0,0,0,LevelName,0); }
 		}
 		if (drawWater)
 		{
@@ -3425,7 +3937,7 @@ void PostLandscapeRendering()
 			MeshZScale = (200964-180986);
 			{
 				extern void CheckForObjectsInWater(int minX, int maxX, int minZ, int maxZ, int averageY);
-				CheckForObjectsInWater(x, x+MeshXScale, z, z+MeshZScale, y);
+				{ EVENT_TICK span=EventLatencyBegin(); CheckForObjectsInWater(x, x+MeshXScale, z, z+MeshZScale, y); EventLatencyEnd(span,"water object interactions",0,0,0,LevelName,0); }
 			}
 
 			WaterXOrigin=x;
@@ -3436,11 +3948,13 @@ void PostLandscapeRendering()
 		 	MeshZScale/=2;
 			
 			CurrTextureHandle = ImageHeaderArray[ChromeImageNumber].D3DTexture;
-			CheckTriangleBuffer(0, 0, 0, 0, CurrTextureHandle, TRANSLUCENCY_NORMAL, -1);
+			CheckTriangleBuffer(0, 0, 0, 0, CurrTextureHandle, TRANSLUCENCY_NORMAL, -1, 0);
+            EVENT_TICK waterSpan=EventLatencyBegin();
 		 	D3D_DrawWaterPatch(x, y, z);
 		 	D3D_DrawWaterPatch(x+MeshXScale, y, z);
 		 	D3D_DrawWaterPatch(x, y, z+MeshZScale);
 		 	D3D_DrawWaterPatch(x+MeshXScale, y, z+MeshZScale);
+            EventLatencyEnd(waterSpan,"Derelict water patches",0,0,0,LevelName,0);
 		}
 
 	}
@@ -3518,7 +4032,7 @@ void D3D_DrawWaterTest(MODULE *testModulePtr)
 				MeshZScale/=2;
 				
 				CurrTextureHandle = ImageHeaderArray[WaterShaftImageNumber].D3DTexture;
-				CheckTriangleBuffer(0, 0, 0, 0, CurrTextureHandle, TRANSLUCENCY_NORMAL, -1);
+				CheckTriangleBuffer(0, 0, 0, 0, CurrTextureHandle, TRANSLUCENCY_NORMAL, -1, 0);
 				D3D_DrawWaterPatch(x, y, z);
 				D3D_DrawWaterPatch(x+MeshXScale, y, z);
 				D3D_DrawWaterPatch(x, y, z+MeshZScale);
@@ -3614,8 +4128,174 @@ unsigned int MeshVertexColour[256];
 unsigned int MeshVertexSpecular[256];
 char MeshVertexOutcode[256];
 
+
+extern float ViewMatrix[12];
+extern int WaterTerrainDepth(int x,int y,int z);
+typedef struct {int valid,x,y,z,depth;double time;unsigned generation;} WATER_FLOOR_SAMPLE;
+static WATER_FLOOR_SAMPLE WaterFloorCache[65536];
+static float WaterFloorOffset(int x,int y,int z,float offset){
+ unsigned hash=((unsigned)x*73856093u^(unsigned)y*19349663u^(unsigned)z*83492791u)&65535u;
+ WATER_FLOOR_SAMPLE*c=0;double now=WaterTime();unsigned generation=WaterGeneration();
+ /* Open addressing avoids repeating expensive terrain rays for colliding grid
+    vertices every frame. Static hits live for this level; misses are retried
+    as more landscape modules become active. */
+ for(unsigned probe=0;probe<65536;probe++){
+  c=&WaterFloorCache[(hash+probe)&65535u];
+  if(!c->valid||c->generation!=generation||(c->x==x&&c->y==y&&c->z==z))break;
+ }
+ if(!c->valid||c->generation!=generation||c->x!=x||c->y!=y||c->z!=z||
+    (c->depth==512&&now-c->time>.5)){
+  c->valid=1;c->generation=generation;c->x=x;c->y=y;c->z=z;c->time=now;c->depth=WaterTerrainDepth(x,y,z);
+ }
+ /* Positive Y points down. Do not lift water over dry banks; constrain only
+    an actual submerged floor. Keep 8 mm separation to prevent z fighting. */
+ if(c->depth>0&&c->depth<512){float limit=fmaxf(0,c->depth-8.0f);if(offset>limit)offset=limit;}
+ return offset;
+}
+
+/* Strongest existing local lights. Only Modern consumes this optical state. */
+static void WaterPatchLights(float x,float y,float z){
+ extern int NumActiveBlocks;extern DISPLAYBLOCK*ActiveBlockList[];
+ float pos[16]={0},color[16]={0},scores[4]={0};
+ for(int i=0;i<NumActiveBlocks;i++){
+  DISPLAYBLOCK*d=ActiveBlockList[i];
+  for(int j=0;j<d->ObNumLights;j++){
+   LIGHTBLOCK*l=d->ObLights[j];if(!l||l->LightRange<=0||l->LightBright<=0||(l->LightFlags&LFlag_NoSpecular))continue;
+   float dx=l->LightWorld.vx-x,dy=l->LightWorld.vy-y,dz=l->LightWorld.vz-z;
+   float distance=sqrtf(dx*dx+dy*dy+dz*dz),range=l->LightRange;
+   float power=l->LightBright/65536.0f;
+   float score=power*fmaxf(0,1-distance/(range+5000));int slot=0;
+   for(int k=1;k<4;k++)if(scores[k]<scores[slot])slot=k;
+   if(score<=scores[slot])continue;scores[slot]=score;
+   pos[slot*4]=l->LightWorld.vx;pos[slot*4+1]=l->LightWorld.vy;pos[slot*4+2]=l->LightWorld.vz;pos[slot*4+3]=range;
+   color[slot*4]=fminf(4,power*l->RedScale/65536.0f);color[slot*4+1]=fminf(4,power*l->GreenScale/65536.0f);color[slot*4+2]=fminf(4,power*l->BlueScale/65536.0f);
+   if(CurrentVisionMode==VISION_MODE_IMAGEINTENSIFIER){color[slot*4]=color[slot*4+2]=0;}
+   else if(CurrentVisionMode==VISION_MODE_PRED_THERMAL||CurrentVisionMode==VISION_MODE_PRED_SEEALIENS||CurrentVisionMode==VISION_MODE_PRED_SEEPREDTECH){color[slot*4]=color[slot*4+1]=0;}
+  }
+ }
+ WaterRenderSetLights(pos,color);
+}
+static int DrawRepairedWaterPatch(int xOrigin,int yOrigin,int zOrigin){
+#if !defined(USE_OPENGL_ES)
+ enum{N=33};static WATER_VERTEX vertices[N*N];static unsigned short indices[(N-1)*(N-1)*6];
+ float px=(float)AvpProjectionX(Global_VDB_Ptr)/ScreenDescriptorBlock.SDB_CentreX;
+ float py=(float)AvpProjectionY(Global_VDB_Ptr)/ScreenDescriptorBlock.SDB_CentreY;
+ float nearClip=Global_VDB_Ptr->VDB_ClipZ*GlobalScale;
+ float phase=(float)WaterTime()*2048.0f;int n=0;
+ /* Start with the original material, blend and texture filtering state. */
+ FlushTriangleBuffers(1);
+ for(int x=0;x<N;x++)for(int z=0;z<N;z++){
+  WATER_VERTEX*v=&vertices[x*N+z];VECTORCH point={xOrigin+x*MeshXScale/(N-1),yOrigin,zOrigin+z*MeshZScale/(N-1)};
+  float offset;
+  if(WaterEffectMode==1){
+   float a=(point.vx+point.vz+phase)*(6.283185307f/4096.0f),b=(point.vx-point.vz*2+phase*.5f)*(6.283185307f/4096.0f);
+   offset=32*sinf(a)+16*sinf(b)+WaterHeight(point.vx,point.vz,yOrigin);
+   offset=fmaxf(-256,fminf(256,offset));
+  }else offset=EffectOfRipples(&point);
+  offset=WaterFloorOffset(point.vx,yOrigin,point.vz,offset);
+  v->world[0]=point.vx;v->world[1]=yOrigin+offset;v->world[2]=point.vz;
+  float p[3];for(int k=0;k<3;k++)p[k]=ViewMatrix[k*4]*v->world[0]+ViewMatrix[k*4+1]*v->world[1]+ViewMatrix[k*4+2]*v->world[2]+ViewMatrix[k*4+3];
+  /* Keep signed W: the GPU clips triangles crossing the near plane correctly. */
+  v->clip[0]=p[0]*px;v->clip[1]=-p[1]*py;v->clip[2]=p[2]-2*nearClip;v->clip[3]=p[2];
+  int vy=(int)lroundf(v->world[1]);
+  v->uv[0]=((point.vx-WaterXOrigin)/4+MUL_FIXED(GetSin((vy*16)&4095),128))*WaterUScale+1.0f/256;
+  v->uv[1]=((point.vz-WaterZOrigin)/4+MUL_FIXED(GetSin((vy*16+200)&4095),128))*WaterVScale+1.0f/256;
+  v->color[0]=v->color[1]=v->color[2]=1;v->color[3]=(128-offset/4)/255.0f;
+  if(CurrentVisionMode==VISION_MODE_IMAGEINTENSIFIER){v->color[0]=v->color[2]=0;v->color[1]=51/255.0f;}
+  else if(CurrentVisionMode==VISION_MODE_PRED_THERMAL||CurrentVisionMode==VISION_MODE_PRED_SEEALIENS||CurrentVisionMode==VISION_MODE_PRED_SEEPREDTECH){v->color[0]=v->color[1]=0;v->color[2]=28/255.0f;}
+  if(x<N-1&&z<N-1){int i=x*N+z;indices[n++]=i;indices[n++]=i+1;indices[n++]=i+N;indices[n++]=i+1;indices[n++]=i+N+1;indices[n++]=i+N;}
+ }
+ if(WaterEffectMode==1)WaterPatchLights(xOrigin+MeshXScale*.5f,yOrigin,zOrigin+MeshZScale*.5f);
+ return WaterRenderDraw(vertices,N*N,indices,n,CurrTextureHandle?CurrTextureHandle->id:0,yOrigin,ViewMatrix,px,py,nearClip);
+#else
+ return 0;
+#endif
+}
+
+/* Modern's denser mesh must not fill Vanilla's 65k-entry cache and trigger
+ * unbounded linear scans. Separate storage also preserves mode-switch behaviour.
+ * Bound each lookup to 16 probes; collisions only cause a fresh terrain query. */
+static WATER_FLOOR_SAMPLE WaterModernFloorCache[262144];
+static float WaterModernFloorOffset(int x,int y,int z,float offset){
+ unsigned hash=((unsigned)x*73856093u^(unsigned)y*19349663u^(unsigned)z*83492791u)&262143u;
+ WATER_FLOOR_SAMPLE*c=0;double now=WaterTime();unsigned generation=WaterGeneration();
+ for(unsigned probe=0;probe<16;probe++){
+  c=&WaterModernFloorCache[(hash+probe)&262143u];
+  if(!c->valid||c->generation!=generation||(c->x==x&&c->y==y&&c->z==z))break;
+ }
+ if(!c->valid||c->generation!=generation||c->x!=x||c->y!=y||c->z!=z||
+    (c->depth==512&&now-c->time>.5)){
+  c->valid=1;c->generation=generation;c->x=x;c->y=y;c->z=z;c->time=now;c->depth=WaterTerrainDepth(x,y,z);
+ }
+ if(c->depth>0&&c->depth<512){float limit=fmaxf(0,c->depth-8.0f);if(offset>limit)offset=limit;}
+ return offset;
+}
+
+#ifndef AVP_WATER_DISABLE_GRID
+#include "water_grid_mesh.h"
+#endif
+static int DrawModernWaterPatch(int xOrigin,int yOrigin,int zOrigin){
+#if !defined(USE_OPENGL_ES)
+#ifndef AVP_WATER_DISABLE_GRID
+ if(DrawGPUWaterPatch(xOrigin,yOrigin,zOrigin))return 1;
+#endif
+ enum{N=WATER_MESH_MAX_SEGMENTS+1};static WATER_VERTEX vertices[N*N];static unsigned short indices[(N-1)*(N-1)*6];
+ int nx=WaterMeshSegments(MeshXScale)+1,nz=WaterMeshSegments(MeshZScale)+1;
+ float px=(float)AvpProjectionX(Global_VDB_Ptr)/ScreenDescriptorBlock.SDB_CentreX;
+ float py=(float)AvpProjectionY(Global_VDB_Ptr)/ScreenDescriptorBlock.SDB_CentreY;
+ float nearClip=Global_VDB_Ptr->VDB_ClipZ*GlobalScale;
+ int n=6*(nx-1)*(nz-1);
+ static int indexNX,indexNZ,uvY,uvValid;static float warpU[513],warpV[513];
+ float gridX[N],gridZ[N];int intX[N],intZ[N];
+ for(int x=0;x<nx;x++){gridX[x]=xOrigin+x*(float)MeshXScale/(nx-1);intX[x]=(int)lroundf(gridX[x]);}
+ for(int z=0;z<nz;z++){gridZ[z]=zOrigin+z*(float)MeshZScale/(nz-1);intZ[z]=(int)lroundf(gridZ[z]);}
+ /* EffectOfRipples and the terrain clamp return integral mm in [-256,256].
+  * Reuse the exact sine results for each height instead of per-vertex trig. */
+ if(!uvValid||uvY!=yOrigin){
+  for(int i=0;i<513;i++){
+   float wy=yOrigin+(float)(i-256),phase=wy*16*(6.283185307f/4096.0f);
+   warpU[i]=128*sinf(phase);warpV[i]=128*sinf(phase+200*(6.283185307f/4096.0f));
+  }uvY=yOrigin;uvValid=1;
+ }
+ if(indexNX!=nx||indexNZ!=nz){
+  int q=0;for(int x=0;x<nx-1;x++)for(int z=0;z<nz-1;z++){
+   int i=x*nz+z;indices[q++]=i;indices[q++]=i+1;indices[q++]=i+nz;
+   indices[q++]=i+1;indices[q++]=i+nz+1;indices[q++]=i+nz;
+  }indexNX=nx;indexNZ=nz;
+ }
+ /* Start with the original material, blend and texture filtering state. */
+ FlushTriangleBuffers(1);
+ for(int x=0;x<nx;x++)for(int z=0;z<nz;z++){
+  WATER_VERTEX*v=&vertices[x*nz+z];
+  float wx=gridX[x],wz=gridZ[z];
+  VECTORCH ripplePoint={intX[x],yOrigin,intZ[z]};
+  float offset=EffectOfRipples(&ripplePoint); /* Vanilla geometry + Modern optical waves. */
+  offset=WaterModernFloorOffset(intX[x],yOrigin,intZ[z],offset);
+  v->world[0]=wx;v->world[1]=yOrigin+offset;v->world[2]=wz;
+  float p[3];for(int k=0;k<3;k++)p[k]=ViewMatrix[k*4]*v->world[0]+ViewMatrix[k*4+1]*v->world[1]+ViewMatrix[k*4+2]*v->world[2]+ViewMatrix[k*4+3];
+  /* Keep signed W: the GPU clips triangles crossing the near plane correctly. */
+  v->clip[0]=p[0]*px;v->clip[1]=-p[1]*py;v->clip[2]=p[2]-2*nearClip;v->clip[3]=p[2];
+  /* Float UVs remove integer /4 and fixed-sine steps on the denser mesh.
+     Preserve the authored scale and the original 128-unit warp amplitude. */
+  int warp=(int)offset+256;
+  v->uv[0]=((wx-WaterXOrigin)*.25f+warpU[warp])*WaterUScale+1.0f/256;
+  v->uv[1]=((wz-WaterZOrigin)*.25f+warpV[warp])*WaterVScale+1.0f/256;
+  v->color[0]=v->color[1]=v->color[2]=1;v->color[3]=(128-offset/4)/255.0f;
+  if(CurrentVisionMode==VISION_MODE_IMAGEINTENSIFIER){v->color[0]=v->color[2]=0;v->color[1]=51/255.0f;}
+  else if(CurrentVisionMode==VISION_MODE_PRED_THERMAL||CurrentVisionMode==VISION_MODE_PRED_SEEALIENS||CurrentVisionMode==VISION_MODE_PRED_SEEPREDTECH){v->color[0]=v->color[1]=0;v->color[2]=28/255.0f;}
+
+ }
+ WaterPatchLights(xOrigin+MeshXScale*.5f,yOrigin,zOrigin+MeshZScale*.5f);
+ return WaterRenderDraw(vertices,nx*nz,indices,n,CurrTextureHandle?CurrTextureHandle->id:0,yOrigin,ViewMatrix,px,py,nearClip);
+#else
+ return 0;
+#endif
+}
+
 void D3D_DrawWaterPatch(int xOrigin, int yOrigin, int zOrigin)
 {
+ if(WaterEffectMode==1&&DrawModernWaterPatch(xOrigin,yOrigin,zOrigin))return;
+ if(DrawRepairedWaterPatch(xOrigin,yOrigin,zOrigin))return;
 	int i=0;
 	int x;
 	int offset;
@@ -3767,7 +4447,7 @@ void D3D_DrawWaterPatch(int xOrigin, int yOrigin, int zOrigin)
 
 void D3D_DrawWaterMesh_Unclipped(void)
 {
-	float ZNear = (float) (Global_VDB_Ptr->VDB_ClipZ * GlobalScale);
+	float ZNear = (float) (ViewmodelShapeActive && AvP.PlayerType==I_Marine ? ViewmodelNearClip() : Global_VDB_Ptr->VDB_ClipZ * GlobalScale);
 
 	/* OUTPUT VERTICES TO EXECUTE BUFFER */
 	{
@@ -3876,7 +4556,7 @@ void D3D_DrawWaterMesh_Unclipped(void)
 }
 void D3D_DrawWaterMesh_Clipped(void)
 {
-	float ZNear = (float) (Global_VDB_Ptr->VDB_ClipZ * GlobalScale);
+	float ZNear = (float) (ViewmodelShapeActive && AvP.PlayerType==I_Marine ? ViewmodelNearClip() : Global_VDB_Ptr->VDB_ClipZ * GlobalScale);
 
 	/* OUTPUT VERTICES TO EXECUTE BUFFER */
 	{
@@ -4700,7 +5380,7 @@ void D3D_DrawMoltenMetal(int xOrigin, int yOrigin, int zOrigin)
 
 void D3D_DrawMoltenMetalMesh_Unclipped(void)
 {
-	float ZNear = (float) (Global_VDB_Ptr->VDB_ClipZ * GlobalScale);
+	float ZNear = (float) (ViewmodelShapeActive && AvP.PlayerType==I_Marine ? ViewmodelNearClip() : Global_VDB_Ptr->VDB_ClipZ * GlobalScale);
 
 	VECTORCH *point = MeshVertex;
 	VECTORCH *pointWS = MeshWorldVertex;
@@ -4708,7 +5388,7 @@ void D3D_DrawMoltenMetalMesh_Unclipped(void)
 	int i, x, y, z;
 	int start;
 	
-	CheckTriangleBuffer(256, 0, 450, 0, (D3DTexture *)-1, -1, -1);
+	CheckTriangleBuffer(256, 0, 450, 0, (D3DTexture *)-1, -1, -1, 0);
 	
 	start = varrc;
 	for (i=0; i<256; i++) {
@@ -4719,8 +5399,8 @@ void D3D_DrawMoltenMetalMesh_Unclipped(void)
 		
 		if (point->vz < 1) point->vz = 1;
 
-		xf =  ((float)point->vx*((float)Global_VDB_Ptr->VDB_ProjX+1.0f))/((float)point->vz*(float)ScreenDescriptorBlock.SDB_CentreX);
-		yf = -((float)point->vy*((float)Global_VDB_Ptr->VDB_ProjY+1.0f))/((float)point->vz*(float)ScreenDescriptorBlock.SDB_CentreY);
+		xf =  ((float)point->vx*((float)AvpProjectionX(Global_VDB_Ptr)))/((float)point->vz*(float)ScreenDescriptorBlock.SDB_CentreX);
+		yf = -((float)point->vy*((float)AvpProjectionY(Global_VDB_Ptr)))/((float)point->vz*(float)ScreenDescriptorBlock.SDB_CentreY);
 		
 		z = point->vz + HeadUpDisplayZOffset;
 		w = (float)point->vz;
@@ -4788,7 +5468,7 @@ void D3D_DrawMoltenMetalMesh_Clipped(void)
 #if 0
 	int i, x, y, z, c, start;
 
-	float ZNear = (float) (Global_VDB_Ptr->VDB_ClipZ * GlobalScale);	
+	float ZNear = (float) (ViewmodelShapeActive && AvP.PlayerType==I_Marine ? ViewmodelNearClip() : Global_VDB_Ptr->VDB_ClipZ * GlobalScale);	
 
 	VECTORCH *point = MeshVertex;
 	VECTORCH *pointWS = MeshWorldVertex;
@@ -4807,7 +5487,7 @@ void D3D_DrawMoltenMetalMesh_Clipped(void)
 		}
 	}
 	
-	CheckTriangleBuffer(256, 0, c, 0, (D3DTexture *)-1, -1, -1);
+	CheckTriangleBuffer(256, 0, c, 0, (D3DTexture *)-1, -1, -1, 0);
 	start = varrc;
 	
 		for (i=0; i<256; i++)
@@ -4819,8 +5499,8 @@ void D3D_DrawMoltenMetalMesh_Clipped(void)
 			
 			if (point->vz < 1) point->vz = 1;
 			
-			x = (point->vx*(Global_VDB_Ptr->VDB_ProjX+1))/point->vz+Global_VDB_Ptr->VDB_CentreX;
-			y = (point->vy*(Global_VDB_Ptr->VDB_ProjY+1))/point->vz+Global_VDB_Ptr->VDB_CentreY;
+			x = (point->vx*AvpProjectionX(Global_VDB_Ptr))/point->vz+Global_VDB_Ptr->VDB_CentreX;
+			y = (point->vy*AvpProjectionY(Global_VDB_Ptr))/point->vz+Global_VDB_Ptr->VDB_CentreY;
 
 			if (x<Global_VDB_Ptr->VDB_ClipLeft) {
 				x=Global_VDB_Ptr->VDB_ClipLeft;

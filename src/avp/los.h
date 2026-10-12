@@ -1,3 +1,4 @@
+extern int CameraCanSeeEffectThroughGlass(DISPLAYBLOCK *ignoredObjectPtr,VECTORCH *positionPtr);
 /* routines which check an object to see if it is in the player's line of sight */
 extern int CameraCanSeeThisPosition_WithIgnore(DISPLAYBLOCK *ignoredObjectPtr,VECTORCH *positionPtr);
 
@@ -48,3 +49,5 @@ extern SECTION_DATA*	LOS_HModel_Section;	/* Section of HModel hit */
 *		LOS_Point			- world space coords of intersection of line & hit poly   *
 *		LOS_ObjectNormal	- normal of the hit polygon								  *
 **********************************************************************************KJL*/
+
+void FindPolygonInLineOfSight_Navigation(VECTORCH *direction,VECTORCH *origin,DISPLAYBLOCK *actor,DISPLAYBLOCK *player);

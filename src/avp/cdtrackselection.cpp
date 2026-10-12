@@ -12,6 +12,8 @@ extern "C"
 };
 
 #include "list_tem.hpp"
+#include <windows.h>
+#include <stdio.h>
 
 //lists of tracks for each level
 List<int> LevelCDTracks[AVP_ENVIRONMENT_END_OF_LIST];
@@ -20,7 +22,45 @@ List<int> LevelCDTracks[AVP_ENVIRONMENT_END_OF_LIST];
 List<int> MultiplayerCDTracks[3];
 
 static int LastTrackChosen=-1;
+/* This is global rather than species-specific. */
+int MusicPlayMode=1; /* repeat with random silences */
+static DWORD RandomMusicSilenceDeadline=0;
+static int RandomMusicSilenceActive=0;
+static DWORD MusicRepeatRetryDeadline=0;
+/* Next local music-state transition; never an MCI polling cadence. */
+static DWORD NextMusicActionTick=0;
+static int RandomMusicPlaybackObserved=0;
+#if 0 /* Archived probe 140 telemetry: deliberately unavailable in releases. */
+/* I11: automatic once-per-second telemetry. No hotkey, no re-open/close cycle. */
+static FILE *Probe140I11MusicTrace=0;
+static DWORD Probe140I11WindowStart=0;
+static unsigned long Probe140I11DispatchCalls=0;
+static unsigned long Probe140I11DeadlineGated=0;
+static unsigned long Probe140I11FullDispatches=0;
+static unsigned long Probe140I11LastMciCommands=0;
+static unsigned long Probe140I11LastMciStatus=0;
 
+static void Probe140I11LogMusicDispatch(DWORD now)
+{
+	int enabled, trackCount, playing, track, failureTrack, failureStage;
+	unsigned long deadline, mciCommands, mciStatus, failureError;
+	if (!Probe140I11WindowStart)
+	{
+		Probe140I11WindowStart=now;
+		CDDA_GetDispatchDebugState(&enabled, &trackCount, &playing, &track, &deadline, &Probe140I11LastMciCommands, &Probe140I11LastMciStatus);
+		Probe140I11MusicTrace=fopen("logs\\probe140_music_dispatch_state.log", "a");
+		if (Probe140I11MusicTrace) { fprintf(Probe140I11MusicTrace, "I12 begin tick=%lu enabled=%d tracks=%d playing=%d track=%d deadline=%lu\n", (unsigned long)now, enabled, trackCount, playing, track, deadline); fflush(Probe140I11MusicTrace); }
+		return;
+	}
+	if ((LONG)(now-Probe140I11WindowStart)<1000) return;
+	CDDA_GetDispatchDebugState(&enabled, &trackCount, &playing, &track, &deadline, &mciCommands, &mciStatus);
+	CDDA_GetLastStartFailure(&failureTrack, &failureStage, &failureError);
+	if (Probe140I11MusicTrace) { fprintf(Probe140I11MusicTrace, "I12 tick=%lu calls=%lu gated=%lu full=%lu enabled=%d tracks=%d playing=%d track=%d deadline=%lu mci_commands_delta=%lu mci_status_delta=%lu failure_track=%d failure_stage=%d failure_error=%lu\n", (unsigned long)now, Probe140I11DispatchCalls, Probe140I11DeadlineGated, Probe140I11FullDispatches, enabled, trackCount, playing, track, deadline, mciCommands-Probe140I11LastMciCommands, mciStatus-Probe140I11LastMciStatus, failureTrack, failureStage, failureError); fflush(Probe140I11MusicTrace); }
+	Probe140I11WindowStart=now;
+	Probe140I11DispatchCalls=0; Probe140I11DeadlineGated=0; Probe140I11FullDispatches=0;
+	Probe140I11LastMciCommands=mciCommands; Probe140I11LastMciStatus=mciStatus;
+}
+#endif
 extern "C"
 {
 
@@ -164,11 +204,16 @@ static BOOL PickCDTrack(List<int>& track_list)
 
 	TrackSelectCounter++;
 
-	//play it
-	CDDA_Stop();
-	CDDA_Play(track_list[index]);
+	// A selection becomes current only after Red Book confirms the start.
+	int requestedTrack=track_list[index];
+	if(!CDDA_PlayVerified(requestedTrack))
+	{
+		CDDA_RandomMusicTracef("RML_SCHED_PICK_REJECTED track=%d list_size=%d", requestedTrack, track_list.size());
+		return FALSE;
+	}
 
-	LastTrackChosen = track_list[index];
+	LastTrackChosen = requestedTrack;
+	CDDA_RandomMusicTracef("RML_SCHED_PICK track=%d list_size=%d", LastTrackChosen, track_list.size());
 	return TRUE;	
 }
 
@@ -176,44 +221,134 @@ static BOOL PickCDTrack(List<int>& track_list)
 void CheckCDAndChooseTrackIfNeeded()
 {
 	static enum playertypes lastPlayerType;
+	DWORD now=GetTickCount();
+	DWORD playbackDeadline;
+	int trackIsPlaying;
+	/* I13: temporary automatic dispatcher logger disabled. */
 	
-	//are we bothering with cd tracks
-	if(!CDDA_IsOn()) return;
-	//is our current track still playing
-	if(CDDA_IsPlaying())
+#if 0 /* Archived measurement counter; not part of music scheduling. */
+++Probe140I11DispatchCalls;
+#endif
+	if(NextMusicActionTick && (LONG)(now-NextMusicActionTick)<0)
 	{
-		//if in a multiplayer game see if we have changed character type
-		if(AvP.Network == I_No_Network || AvP.PlayerType==lastPlayerType) 
-			return;
 		
-		//have changed character type , is the current track in the list for this character type
-		if(MultiplayerCDTracks[AvP.PlayerType].contains(LastTrackChosen)) 
+#if 0 /* Archived measurement counter; not part of music scheduling. */
+++Probe140I11DeadlineGated;
+#endif
+		return;
+	}
+	
+#if 0 /* Archived measurement counter; not part of music scheduling. */
+++Probe140I11FullDispatches;
+#endif
+	NextMusicActionTick=0;
+	if(!CDDA_IsOn()) return;
+	trackIsPlaying=CDDA_IsPlaying();
+	if(trackIsPlaying)
+	{
+		int activeTrack = CDDA_GetCurrentTrack();
+		/* Capture tracks started by the original map bootstrap as well as by this selector. */
+		if(activeTrack>0 && LastTrackChosen!=activeTrack)
+		{
+			LastTrackChosen=activeTrack;
+			CDDA_RandomMusicTracef("RML_SCHED_CAPTURE_ACTIVE track=%d", LastTrackChosen);
+		}
+		/* Only schedule silence after the backend actually observed playback. */
+		if(!RandomMusicPlaybackObserved)
+		{
+			CDDA_RandomMusicTracef("RML_SCHED_PLAYBACK_OBSERVED track=%d mode=%d", LastTrackChosen, MusicPlayMode);
+		}
+		RandomMusicPlaybackObserved=1;
+		playbackDeadline=(DWORD)CDDA_GetPlaybackDeadline();
+		NextMusicActionTick=playbackDeadline ? playbackDeadline : now+1000;
+		if(AvP.Network == I_No_Network || AvP.PlayerType==lastPlayerType)
 			return;
+		if(MultiplayerCDTracks[AvP.PlayerType].contains(LastTrackChosen))
+			return;
+	}
+	else if(RandomMusicPlaybackObserved)
+	{
+		/* A mode change is effective immediately, even while a random silence was pending. */
+		if(MusicPlayMode<=0)
+		{
+			RandomMusicSilenceDeadline=0;
+			RandomMusicSilenceActive=0;
+			NextMusicActionTick=now+1000;
+			return;
+		}
+		if(LastTrackChosen<0) return;
 
-		//Lets choose a new track then
+		if(MusicPlayMode>=2)
+		{
+			/* Classic loop: restart this map's already selected track without silence. */
+			if(MusicRepeatRetryDeadline && (LONG)(GetTickCount()-MusicRepeatRetryDeadline)<0) return;
+			MusicRepeatRetryDeadline=0;
+			RandomMusicSilenceDeadline=0;
+			RandomMusicSilenceActive=0;
+			CDDA_RandomMusicTracef("RML_SCHED_ALWAYS_REPEAT track=%d", LastTrackChosen);
+			if(CDDA_PlayVerified(LastTrackChosen))
+			{
+				RandomMusicPlaybackObserved=0;
+				CDDA_RandomMusicTracef("RML_SCHED_REPEAT_ACCEPTED track=%d mode=always", LastTrackChosen);
+			}
+			else
+			{
+				/* Keep retrying the exact same track, but do not spin every frame. */
+				MusicRepeatRetryDeadline=now+1000;
+				NextMusicActionTick=MusicRepeatRetryDeadline;
+				CDDA_RandomMusicTracef("RML_SCHED_REPEAT_RETRY track=%d mode=always delay_seconds=1", LastTrackChosen);
+			}
+			return;
+		}
+
+		if(!RandomMusicSilenceActive)
+		{
+			DWORD silenceSeconds=(DWORD)(5+(FastRandom()%296));
+			/* Uniform, inclusive 5..300 seconds; only silence is random. */
+			RandomMusicSilenceDeadline=now + silenceSeconds*1000;
+			NextMusicActionTick=RandomMusicSilenceDeadline;
+			RandomMusicSilenceActive=1;
+			CDDA_RandomMusicTracef("RML_SCHED_SILENCE_BEGIN track=%d seconds=%lu", LastTrackChosen, (unsigned long)silenceSeconds);
+			return;
+		}
+		if((LONG)(now-RandomMusicSilenceDeadline)<0) { NextMusicActionTick=RandomMusicSilenceDeadline; return; }
+		CDDA_RandomMusicTracef("RML_SCHED_SILENCE_EXPIRED track=%d", LastTrackChosen);
+		/* Do not discard the pending repeat unless Red Book playback has
+		   actually started. Failed MCI starts stay retryable. */
+		if(CDDA_PlayVerified(LastTrackChosen))
+		{
+			RandomMusicPlaybackObserved=0;
+			RandomMusicSilenceDeadline=0;
+			RandomMusicSilenceActive=0;
+			CDDA_RandomMusicTracef("RML_SCHED_REPEAT_ACCEPTED track=%d mode=random", LastTrackChosen);
+		}
+		else
+		{
+			RandomMusicSilenceDeadline=now+1000;
+			NextMusicActionTick=RandomMusicSilenceDeadline;
+			CDDA_RandomMusicTracef("RML_SCHED_REPEAT_RETRY track=%d mode=random delay_seconds=1", LastTrackChosen);
+		}
+		return;
 	}
 
-		
 	if(AvP.Network == I_No_Network)
 	{
 		int level=NumberForCurrentLevel();
 		if(level>=0 && level<AVP_ENVIRONMENT_END_OF_LIST)
 		{
-			//pick track based on level
-			if(PickCDTrack(LevelCDTracks[level]))
+			if(!PickCDTrack(LevelCDTracks[level]))
 			{
-				return;
+				/* Never retry a failed synchronous MCI start on the next render frame. */
+				NextMusicActionTick=now+1000;
 			}
-			
+			return;
 		}
 	}
-	
-	
-	//multiplayer (or their weren't ant level specific tracks)
 	lastPlayerType=AvP.PlayerType;
-	PickCDTrack(MultiplayerCDTracks[AvP.PlayerType]);
-	
-	 	
+	if(!PickCDTrack(MultiplayerCDTracks[AvP.PlayerType]))
+	{
+		NextMusicActionTick=now+1000;
+	}
 }
 
 void ResetCDPlayForLevel()
@@ -222,7 +357,17 @@ void ResetCDPlayForLevel()
 	CDDA_CheckNumberOfTracks();
 
 	TrackSelectCounter=0;
+	LastTrackChosen=-1;
+	RandomMusicSilenceDeadline=0;
+	RandomMusicSilenceActive=0;
+	RandomMusicPlaybackObserved=0;
+	NextMusicActionTick=0;
+	CDDA_RandomMusicTracef("RML_SCHED_RESET_LEVEL");
 	CDDA_Stop();
 }
 
 };
+
+
+
+

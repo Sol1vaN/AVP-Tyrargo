@@ -2607,7 +2607,9 @@ void FireFlameThrower(VECTORCH *base_position,VECTORCH *base_offset,MATRIXCH *or
 		velocity.vy = ((FastRandom()&1023) - 512);//*2;
 		velocity.vz = ((FastRandom()&511) + 200+512)*16;
 		RotateVector(&velocity,orientmat);
-		MakeParticle(&position,&(velocity),PARTICLE_FLAME);
+		if(!player && orientmat==&PlayersWeapon.ObMat)
+            MakePlayerFlameParticle(&position,&velocity,base_position);
+        else MakeParticle(&position,&velocity,PARTICLE_FLAME);
 	}
 
 }

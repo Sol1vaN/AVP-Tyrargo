@@ -1,10 +1,14 @@
+#include "event_latency.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
-#include "al.h"
-#include "alc.h"
+#include <AL/al.h>
+#include <AL/alc.h>
+#include "audio_environment.h"
+#include "audio_latency.h"
+#include "fmv_backend.h"
 
 #include "fixer.h"
 
@@ -35,6 +39,7 @@ static int AvpFrequency = 44100;
 extern int WantSound;
 
 static int SoundActivated = 0;
+static unsigned int AvpSourceCount = 0;
 
 static struct {
 	unsigned int flags;
@@ -151,7 +156,7 @@ static int SimpleLoadWAV( const unsigned char* data, FormatChunk* pFmtChunk, Dat
 
 /*
 openal.c TODO:
-1. There is no EAX/Reverb.  But there's probably not much I can do...
+1. Environmental EFX/EAX reverb is implemented in audio_environment.c.
 2. Restarting sound system may or may not work.
 3. Better Error Handling (device not avail, etc).
 4. Implement sample offsets in psnd.c using AL_SAMPLE_OFFSET (add api here)
@@ -190,11 +195,16 @@ int PlatStartSoundSys()
 
 	AvpSoundContext = alcCreateContext(AvpSoundDevice, attrlist);
 	if (AvpSoundContext == NULL) {
-		/* TODO: destroy sound device */
+		alcCloseDevice(AvpSoundDevice);
+		AvpSoundDevice = NULL;
 		return 0;
 	}
 		
-	alcMakeContextCurrent(AvpSoundContext);
+	if (!alcMakeContextCurrent(AvpSoundContext)) {
+		alcDestroyContext(AvpSoundContext); AvpSoundContext=NULL;
+		alcCloseDevice(AvpSoundDevice); AvpSoundDevice=NULL;
+		return 0;
+	}
 	
 	alListenerf(AL_GAIN, 1.0);
 	alListenerfv(AL_POSITION, pos);
@@ -210,6 +220,8 @@ int PlatStartSoundSys()
 		exit(1);
 	}
 	
+	AudioEnvironmentInit(AvpSoundDevice);
+	AvpSourceCount = 0;
 	initSources = 1;
 	
 	for (i = 0; i < SOUND_MAXACTIVE; i++) {
@@ -231,6 +243,7 @@ int PlatStartSoundSys()
 		// TODO: remove the incorrectly named PropSetP variables
 		
 		ActiveSounds[i].ds3DBufferP = p;
+		if (p) ++AvpSourceCount;
 
 		ActiveSounds[i].PropSetP_pos[0] = 0.0;
 		ActiveSounds[i].PropSetP_pos[1] = 0.0;
@@ -250,6 +263,10 @@ int PlatStartSoundSys()
 		}
 	}
 	
+	if (AvpSourceCount < SOUND_MAXACTIVE_SW) {
+		PlatEndSoundSys();
+		return 0;
+	}
 	SoundActivated = 1;
 	
 	return 1;
@@ -257,8 +274,23 @@ int PlatStartSoundSys()
 
 void PlatEndSoundSys()
 {
-/* TODO - free everything */
-	fprintf(stderr, "OPENAL: PlatEndSoundSys()\n");
+    int i;
+    if (!AvpSoundContext) return;
+    FMVBackend_ReleaseAudio(); /* close shared-context streams before IDs can be reused */
+    for (i=0;i<SOUND_MAXACTIVE;i++) if (ActiveSounds[i].ds3DBufferP) {
+        ALuint source=ActiveSounds[i].ds3DBufferP;
+        alSourceStop(source);
+        AudioEnvironmentRoute(source,0);
+        alSourcei(source,AL_BUFFER,0);
+        alDeleteSources(1,&source);
+        ActiveSounds[i].ds3DBufferP=0;
+    }
+    AudioEnvironmentShutdown();
+    alcMakeContextCurrent(NULL);
+    alcDestroyContext(AvpSoundContext); AvpSoundContext=NULL;
+    alcCloseDevice(AvpSoundDevice); AvpSoundDevice=NULL;
+    AvpSourceCount=0; SoundActivated=0;
+    AudioLatencyFlush();
 }
 
 // this table plots the frequency change for
@@ -507,6 +539,7 @@ static int ToneToFrequency(int currentFrequency, int currentPitch, int newPitch)
 int PlatPlaySound(int activeIndex)
 {
 	int si;
+	unsigned long long stamp;
 	
 	if (!SoundActivated) {
 		return 0;
@@ -524,11 +557,14 @@ int PlatPlaySound(int activeIndex)
 		return 0;
 	}
 
+	stamp=AudioLatencyNow();
 	alSourceStop(ActiveSounds[activeIndex].ds3DBufferP);
 	
 	alSourcei(ActiveSounds[activeIndex].ds3DBufferP, AL_BUFFER,
 		   GameSounds[si].dsBufferP);
 
+	AudioLatencyRecord(stamp,"OpenAL stop/bind",si,GameSounds[si].wavName);
+	stamp=AudioLatencyNow();
 	alSourcei(ActiveSounds[activeIndex].ds3DBufferP, AL_LOOPING,
 		ActiveSounds[activeIndex].loop ? AL_TRUE : AL_FALSE);
 
@@ -559,12 +595,12 @@ int PlatPlaySound(int activeIndex)
 		PlatChangeSoundVolume (activeIndex, ActiveSounds[activeIndex].volume);
 	}
 
-	if (!ActiveSounds[activeIndex].reverb_off) {
-		// TODO: DSPROPERTY_EAXBUFFER_REVERBMIX set to &SoundConfig.reverb_mix
-	} else {
-		// TODO: DSPROPERTY_EAXBUFFER_REVERBMIX set to 0
-	}
+	AudioLatencyRecord(stamp,"OpenAL voice setup",si,GameSounds[si].wavName);
+	stamp=AudioLatencyNow();
+	AudioEnvironmentRoute(ActiveSounds[activeIndex].ds3DBufferP, !ActiveSounds[activeIndex].reverb_off);
 	
+	AudioLatencyRecord(stamp,"OpenAL EFX route",si,GameSounds[si].wavName);
+	stamp=AudioLatencyNow();
 	if (!ActiveSounds[activeIndex].paused) {
 		alSourcePlay (ActiveSounds[activeIndex].ds3DBufferP);
 
@@ -579,6 +615,7 @@ int PlatPlaySound(int activeIndex)
 #endif		
 	}
 
+	AudioLatencyRecord(stamp,"OpenAL play",si,GameSounds[si].wavName);
 	return 1;
 }
 
@@ -591,8 +628,9 @@ void PlatStopSound(int activeIndex)
 		return;
 	}
 	
-	// TODO: should be able to release data here
-	alSourceStop(ActiveSounds[activeIndex].ds3DBufferP);
+	{ EVENT_TICK stamp=EventLatencyBegin(); alSourceStop(ActiveSounds[activeIndex].ds3DBufferP); EventLatencyEnd(stamp,"OpenAL stop source",ActiveSounds[activeIndex].soundIndex,activeIndex,0,0,0); }
+	{ EVENT_TICK stamp=EventLatencyBegin(); AudioEnvironmentRoute(ActiveSounds[activeIndex].ds3DBufferP,0); EventLatencyEnd(stamp,"OpenAL detach environment",ActiveSounds[activeIndex].soundIndex,activeIndex,0,0,0); }
+	{ EVENT_TICK stamp=EventLatencyBegin(); alSourcei(ActiveSounds[activeIndex].ds3DBufferP,AL_BUFFER,0); EventLatencyEnd(stamp,"OpenAL detach buffer",ActiveSounds[activeIndex].soundIndex,activeIndex,0,0,0); }
 }
 
 /* table generated by:
@@ -873,18 +911,12 @@ void PlatUpdatePlayer()
 		alListenerfv (AL_POSITION, pos);
 	}
 
-#if defined( _MSC_VER )
-	if( SoundConfig.reverb_changed ) {
-		// TODO: reverb handling
-	}
-#endif
+
 }
 
 void PlatSetEnviroment(unsigned int env_index, float reverb_mix)
 {
-#ifdef OPENAL_DEBUG
-	fprintf(stderr, "OPENAL: PlatSetEnvironment(%d, %f)\n", env_index, reverb_mix);
-#endif
+    AudioEnvironmentSet(env_index,reverb_mix);
 }
 
 void PlatEndGameSound(SOUNDINDEX index)
@@ -909,7 +941,7 @@ void PlatEndGameSound(SOUNDINDEX index)
 		if (ActiveSounds[i].soundIndex == index) {
 			PlatStopSound(i);
 			
-			alSourcei(i, AL_BUFFER, 0);
+			alSourcei(ActiveSounds[i].ds3DBufferP, AL_BUFFER, 0);
 		}
 	}
 	
@@ -924,8 +956,8 @@ unsigned int PlatMaxHWSounds()
 #ifdef OPENAL_DEBUG
 	fprintf(stderr, "OPENAL: PlatMaxHWSounds()\n");
 #endif	
-	// TODO - need to implement this for real?
-	return 0;
+	/* psnd adds the first software-compatible bank to this count. */
+	return AvpSourceCount > SOUND_MAXACTIVE_SW ? AvpSourceCount-SOUND_MAXACTIVE_SW : 0;
 }
 
 void InitialiseBaseFrequency(SOUNDINDEX soundNum)

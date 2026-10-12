@@ -1,0 +1,186 @@
+[
+  {
+    "category": "render",
+    "title": {
+      "en": "Soft particles",
+      "es": "Partículas suaves"
+    },
+    "status": "planned"
+  },
+  {
+    "category": "audio",
+    "title": {
+      "en": "Local music files",
+      "es": "Archivos locales de música"
+    },
+    "status": "planned"
+  },
+  {
+    "category": "network",
+    "title": {
+      "en": "Restore and validate multiplayer/co-op",
+      "es": "Restaurar y validar multiplayer/coop"
+    },
+    "status": "planned"
+  },
+  {
+    "category": "content",
+    "title": {
+      "en": "Map selector and friendly mod loader",
+      "es": "Selector de mapas y cargador de mods"
+    },
+    "status": "planned"
+  },
+  {
+    "category": "ui",
+    "title": {
+      "en": "In-game language selector",
+      "es": "Selector de idioma ingame"
+    },
+    "status": "planned"
+  },
+  {
+    "category": "replay",
+    "title": {
+      "en": "Demo recording, binds and menu attract playback",
+      "es": "Demos, binds y reproducción de showcase en menú"
+    },
+    "status": "planned"
+  },
+  {
+    "category": "render",
+    "title": {
+      "en": "Reproduce remaining HOM artifacts",
+      "es": "Reproducir residuos HOM"
+    },
+    "status": "needs-reproduction"
+  },
+  {
+    "category": "ai",
+    "title": {
+      "en": "Broader squad and Predator navigation tests",
+      "es": "Ampliar pruebas de escuadrón y Predator"
+    },
+    "status": "ongoing"
+  },
+  {
+    "category": "render",
+    "title": {
+      "en": "Subtle weapon/ammo/health/armor/puzzle pickup highlighting",
+      "es": "Resaltado sutil de armas/ammo/salud/armadura/objetos de misión"
+    },
+    "status": "planned"
+  },
+  {
+    "category": "motion",
+    "title": {
+      "en": "Predator/Alien procedural sway and bob",
+      "es": "Sway y bob procedural Predator/Alien"
+    },
+    "status": "planned"
+  },
+  {
+    "category": "motion",
+    "title": {
+      "en": "Evaluate extra melee camera and HUD feedback",
+      "es": "Evaluar feedback extra melee de cámara/HUD"
+    },
+    "status": "evaluation"
+  },
+  {
+    "category": "weapons",
+    "title": {
+      "en": "Weapon inspection and bindable Pulse Rifle melee",
+      "es": "Inspección de arma y melee Pulse Rifle asignable"
+    },
+    "status": "planned"
+  },
+  {
+    "category": "input",
+    "title": {
+      "en": "Controller compatibility",
+      "es": "Compatibilidad de controles"
+    },
+    "status": "ongoing"
+  },
+  {
+    "category": "render",
+    "title": {
+      "en": "Measure ordered batching and state-cache opportunities",
+      "es": "Medir batching ordenado y caché de estados"
+    },
+    "status": "ongoing"
+  },
+  {
+    "category": "render",
+    "title": {
+      "en": "Incremental GLSL scene path with visual parity",
+      "es": "Ruta GLSL de escena gradual con equivalencia visual"
+    },
+    "status": "evaluation"
+  },
+  {
+    "category": "render",
+    "title": {
+      "en": "Optional modern buffer extensions after capability checks",
+      "es": "Extensiones de buffers tras verificar capacidades"
+    },
+    "status": "evaluation"
+  },
+  {
+    "category": "render",
+    "title": {
+      "en": "Evaluate renderer abstraction and Vulkan/SDL_GPU",
+      "es": "Evaluar abstracción gráfica y Vulkan/SDL_GPU"
+    },
+    "status": "evaluation"
+  },
+  {
+    "category": "timing",
+    "title": {
+      "en": "Audit 1000-FPS cap and high-refresh simulation",
+      "es": "Auditar límite 1000 FPS y simulación alto refresco"
+    },
+    "status": "needs-reproduction"
+  },
+  {
+    "category": "display",
+    "title": {
+      "en": "Validate driver custom modes absent from SDL lists",
+      "es": "Validar modos personalizados ausentes de listas SDL"
+    },
+    "status": "evaluation"
+  },
+  {
+    "category": "integration",
+    "title": {
+      "en": "Opt-in Steam launcher setup with backup and user control",
+      "es": "Integración Steam opcional con respaldo y control del usuario"
+    },
+    "status": "planned"
+  },
+  {
+    "category": "cloak",
+    "title": {
+      "en": "Optical camouflage with local blue-white sparks on activation/deactivation",
+      "es": "Camuflaje óptico con chispas blanco-azules al activar/desactivar"
+    },
+    "status": "concept-only"
+  },
+  {
+    "category": "release",
+    "title": {
+      "en": "Complete shader provenance and static LGPL binary distribution review",
+      "es": "Completar procedencia shaders y revisión distribución binaria LGPL estática"
+    },
+    "status": "before-public-release"
+  },
+  {
+    "category": "release",
+    "title": {
+      "en": "Player acceptance testing of the imported release candidate",
+      "es": "Prueba del candidato importado por jugadores"
+    },
+    "status": "before-public-release"
+  }
+]

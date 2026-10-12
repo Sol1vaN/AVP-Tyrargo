@@ -2,6 +2,9 @@
 	Source file for Player Movement ...
 ----------------------------------------------------*/
 #include <stdbool.h>
+#include <stdint.h>
+#include <limits.h>
+#include <math.h>
 
 #include "3dc.h"
 #include "inline.h"
@@ -15,11 +18,14 @@
 
 #include "bh_types.h"
 
+#include "savegame.h"
+#include "npc_support.h"
 #define UseLocalAssert 1
 #include "ourasert.h"
 #include "comp_shp.h"
 
 #include "pmove.h"
+#include "playeryaw.h"
 #include "usr_io.h"
 #include "bh_far.h"
 #include "triggers.h"
@@ -89,8 +95,24 @@ static void LoadInMovementValues(void);
 
 /* Globals */
 int CrouchIsToggleKey;
+/* 0 preserves the original species limits; 1 permits a full +/-90 degree vertical look. */
+int FullVerticalPitchEnabled;
 char CrouchKeyDebounced;
 int executeDemo;
+int64_t MouseRawPitchFraction;
+
+/* Preserve sub-angle travel exactly instead of adding a one-unit minimum.
+ * C99 integer division truncates toward zero, keeping both directions equal. */
+static int ConsumeRawMouseAngle(int64_t input, int64_t *remainder)
+{
+	int64_t total = input + *remainder;
+	int64_t whole = total / ONE_FIXED;
+
+	*remainder = total - whole * ONE_FIXED;
+	if (whole > INT_MAX) return INT_MAX;
+	if (whole < INT_MIN) return INT_MIN;
+	return (int)whole;
+}
 
 /* Global Externs */
 extern DISPLAYBLOCK* Player;
@@ -130,6 +152,17 @@ extern void RemoveAllThisPlayersDiscs(void);
 
 int timeInContactWithFloor;
 
+/* Hand-thrown flares use simulation time; ignored taps are never queued. */
+static int FlareThrowCooldown;
+static void UpdateFlareThrowCooldown(void)
+{
+    if (FlareThrowCooldown > 0 && NormalFrameTime > 0)
+    {
+        FlareThrowCooldown -= NormalFrameTime;
+        if (FlareThrowCooldown < 0) FlareThrowCooldown = 0;
+    }
+}
+
 extern int weaponHandle;
 
 extern int PlayerDamagedOverlayIntensity;
@@ -144,6 +177,8 @@ Initialise player movement data
 -------------------------------------------------------------*/
 void InitPlayerMovementData(STRATEGYBLOCK* sbPtr)
 {
+	FlareThrowCooldown = 0;
+	PlayerYawReset();
 	InitPlayerGameInput(sbPtr);
 	
 	/* set the player's morph control block and state*/
@@ -214,6 +249,7 @@ void PlayerBehaviour(STRATEGYBLOCK* sbPtr)
 				}
 			}
 		}
+		UpdateFlareThrowCooldown();
 		ExecuteFreeMovement(sbPtr);
 	}
 	else CorpseMovement(sbPtr);
@@ -325,7 +361,8 @@ void ExecuteFreeMovement(STRATEGYBLOCK* sbPtr)
 		{
 			if (playerStatusPtr->Mvt_InputRequests.Flags.Rqst_CycleVisionMode)
 			{
-				ChangePredatorVisionMode();
+				if (PredatorVisionCycleDirection<0) PreviousPredatorVisionMode();
+                else ChangePredatorVisionMode();
 			}
 			if (playerStatusPtr->Mvt_InputRequests.Flags.Rqst_GrapplingHook && 
 				playerStatusPtr->GrapplingHookEnabled)
@@ -339,6 +376,7 @@ void ExecuteFreeMovement(STRATEGYBLOCK* sbPtr)
 			break;
 	}
 
+	NPCSupportUseInput(playerStatusPtr->Mvt_InputRequests.Flags.Rqst_Operate);
 	if (playerStatusPtr->Mvt_InputRequests.Flags.Rqst_Operate)
 		OperateObjectInLineOfSight();
 			
@@ -433,11 +471,7 @@ void ExecuteFreeMovement(STRATEGYBLOCK* sbPtr)
 
 		forwardSpeed = MUL_FIXED(forwardSpeed, playerStatusPtr->Mvt_MotionIncrement);
 
-		int turnSpeedTest = MUL_FIXED(turnSpeed, playerStatusPtr->Mvt_TurnIncrement);
-		if (turnSpeedTest > 0) {
-			turnSpeedTest++;
-		}
-		turnSpeed = turnSpeedTest;
+		turnSpeed = (int)(((int64_t)turnSpeed * (int64_t)playerStatusPtr->Mvt_TurnIncrement) >> 16);
 		
 		if (MIRROR_CHEATMODE)
 		{
@@ -480,11 +514,8 @@ void ExecuteFreeMovement(STRATEGYBLOCK* sbPtr)
 
 		preTurnSpeed = turnSpeed;
 
-		turnSpeed = MUL_FIXED(turnSpeed,playerStatusPtr->Encumberance.TurningMultiple);
+		turnSpeed = (int)(((int64_t)turnSpeed * (int64_t)playerStatusPtr->Encumberance.TurningMultiple) >> 16);
 
-		if (preTurnSpeed > 0) {
-			turnSpeed++;
-		}
 
 		jumpSpeed = MUL_FIXED(jumpSpeed,playerStatusPtr->Encumberance.JumpingMultiple);
 		
@@ -851,27 +882,14 @@ void ExecuteFreeMovement(STRATEGYBLOCK* sbPtr)
 	* The player's AngVelocity as set by the above code is only valid in the player's object    *
 	* space, and so has to be rotated into world space. So aliens can walk on the ceiling, etc. *
 	****************************************************************************************KJL*/
-	if (dynPtr->AngVelocity.EulerY)
 	{
-		MATRIXCH mat;
-   	
-   		int angle = MUL_FIXED(NormalFrameTime,dynPtr->AngVelocity.EulerY)&4095;
- 	  	int cos = GetCos(angle);
- 	  	int sin = GetSin(angle);
- 	  	mat.mat11 = cos;		 
- 	  	mat.mat12 = 0;
- 	  	mat.mat13 = -sin;
- 	  	mat.mat21 = 0;	  	
- 	  	mat.mat22 = 65536;	  	
- 	  	mat.mat23 = 0;	  	
- 	  	mat.mat31 = sin;	  	
- 	  	mat.mat32 = 0;	  	
- 	  	mat.mat33 = cos;	  	
-
-		MatrixMultiply(&dynPtr->OrientMat,&mat,&dynPtr->OrientMat);
-	 	MatrixToEuler(&dynPtr->OrientMat, &dynPtr->OrientEuler);
-
-	}
+        int64_t keyboardYawFixed = (int64_t)MUL_FIXED(NormalFrameTime,dynPtr->AngVelocity.EulerY) * ONE_FIXED;
+        int64_t yawFixed = MouseRawYawDelta + keyboardYawFixed;
+        if (yawFixed) {
+            PlayerYawApply(&dynPtr->OrientMat, yawFixed);
+            MatrixToEuler(&dynPtr->OrientMat, &dynPtr->OrientEuler);
+        }
+    }
 	/*------------------------------------------------------ 
 	CROUCHING, LYING DOWN, ETC.
 	------------------------------------------------------*/ 
@@ -911,16 +929,21 @@ void ExecuteFreeMovement(STRATEGYBLOCK* sbPtr)
 	
 	if (playerStatusPtr->Absolute_Pitching)
 	{
+		/* This mode supplies its own absolute angle. */
+		MouseRawPitchFraction = 0;
 		playerStatusPtr->ViewPanX = MUL_FIXED(playerStatusPtr->Mvt_PitchIncrement,1024-128);
 		playerStatusPtr->ViewPanX &= wrap360;
 	}
 	else
 	{
 		static int timeBeenContinuouslyMoving=0;
+		int rawMousePitch = ConsumeRawMouseAngle(MouseRawPitchDelta, &MouseRawPitchFraction);
 		int AllowedLookDownAngle;
 		int AllowedLookUpAngle;
 
-		if (AvP.PlayerType==I_Alien)
+		/* The original non-Alien range is +/-78.75 degrees.  Full vertical pitch
+		   intentionally uses the same +/-90 degree range already used by Alien. */
+		if (FullVerticalPitchEnabled || AvP.PlayerType==I_Alien)
 		{
 			AllowedLookUpAngle = 0;
 			AllowedLookDownAngle = 2048;
@@ -964,8 +987,12 @@ void ExecuteFreeMovement(STRATEGYBLOCK* sbPtr)
 										playerStatusPtr->Mvt_PitchIncrement,
 										NormalFrameTime>>PANRATESHIFT
 									);
+			playerStatusPtr->ViewPanX += rawMousePitch;
 
-			if (playerStatusPtr->ViewPanX < AllowedLookUpAngle) playerStatusPtr->ViewPanX=AllowedLookUpAngle; 
+			if (playerStatusPtr->ViewPanX < AllowedLookUpAngle) {
+				playerStatusPtr->ViewPanX=AllowedLookUpAngle;
+				MouseRawPitchFraction = 0;
+			}
 
         	playerStatusPtr->ViewPanX -= 1024;
 			playerStatusPtr->ViewPanX &= wrap360;
@@ -981,14 +1008,19 @@ void ExecuteFreeMovement(STRATEGYBLOCK* sbPtr)
 										NormalFrameTime>>PANRATESHIFT
 									);
 
-			PlayerStatusPtr->ViewPanX++; // deadzone fix
-			if (playerStatusPtr->ViewPanX > AllowedLookDownAngle) playerStatusPtr->ViewPanX = AllowedLookDownAngle;
+			playerStatusPtr->ViewPanX += rawMousePitch;
+			if (playerStatusPtr->ViewPanX > AllowedLookDownAngle) {
+				playerStatusPtr->ViewPanX = AllowedLookDownAngle;
+				MouseRawPitchFraction = 0;
+			}
 
         	playerStatusPtr->ViewPanX -= 1024;
 			playerStatusPtr->ViewPanX &= wrap360;
 		} 
 		if(playerStatusPtr->Mvt_InputRequests.Flags.Rqst_CentreView)
 		{
+		/* Centring is an explicit camera mode, not raw mouse motion. */
+		MouseRawPitchFraction = 0;
         	playerStatusPtr->ViewPanX += 1024;
 			playerStatusPtr->ViewPanX &= wrap360;
             
@@ -1702,7 +1734,7 @@ void ThrowAFlare(void)
 {
 	extern int NumberOfFlaresActive;
 	
-	if (NumberOfFlaresActive<4)
+	if (FlareThrowCooldown == 0 && NumberOfFlaresActive<4)
 	{
 		extern VIEWDESCRIPTORBLOCK *ActiveVDBList[];
 		VIEWDESCRIPTORBLOCK *VDBPtr = ActiveVDBList[0];
@@ -1711,8 +1743,11 @@ void ThrowAFlare(void)
 
 		TransposeMatrixCH(&mat);
 
-		CreateGrenadeKernel(I_BehaviourFlareGrenade,&position,&mat,1);
-	   	Sound_Play(SID_THROW_FLARE,"h");
+        if (CreateGrenadeKernel(I_BehaviourFlareGrenade,&position,&mat,1))
+        {
+            FlareThrowCooldown = ONE_FIXED/2;
+            Sound_Play(SID_THROW_FLARE,"h");
+        }
 	}
 
 }

@@ -39,6 +39,8 @@ GameDirectoryFile *ScanGameDirectory(void *dir);
 int CloseGameDirectory(void *dir);
 void InitGameDirectories(char *argv0, char *argv_datapath);
 char* I_GetUserDir(void);
+/* Allocated path in the configured local directory; caller frees it. */
+char *GetLocalGameFilePath(const char *filename);
 
 #ifdef __cplusplus
 };

@@ -18,6 +18,7 @@
 #include "bh_paq.h"
 #include "bh_queen.h"
 #include "bh_marin.h"
+#include "npc_support.h"
 #include "bh_alien.h"
 #include "bh_agun.h"
 #include "lighting.h"
@@ -243,6 +244,14 @@ void NPC_IsObstructed(STRATEGYBLOCK *sbPtr, NPC_MOVEMENTDATA *moveData, NPC_OBST
                 /* int dotWithGravity; */
                 int normalDotWithVelocity;
                 
+                /* Support, tangential and separating contacts cannot block an
+                 * alien's chosen route, even when they belong to an object. */
+                normalDotWithVelocity = DotProduct(&nextReport->ObstacleNormal, &velDirn);
+                if (myType == I_BehaviourAlien && normalDotWithVelocity >= -1024)
+                {
+                        nextReport = nextReport->NextCollisionReportPtr;
+                        continue;
+                }
                 if(nextReport->ObstacleSBPtr)
                 {
                         if(nextReport->ObstacleSBPtr==Player->ObStrategyBlock) IsCharacterOrPlayer = 1;
@@ -250,8 +259,8 @@ void NPC_IsObstructed(STRATEGYBLOCK *sbPtr, NPC_MOVEMENTDATA *moveData, NPC_OBST
                         {
                                 IsCharacterOrPlayer = 1;
                                 details->otherCharacter = 1;
-                                details->anySingleObstruction = 1;
-                        } 
+                                details->anySingleObstruction = (myType != I_BehaviourAlien);
+                        }
                 }
 
                 {
@@ -262,11 +271,18 @@ void NPC_IsObstructed(STRATEGYBLOCK *sbPtr, NPC_MOVEMENTDATA *moveData, NPC_OBST
 
 //              if((normalDotWithVelocity < -46341)&&(!IsCharacterOrPlayer))
                 /* So aliens can break through windows, 19/5/98 CDF */
-                if((!IsCharacterOrPlayer)&&((normalDotWithVelocity < -46341)||(nextReport->ObstacleSBPtr)))
+                if (((!IsCharacterOrPlayer) || (myType == I_BehaviourAlien && details->otherCharacter)) &&
+                    ((normalDotWithVelocity < -46341)||(nextReport->ObstacleSBPtr)))
                 {
                         /* aha... got one....*/
-                        moveData->numObstructiveCollisions++;
-                        if(moveData->numObstructiveCollisions > NPC_IMPEDING_COL_THRESHOLD)
+                        if (myType == I_BehaviourAlien)
+                            moveData->numObstructiveCollisions += NormalFrameTime > 0 ? NormalFrameTime : 0;
+                        else
+                            moveData->numObstructiveCollisions++;
+                        /* Aliens wait ~1/6 simulation second, not ten renders. */
+                        if (myType == I_BehaviourAlien ?
+                            moveData->numObstructiveCollisions >= ONE_FIXED/6 :
+                            moveData->numObstructiveCollisions > NPC_IMPEDING_COL_THRESHOLD)
                         {
                                 moveData->numObstructiveCollisions = 0;
                                 details->anySingleObstruction = 1;
@@ -679,6 +695,11 @@ int NPCSetVelocity(STRATEGYBLOCK *sbPtr, VECTORCH* targetDirn, int in_speed)
         
         /* Set up speed as local, so we can tamper with it. */
         speed=in_speed;
+        if(sbPtr->I_SBtype==I_BehaviourAlien){
+            ALIEN_STATUS_BLOCK *a=(ALIEN_STATUS_BLOCK*)sbPtr->SBdataptr;
+            if(a->motion.aftermath && !a->Target)speed=MUL_FIXED(speed,a->motion.pace);
+        }
+
 
         if ((sbPtr->I_SBtype!=I_BehaviourMarine)&&(sbPtr->I_SBtype!=I_BehaviourPredator)
                 &&(sbPtr->I_SBtype!=I_BehaviourXenoborg)) {
@@ -788,7 +809,7 @@ int NPCSetVelocity(STRATEGYBLOCK *sbPtr, VECTORCH* targetDirn, int in_speed)
                         return(1);
                 }       
 
-                accelerationThisFrame=MUL_FIXED(accelerationThisFrame,NormalFrameTime);
+                /* Preserve mm/s fractions across frames below. */
                 /* u+at, and all that, wot? */
 
                 yDirection.vx = sbPtr->DynPtr->OrientMat.mat21;         
@@ -808,54 +829,55 @@ int NPCSetVelocity(STRATEGYBLOCK *sbPtr, VECTORCH* targetDirn, int in_speed)
                         return(1);
                 }
         
+                VECTORCH supportNormal={0,0,0};
+                if(sbPtr->I_SBtype==I_BehaviourMarine && sbPtr->DynPtr->IsInContactWithFloor && ((MARINE_STATUS_BLOCK*)sbPtr->SBdataptr)->squad.jumpTimer<=0){
+                    for(COLLISIONREPORT*c=sbPtr->DynPtr->CollisionReportPtr;c;c=c->NextCollisionReportPtr){
+                        VECTORCH n=c->ObstacleNormal;if(n.vy<-40000){
+                            supportNormal=n;targetV.vy=(int)(-((int64_t)n.vx*targetV.vx+(int64_t)n.vz*targetV.vz)/n.vy);break;
+                        }
+                    }
+                }
                 Normalise(&targetV);
 
                 targetV.vx=MUL_FIXED(targetV.vx,speed);
                 targetV.vy=MUL_FIXED(targetV.vy,speed);
                 targetV.vz=MUL_FIXED(targetV.vz,speed);
-                
-                deltaV.vx=targetV.vx-sbPtr->DynPtr->LinVelocity.vx;
-                deltaV.vy=targetV.vy-sbPtr->DynPtr->LinVelocity.vy;
-                deltaV.vz=targetV.vz-sbPtr->DynPtr->LinVelocity.vz;
-                /* Now, deltaV is what we need to match. */
-                deltaVMag=Approximate3dMagnitude(&deltaV);
-                if (deltaVMag<=accelerationThisFrame) {
-                        int dotP,magV;
-                        VECTORCH normVelocity;
-
-                        sbPtr->DynPtr->LinVelocity=targetV;
-
-                        movementOffset.vx=sbPtr->DynPtr->Position.vx-sbPtr->DynPtr->PrevPosition.vx;
-                        movementOffset.vy=sbPtr->DynPtr->Position.vy-sbPtr->DynPtr->PrevPosition.vy;
-                        movementOffset.vz=sbPtr->DynPtr->Position.vz-sbPtr->DynPtr->PrevPosition.vz;
-                        
-                        normVelocity=sbPtr->DynPtr->LinVelocity;
-                        magV=Approximate3dMagnitude(&sbPtr->DynPtr->LinVelocity);
-
-                        Normalise(&movementOffset);
-                        Normalise(&normVelocity);
-                        dotP=DotProduct(&normVelocity,&movementOffset);
-                        
-                        /* To get a reasonable value out... */
-                        if (magV<(speed>>2)) {
-                                orientated=NPCOrientateToVector(sbPtr, &targetV,NPC_TURNRATE,NULL);
-                        } else if ((dotP>40000)||((movementOffset.vx==0)&&(movementOffset.vy==0)&&(movementOffset.vz==0))) {
-                                orientated=NPCOrientateToVector(sbPtr, &normVelocity,NPC_TURNRATE,NULL);
-                        } else {
-                                orientated=NPCOrientateToVector(sbPtr, &movementOffset,NPC_TURNRATE,NULL);
-                        }
-                        return(orientated);
+                /* Foot locomotion compensates modest downhill drift. Keep the
+                   actual impulse, gravity and terrain friction in dynamics;
+                   do not cancel weapon knockback or airborne movement. */
+                if(supportNormal.vx || supportNormal.vz){
+                    VECTORCH impulse=sbPtr->DynPtr->LinImpulse,n=supportNormal;
+                    int64_t square=(int64_t)n.vx*n.vx+(int64_t)n.vy*n.vy+(int64_t)n.vz*n.vz;
+                    int64_t dot=(int64_t)n.vx*impulse.vx+(int64_t)n.vy*impulse.vy+(int64_t)n.vz*impulse.vz;
+                    if(square){VECTORCH drift={impulse.vx-(int)(dot*n.vx/square),impulse.vy-(int)(dot*n.vy/square),impulse.vz-(int)(dot*n.vz/square)};
+                     if(Magnitude(&drift)<7000){targetV.vx-=drift.vx;targetV.vy-=drift.vy;targetV.vz-=drift.vz;}}
                 }
-                /* If we're here, we can't make the target velocity yet. */
-                Normalise(&deltaV);
-                deltaV.vx=MUL_FIXED(deltaV.vx,accelerationThisFrame);
-                deltaV.vy=MUL_FIXED(deltaV.vy,accelerationThisFrame);
-                deltaV.vz=MUL_FIXED(deltaV.vz,accelerationThisFrame);
-
-                sbPtr->DynPtr->LinVelocity.vx+=deltaV.vx;
-                sbPtr->DynPtr->LinVelocity.vy+=deltaV.vy;
-                sbPtr->DynPtr->LinVelocity.vz+=deltaV.vz;
-
+                if(sbPtr->I_SBtype==I_BehaviourMarine || sbPtr->I_SBtype==I_BehaviourPredator){
+                    NPC_MOTION_RUNTIME *r=sbPtr->I_SBtype==I_BehaviourMarine?
+                      &((MARINE_STATUS_BLOCK*)sbPtr->SBdataptr)->precision:
+                      &((PREDATOR_STATUS_BLOCK*)sbPtr->SBdataptr)->precision;
+                    {int velocity[3]={sbPtr->DynPtr->LinVelocity.vx,sbPtr->DynPtr->LinVelocity.vy,sbPtr->DynPtr->LinVelocity.vz};
+                     const int target[3]={targetV.vx,targetV.vy,targetV.vz};
+                     NPCAccelerate(r,velocity,target,accelerationThisFrame,NormalFrameTime);
+                     sbPtr->DynPtr->LinVelocity.vx=velocity[0];sbPtr->DynPtr->LinVelocity.vy=velocity[1];sbPtr->DynPtr->LinVelocity.vz=velocity[2];}
+                } else {
+                    accelerationThisFrame=MUL_FIXED(accelerationThisFrame,NormalFrameTime);
+                    deltaV.vx=targetV.vx-sbPtr->DynPtr->LinVelocity.vx;
+                    deltaV.vy=targetV.vy-sbPtr->DynPtr->LinVelocity.vy;
+                    deltaV.vz=targetV.vz-sbPtr->DynPtr->LinVelocity.vz;
+                    deltaVMag=Approximate3dMagnitude(&deltaV);
+                    if(deltaVMag<=accelerationThisFrame)sbPtr->DynPtr->LinVelocity=targetV;
+                    else {
+                        Normalise(&deltaV);
+                        sbPtr->DynPtr->LinVelocity.vx+=MUL_FIXED(deltaV.vx,accelerationThisFrame);
+                        sbPtr->DynPtr->LinVelocity.vy+=MUL_FIXED(deltaV.vy,accelerationThisFrame);
+                        sbPtr->DynPtr->LinVelocity.vz+=MUL_FIXED(deltaV.vz,accelerationThisFrame);
+                    }
+                }
+                /* Combat retreat/cover movement must not cancel the firing turn
+                   by rotating the marine back towards his travel direction. */
+                if(sbPtr->I_SBtype==I_BehaviourMarine && NPCSupportCanCommand(sbPtr)
+                   && ((MARINE_STATUS_BLOCK*)sbPtr->SBdataptr)->behaviourState==MBS_Firing)return 1;
                 {
                         int dotP,magV;
                         VECTORCH normVelocity;
@@ -902,6 +924,17 @@ int NPCOrientateToVector(STRATEGYBLOCK *sbPtr, VECTORCH *zAxisVector,int turnspe
         LOCALASSERT(sbPtr->DynPtr);
         LOCALASSERT(zAxisVector);
 
+
+        if(!offset && (sbPtr->I_SBtype==I_BehaviourAlien || sbPtr->I_SBtype==I_BehaviourMarine || sbPtr->I_SBtype==I_BehaviourPredator)){
+            double basis[9];int i,aligned;int *legacy=&sbPtr->DynPtr->OrientMat.mat11;
+            if(NormalFrameTime<=0)return 0;
+            for(i=0;i<9;i++)basis[i]=legacy[i]/65536.0;
+            aligned=AlienTurnBasis(basis,zAxisVector->vx,zAxisVector->vy,zAxisVector->vz,
+                  turnspeed*(6.283185307179586/4096.0)*(NormalFrameTime/65536.0));
+            for(i=0;i<9;i++)legacy[i]=(int)lround(basis[i]*65536.0);
+            MatrixToEuler(&sbPtr->DynPtr->OrientMat,&sbPtr->DynPtr->OrientEuler);
+            return aligned;
+        }
         localZAxisVector = *zAxisVector;
 
         /* zero vector: nothing to do */
@@ -1196,6 +1229,23 @@ void NPCGetMovementDirection(STRATEGYBLOCK *sbPtr, VECTORCH *velocityDirection, 
         AlignVelocityToGravity(sbPtr,&targetDirection);
         #endif
 
+        /* The floor-polygon planner below works only in world X/Z. A wall or
+         * ceiling crawler must retain the 3D direction to its module exit;
+         * picking a floor edge can point entirely along the support normal,
+         * which NPCSetVelocity then removes and leaves the alien stationary.
+         * Waypoint routes above still take precedence, and collision/avoidance
+         * continue to validate and resolve the requested movement. */
+        if (AlienIsCrawling(sbPtr) && sbPtr->DynPtr->GravityDirection.vy < 63000)
+        {
+                *velocityDirection = targetDirection;
+                return;
+        }
+
+        if(sbPtr->I_SBtype==I_BehaviourMarine && AvP.Network==I_No_Network && AvP.PlayerType==I_Marine){
+            MARINE_STATUS_BLOCK *m=sbPtr->SBdataptr;
+            if(!NPCSupportCanCommand(sbPtr) && !sbPtr->supportFollow && m->My_Weapon->ARealMarine && !m->Android && NPCNavDirection(sbPtr,&m->localNav,targetPosition,velocityDirection))return;
+        }
+
         /* first- a hack to cope with stairs and al those little polygons:
         if we're in stairs just return the target direction. This is okay aslong as we don't 
         have curved stairs*/
@@ -1437,8 +1487,8 @@ void NPCGetMovementDirection(STRATEGYBLOCK *sbPtr, VECTORCH *velocityDirection, 
                         edgeVector.vy = 0;
                         edgeVector.vz = GMD_myPolyPoints[ePoint2].vz - GMD_myPolyPoints[ePoint1].vz;
                 
-                        Normalise(&edgeVector);
                         vecExtent = Magnitude(&edgeVector);
+                        Normalise(&edgeVector);
                 
                         /* This IS the right way around */
                         edgeMatrix.mat11 = myPolyEdgeNormals[i].vx;
@@ -2004,6 +2054,7 @@ AIMODULE *GetNextModuleForLink_Core(AIMODULE *source,AIMODULE *target,int max_de
                                                         ||((*AdjModuleRefPtr)->RouteFinder_IterationNumber!=RouteFinder_CallsThisFrame)
                                                 )) {
                                                 /* Add to queue. */
+                                                if((NL_Queue_End+1)%NEARLINK_QUEUE_LENGTH==NL_Queue_Exec)return NULL;
                                                 NearLink_Route_Queue[NL_Queue_End].aimodule=(*AdjModuleRefPtr);
                                                 NearLink_Route_Queue[NL_Queue_End].depth=NearLink_Route_Queue[NL_Queue_Exec].depth+1;
                                                 /* Remember first step. */
@@ -3080,6 +3131,13 @@ void Initialise_AvoidanceManager(STRATEGYBLOCK *sbPtr, NPC_AVOIDANCEMANAGER *man
         dynPtr = sbPtr->DynPtr;
         LOCALASSERT(dynPtr);
 
+        /* Progress belongs to this avoidance episode, not a previous collision. */
+        if(sbPtr->SBdataptr && (sbPtr->I_SBtype==I_BehaviourMarine || sbPtr->I_SBtype==I_BehaviourPredator)){
+            NPC_MOTION_RUNTIME *r=sbPtr->I_SBtype==I_BehaviourMarine?
+                &((MARINE_STATUS_BLOCK*)sbPtr->SBdataptr)->precision:
+                &((PREDATOR_STATUS_BLOCK*)sbPtr->SBdataptr)->precision;
+            r->routeValid=0;r->routeTime=0;
+        }
         ClearThirdAvoidance(sbPtr,manager);
 
         manager->avoidanceDirection.vx=0;
@@ -3134,7 +3192,9 @@ int New_NPC_IsObstructed(STRATEGYBLOCK *sbPtr, NPC_AVOIDANCEMANAGER *manager)
     	return(0);
     }
     
-	if (sbPtr->I_SBtype==I_BehaviourMarine) {
+	if ((sbPtr->I_SBtype==I_BehaviourMarine && dynPtr->IsInContactWithFloor) ||
+        (sbPtr->I_SBtype==I_BehaviourPredator && dynPtr->IsInContactWithFloor &&
+         ((PREDATOR_STATUS_BLOCK*)sbPtr->SBdataptr)->behaviourState==PBS_Attacking)) {
 		if (SimpleEdgeDetectionTest(sbPtr,&vcr)) {
 			vcr.NextCollisionReportPtr=nextReport;
 			nextReport=&vcr;
@@ -3292,8 +3352,11 @@ int New_NPC_IsObstructed(STRATEGYBLOCK *sbPtr, NPC_AVOIDANCEMANAGER *manager)
         
             return(1);
         }
-        case AvSS_SecondAvoidance:
         case AvSS_ThirdAvoidance:
+            /* The execution phase owns restarts. Preserve its scan and basePoint
+               so it can measure progress before deciding to restart. */
+            return(1);
+        case AvSS_SecondAvoidance:
         {
             /* Right, we've run into something again again. (Again.) */
             
@@ -3319,6 +3382,19 @@ AVOIDANCE_RETURN_CONDITION AllNewAvoidanceKernel(STRATEGYBLOCK *sbPtr,NPC_AVOIDA
         dynPtr = sbPtr->DynPtr;
         LOCALASSERT(dynPtr);
         
+
+        if(sbPtr->I_SBtype==I_BehaviourMarine || sbPtr->I_SBtype==I_BehaviourPredator){
+            NPC_MOTION_RUNTIME *r=sbPtr->I_SBtype==I_BehaviourMarine?&((MARINE_STATUS_BLOCK*)sbPtr->SBdataptr)->precision:&((PREDATOR_STATUS_BLOCK*)sbPtr->SBdataptr)->precision;
+            double dx=(double)dynPtr->Position.vx-r->routeX,dz=(double)dynPtr->Position.vz-r->routeZ;
+            if(!r->routeValid || dx*dx+dz*dz>200.0*200.0){r->routeX=dynPtr->Position.vx;r->routeZ=dynPtr->Position.vz;r->routeTime=0;r->routeValid=1;}
+            else r->routeTime+=NormalFrameTime;
+            if(r->routeTime>=3*ONE_FIXED/2 && (manager->substate==AvSS_FirstAvoidance || manager->substate==AvSS_SecondAvoidance)){
+                if(sbPtr->I_SBtype==I_BehaviourMarine)InitWaypointManager(&((MARINE_STATUS_BLOCK*)sbPtr->SBdataptr)->waypointManager);
+                else InitWaypointManager(&((PREDATOR_STATUS_BLOCK*)sbPtr->SBdataptr)->waypointManager);
+                InitialiseThirdAvoidance(sbPtr,manager);r->routeTime=0;
+            }
+            if(manager->substate==AvSS_FreeMovement){r->routeValid=0;r->routeTime=0;}
+        }
         /* Want to split here based on substate. */
 
         switch (manager->substate) {
@@ -3400,7 +3476,15 @@ AVOIDANCE_RETURN_CONDITION AllNewAvoidanceKernel(STRATEGYBLOCK *sbPtr,NPC_AVOIDA
                 case AvSS_ThirdAvoidance:
                 {
                         int result;
-                        /* Let's have a whole function here! */
+                        /* Complete the directional scan even while contact persists.
+                           Once moving, an attempt must terminate if it makes no exit. */
+                        if(manager->stage>=10) {
+                            manager->timer-=NormalFrameTime;
+                            if(manager->timer<=0) {
+                                Initialise_AvoidanceManager(sbPtr,manager);
+                                return AvRC_Failure;
+                            }
+                        }
                         result=ExecuteThirdAvoidance(sbPtr,manager);
                         if (result==-1) {
                                 /* Totally fubared.  Return failure. */
@@ -3810,7 +3894,8 @@ void InitialiseThirdAvoidance(STRATEGYBLOCK *sbPtr,NPC_AVOIDANCEMANAGER *manager
                 QuatToMat(&deltaRotQ,&manager->rotationMatrix);
 
         }
-        /* Say we're in Third Avoidance. */
+        /* Bound the escape attempt in simulation time, not rendered frames. */
+        manager->timer=STANDARD_AVOIDANCE_TIME;
         manager->substate=AvSS_ThirdAvoidance;
 }
 
@@ -3995,7 +4080,7 @@ void CastLOSSpear(STRATEGYBLOCK *sbPtr, VECTORCH *muzzlepos, VECTORCH *in_shotve
 
 int SimpleEdgeDetectionTest(STRATEGYBLOCK *sbPtr, COLLISIONREPORT *vcr) {
 
-	VECTORCH alpha,beta,tvec;
+	VECTORCH alpha,beta,tvec,travelDirection;
 
 	GetTargetingPointOfObject_Far(sbPtr,&alpha);
 	/* Now add half a metre in positive z. */
@@ -4003,6 +4088,12 @@ int SimpleEdgeDetectionTest(STRATEGYBLOCK *sbPtr, COLLISIONREPORT *vcr) {
 	tvec.vx=sbPtr->DynPtr->OrientMat.mat31;
 	tvec.vy=sbPtr->DynPtr->OrientMat.mat32;
 	tvec.vz=sbPtr->DynPtr->OrientMat.mat33;
+    if(sbPtr->I_SBtype==I_BehaviourPredator || sbPtr->I_SBtype==I_BehaviourMarine){
+        /* During combat facing and travel are independent. Probe the actual
+         * retreat/strafe direction so aiming at the player cannot hide a ledge. */
+        tvec=sbPtr->DynPtr->LinVelocity;tvec.vy=0;Normalise(&tvec);
+    }
+    travelDirection=tvec;
 
 	tvec.vx=MUL_FIXED(tvec.vx,1000);
 	tvec.vy=MUL_FIXED(tvec.vy,1000);
@@ -4041,9 +4132,9 @@ int SimpleEdgeDetectionTest(STRATEGYBLOCK *sbPtr, COLLISIONREPORT *vcr) {
 
 	/* Must be about to hit a rail or an edge? */
 	vcr->ObstacleSBPtr=NULL;
-	vcr->ObstacleNormal.vx=-sbPtr->DynPtr->OrientMat.mat31;
-	vcr->ObstacleNormal.vy=-sbPtr->DynPtr->OrientMat.mat32;
-	vcr->ObstacleNormal.vz=-sbPtr->DynPtr->OrientMat.mat33;
+	vcr->ObstacleNormal.vx=-travelDirection.vx;
+	vcr->ObstacleNormal.vy=-travelDirection.vy;
+	vcr->ObstacleNormal.vz=-travelDirection.vz;
 	vcr->ObstaclePoint=LOS_Point;
 	vcr->NextCollisionReportPtr=NULL;
 

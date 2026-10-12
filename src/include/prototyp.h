@@ -2463,6 +2463,9 @@ void CrossProduct(VECTORCH *a, VECTORCH *b, VECTORCH *c);
    less than half this. Very fast compared to other approaches. */
 int Approximate3dMagnitude(VECTORCH *v);
 
+void Probe113_RenderTracef(const char *format, ...);
+void Probe113_BeginMapTrace(const char *phase);
+
 
 
 

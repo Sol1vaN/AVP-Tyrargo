@@ -946,7 +946,7 @@ void MakeXenoborgNear(STRATEGYBLOCK *sbPtr)
 {
 	extern MODULEMAPBLOCK AlienDefaultMap;
 
-	MODULE tempModule;
+	MODULE tempModule = {0};
 	DISPLAYBLOCK *dPtr;
 	DYNAMICSBLOCK *dynPtr;
 	XENO_STATUS_BLOCK *xenoStatusPointer;    

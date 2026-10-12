@@ -12,6 +12,8 @@
 extern "C"
 {
 #include "language.h"
+#include "d3d_hud.h"
+#include "hud_layout.h"
 #include "avp_menus.h"
 extern SCREENDESCRIPTORBLOCK ScreenDescriptorBlock;
 extern int DebouncedGotAnyKey;
@@ -28,6 +30,7 @@ extern int FadingGameInAfterLoading;
 extern void InGameFlipBuffers();
 
 extern void RenderStringCentred(char *stringPtr, int centreX, int y, int colour);
+extern void D3D_SetBriefingTextRenderActive(int active);
 
 extern void BltImage(RECT *dest, DDSurface *image, RECT *src);
 extern int CreateOGLTexture(D3DTexture *, unsigned char *);
@@ -66,7 +69,9 @@ static void Draw_Progress_Bar(void) {
 	RenderBriefingText(ScreenDescriptorBlock.SDB_Height/2, ONE_FIXED);
 
 	if (LoadingInProgress == 0) {
-		RenderStringCentred(GetTextString(TEXTSTRING_INGAME_PRESSANYKEYTOCONTINUE), ScreenDescriptorBlock.SDB_Width/2, (ScreenDescriptorBlock.SDB_Height*23)/24-9, 0xffffffff);
+		D3D_SetBriefingTextRenderActive(1);
+		RenderStringCentred(GetTextString(TEXTSTRING_INGAME_PRESSANYKEYTOCONTINUE), ScreenDescriptorBlock.SDB_Width/2, (ScreenDescriptorBlock.SDB_Height*23)/24-MUL_FIXED(HUD_FONT_HEIGHT,D3D_GetActiveConsoleTextScaleFixed())/2-4, 0xffffffff);
+		D3D_SetBriefingTextRenderActive(0);
 	}
 
 	ThisFramesRenderingHasFinished();

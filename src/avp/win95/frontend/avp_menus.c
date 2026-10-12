@@ -1,3 +1,17 @@
+#include "screen_layout.h"
+#include "event_latency.h"
+#include "optimized_ammo.h"
+#include "molecular_acid.h"
+#include "campaign_state.h"
+#include "tyrargo_instrumentation.h"
+#include <math.h>
+#include "menu_preview.h"
+#include "crt_filter.h"
+#include "menu_viewport.h"
+#include "version.h"
+#include "motion_params.h"
+#include "shake_params.h"
+#include <SDL3/SDL.h>
 #include "3dc.h"
 #include "inline.h"
 #include "module.h"
@@ -11,9 +25,14 @@
 
 #include "avp_menudata.h"
 #include "avp_menus.h"
+#include "camera_motion.h"
+#include "dev_viewmodel.h"
+#include "../text_encoding.h"
 #include "avp_envinfo.h"
 
 #include "hud_layout.h"
+#include "d3d_hud.h"
+#include "player_fov.h"
 #include "avp_userprofile.h"
 #include "huffman.hpp"
 
@@ -31,6 +50,8 @@
 #include "avp_menugfx.hpp"
 #include "avp_intro.h"
 #include "fmv.h"
+#include "water_effect.h"
+#include "fmv_backend.h"
 
 /* used to get file time */
 #include <sys/types.h>
@@ -45,18 +66,44 @@ extern void EndMenuBackgroundBink(void);
 
 /* KJL 11:22:37 23/06/98 - Hopefully these will be the final menus! */
 
+/* The custom FPS cap begins at 100; its first digit replaces that default. */
+static int VideoFPSCapCustomEditStartsFresh;
+
 extern int IDemandSelect(void);
 
 extern char *GetVideoModeDescription(void);
 extern char *GetVideoModeDescription2(void);
 extern char *GetVideoModeDescription3(void);
+extern char *GetVideoRendererDescription(void);
+extern char *GetVideoAspectDescription(void);
+extern char *GetVideoResolutionDescription(void);
+extern char *GetVideoRefreshDescription(void);
+extern char *GetVideoScreenModeDescription(void);
+extern char *GetVideoVSyncDescription(void);
+extern char *GetVideoFPSCapDescription(void);
 extern void PreviousVideoMode(void);
 extern void PreviousVideoMode2(void);
 extern void NextVideoMode(void);
 extern void NextVideoMode2(void);
+extern void PreviousVideoAspect(void);
+extern void NextVideoAspect(void);
+extern void PreviousVideoRefresh(void);
+extern void NextVideoRefresh(void);
+extern void PreviousVideoScreenMode(void);
+extern void NextVideoScreenMode(void);
+extern void PreviousVideoVSync(void);
+extern void NextVideoVSync(void);
+extern void PreviousVideoFPSCap(void);
+extern void NextVideoFPSCap(void);
+extern int VideoFPSCapIsCustom(void);
+extern void ResetVideoFPSCapToDefault(void);
+extern int CurrentVideoFPSCapCustom;
 extern void SaveVideoModeSettings(void);
 extern void LoadDeviceAndVideoModePreferences(void);
 extern void SaveDeviceAndVideoModePreferences(void);
+extern int ScreenshotFormat;
+extern int ApplySelectedVideoMode(void);
+extern int RestartOpenGLVideoContextIfNeeded(void);
 
 extern void MakeSelectSessionMenu(void);
 
@@ -67,12 +114,18 @@ extern void MakeAlienKeyConfigMenu(void);
 extern void MakeUserProfileSelectMenu(void);
 
 extern void SaveKeyConfiguration(void);
+extern int MusicPlayMode;
+extern int CRTFilterEnabled;
 
 
 extern void D3D_DrawSliderBar(int x, int y, int alpha);
 extern void D3D_DrawSlider(int x, int y, int alpha);
 extern void D3D_FadeDownScreen(int brightness, int colour);
 extern void PlayIntroSequence(void);
+extern void FMVBackend_EnsureMenuMusic(void);
+extern int MenuBackgroundType,MenuMusicMode,MenuMusic99Available;
+extern void FMVBackend_RefreshMenuAssets(void);
+extern int FMVBackend_DrawMenuBackground(void);
 
 extern void MinimalNetCollectMessages(void);
 
@@ -100,15 +153,111 @@ extern void AvP_UpdateMenus(void);
 static void SetupNewMenu(enum AVPMENU_ID menuID);
 static void RenderMenu(void);
 static void RenderBriefingScreenInfo(void);
+/* Main-menu canvas units, scaled together with the existing menu. */
+#define BRIEFING_HEADER_LIFT 54
+static int AcidMenuTier=1;
+extern void RenderAcidMenuText(char*,int,int,int);
+extern void RenderCampaignModeText(char*,int,int,int,int);
 static void RenderEpisodeSelectMenu(void);
 static void RenderKeyConfigurationMenu(void);
 static void RenderUserProfileSelectMenu(void);
 static void RenderLoadGameMenu(void);
+static int ScaleInGameMenuTextX(int x);
+static int Hardware_RenderScaledInGameMenuText(char *textPtr, int x, int y, int alpha, enum AVPMENUFORMAT_ID format);
+static int Hardware_RenderScaledInGameMenuText_Coloured(char *textPtr, int x, int y, int alpha, enum AVPMENUFORMAT_ID format, int red, int green, int blue);
+static int InGameMenuTextUsesNativeAnchors = 0;
 static void RenderConfigurationDescriptionString();
 static void ActUponUsersInput(void);
 static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interactionID);
+static void ResumeGameFromMenu(void);
+/* ENTER restores the requested per-control defaults in both menu contexts. */
+static int ResetRequestedTextSliderOnSelect(AVPMENU_ELEMENT *elementPtr)
+{
+	switch (elementPtr->a.TextDescription)
+	{
+		case TEXTSTRING_CROUCH_TOGGLE_NEW:
+		case TEXTSTRING_UNLIMITED_SAVES_NEW:
+		case TEXTSTRING_SMART_JETPACK_NEW:
+		case TEXTSTRING_MARINE_CROSSHAIR_THICKNESS_NEW:
+		case TEXTSTRING_VERTICAL_PITCH_NEW:
+		case TEXTSTRING_HUD_TEXTURE_FILTER_NEW:
+		case TEXTSTRING_NOISE_SCALE_NEW:
+			*elementPtr->c.SliderValuePtr = 0;
+			return 1;
+		case TEXTSTRING_COLOR_BIT_DEPTH_NEW:
+			*elementPtr->c.SliderValuePtr = OPENGL_COLOR_BIT_DEPTH_32;
+			return 1;
+		case TEXTSTRING_ANTIALIASING_NEW:
+                *elementPtr->c.SliderValuePtr = 0;
+                return 1;
+		case TEXTSTRING_ANISOTROPY_NEW:
+                *elementPtr->c.SliderValuePtr = 0;
+                return 1;
+		case TEXTSTRING_TEXTURE_FILTER_NEW:
+                *elementPtr->c.SliderValuePtr = 1;
+                return 1;
+		case TEXTSTRING_WEAPON_FOV_STYLE_NEW:
+			*elementPtr->c.SliderValuePtr = WEAPON_FOV_STYLE_STRETCHED;
+			return 1;
+		case TEXTSTRING_FMV_FILTER_NEW:
+            *elementPtr->c.SliderValuePtr=1;
+            SaveDeviceAndVideoModePreferences();
+            return 1;
+		case TEXTSTRING_FMV_SCALE_NEW:
+			*elementPtr->c.SliderValuePtr = FMV_SCALE_ULTRAWIDE_X25;
+			return 1;
+		default:
+			return 0;
+	}
+}
+
+static int VanillaSliderUsesLiveCounter(int textDescription)
+{
+	switch (textDescription)
+	{
+		case TEXTSTRING_MOUSECONTROLS_YSENSITIVITY:
+		case TEXTSTRING_MOUSECONTROLS_XSENSITIVITY:
+		case TEXTSTRING_TRACKERBALL_VERTICAL_SENSITIVITY:
+		case TEXTSTRING_TRACKERBALL_HORIZONTAL_SENSITIVITY:
+		case TEXTSTRING_AVOPTIONS_EFFECTSVOLUME:
+		case TEXTSTRING_AVOPTIONS_MUSICVOLUME:
+		case TEXTSTRING_AVOPTIONS_CDVOLUME:
+		case TEXTSTRING_AVOPTIONS_GAMMASETTING:
+        case TEXTSTRING_IMAGE_BRIGHTNESS_NEW:
+        case TEXTSTRING_IMAGE_CONTRAST_NEW:
+        case TEXTSTRING_IMAGE_SATURATION_NEW:
+			return 1;
+		default:
+			return 0;
+	}
+}
+
+static void FormatVanillaSliderCounter(const AVPMENU_ELEMENT *elementPtr, char *buffer, size_t bufferSize)
+{
+	int value = *elementPtr->c.SliderValuePtr;
+	int maximum = elementPtr->b.MaxSliderValue;
+	switch (elementPtr->a.TextDescription)
+	{
+        case TEXTSTRING_IMAGE_BRIGHTNESS_NEW: snprintf(buffer,bufferSize,"%+d%%",value-50);break;
+        case TEXTSTRING_IMAGE_CONTRAST_NEW:
+        case TEXTSTRING_IMAGE_SATURATION_NEW: snprintf(buffer,bufferSize,"%d%%",value);break;
+		case TEXTSTRING_AVOPTIONS_EFFECTSVOLUME:
+		case TEXTSTRING_AVOPTIONS_MUSICVOLUME:
+		case TEXTSTRING_AVOPTIONS_CDVOLUME:
+			if (maximum > 0) snprintf(buffer, bufferSize, "%d%%", (value * 100 + maximum / 2) / maximum);
+			else snprintf(buffer, bufferSize, "0%%");
+			break;
+		default:
+			snprintf(buffer, bufferSize, "%d", value);
+			break;
+	}
+}
+extern void SetMenuAVContrast(int mode);
 static void RenderMenuElement(AVPMENU_ELEMENT *elementPtr, int e, int y);
 static int HeightOfMenuElement(AVPMENU_ELEMENT *elementPtr);
+static int MenuElementIsVisible(AVPMENU_ELEMENT *elementPtr);
+static int HUDPositionForAspect(int numerator, int denominator);
+static void HUDPositionDescription(char *buffer, int bufferSize);
 void DisplayVideoModeUnavailableScreen(void);
 void CheckForCredits(void);
 void DoCredits(void);
@@ -116,11 +265,14 @@ BOOL RollCreditsText(int position, unsigned char *textPtr);
 extern void SelectMenuDisplayMode(void);
 static void InitMainMenusBackdrop(void);
 extern void DrawMainMenusBackdrop(void);
+extern void RenderFrontendScreenModeNotice(void);
 static void TestValidityOfCheatMenu(void);
 void SetBriefingTextForEpisode(int episode, I_PLAYER_TYPE playerID);
 void SetBriefingTextToBlank(void);
 void CheckForKeysWithMultipleAssignments(void);
 void HandleCheatModeFeatures(void);
+extern int FrameRate;
+int FPSDisplayPosition = FPS_DISPLAY_OFF;
 void ShowMenuFrameRate(void);
 static void KeyboardEntryQueue_Clear(void);
 static void KeyboardEntryQueue_StartProcessing(void);
@@ -182,12 +334,48 @@ extern SCREENDESCRIPTORBLOCK ScreenDescriptorBlock;
 extern int TimeScale;
 
 static AVP_MENUS AvPMenus;
+
+/* The software frontend has a legacy canvas or an expanded settings canvas. */
+int AvP_IsSoftwareMenuActive(void)
+{
+	return (AvPMenus.MenusState == MENUSSTATE_MAINMENUS);
+}
 extern AVPMENU  AvPMenusData[];
 
 extern int AlienEpisodeToPlay;
 extern int MarineEpisodeToPlay;
 extern int PredatorEpisodeToPlay;
+static int RememberedEpisode(I_PLAYER_TYPE species){
+ int max=NumberOfAvailableLevels(species);
+ int selected=UserProfilePtr?((int)UserProfilePtr->LastSelectedEpisode[species]-1):-1;
+ if(selected<0 || selected>max)selected=LevelMostLikelyToPlay(species);
+ if(selected<0)selected=0;if(selected>max)selected=max;
+ return selected;
+}
+static int EpisodeSelectionDirty;
+void AvP_FlushEpisodeSelection(void){
+ if(EpisodeSelectionDirty && UserProfilePtr){
+  SaveUserProfile(UserProfilePtr);
+  EpisodeSelectionDirty=0;
+ }
+}
+static int IsEpisodeSelector(enum AVPMENU_ID menu){
+ return menu==AVPMENU_MARINELEVELS || menu==AVPMENU_PREDATORLEVELS || menu==AVPMENU_ALIENLEVELS;
+}
+static void RememberEpisode(I_PLAYER_TYPE species,int episode){
+ if(!UserProfilePtr || species<0 || species>2 || episode<0 || episode>254)return;
+ unsigned char value=(unsigned char)(episode+1);
+ if(UserProfilePtr->LastSelectedEpisode[species]!=value){
+  UserProfilePtr->LastSelectedEpisode[species]=value;
+  EpisodeSelectionDirty=1;
+  /* Browsing must never synchronously rewrite the profile every arrow press.
+   * Other callers (load/automatic advance) commit outside the carousel. */
+  if(!IsEpisodeSelector(AvPMenus.CurrentMenu))AvP_FlushEpisodeSelection();
+ }
+}
+
 extern int UserProfileNumber;
+extern SDL_Window *window;
 AVP_USER_PROFILE *UserProfilePtr;
 
 SESSION_DESC SessionData[MAX_NO_OF_SESSIONS];
@@ -203,17 +391,240 @@ static int KeyConfigSelectionColumn;
 
 static int Brightness[16];
 
-static unsigned char MultipleAssignments[2][32];
+#define MAX_KEYCONFIG_BINDINGS (NUMBER_OF_PREDATOR_INPUTS+2+NUMBER_OF_MARINE_WEAPON_BINDS+NUMBER_OF_GLOBAL_COMMAND_BINDINGS)
+static unsigned char MultipleAssignments[2][MAX_KEYCONFIG_BINDINGS];
 
 static char *GetDescriptionOfKey(unsigned char key);
+static int KeyConfigVisibleBindingIndex(int menuElementIndex);
+static int KeyConfigMenuElementIndexForBinding(int bindingIndex);
+static void NormalizeMarineJetpackBindings(PLAYER_INPUT_CONFIGURATION *primaryInput, PLAYER_INPUT_CONFIGURATION *secondaryInput);
+static void NormalizePredatorSmartZoomDisabledBindings(PLAYER_INPUT_CONFIGURATION *primaryInput, PLAYER_INPUT_CONFIGURATION *secondaryInput);
+/* Smart Zoom is the only mode that authorises its zoom keys to share bindings
+ * with these four Predator actions. Once disabled, retain the zoom keys,
+ * clear every shared action, then make all remaining listed slots unique. */
+static void NormalizePredatorSmartZoomDisabledBindings(PLAYER_INPUT_CONFIGURATION *primaryInput, PLAYER_INPUT_CONFIGURATION *secondaryInput)
+{
+	unsigned char *zoomBindings[4] = {
+		&primaryInput->f.ZoomIn, &secondaryInput->f.ZoomIn,
+		&primaryInput->g.ZoomOut, &secondaryInput->g.ZoomOut
+	};
+	unsigned char *actionBindings[8] = {
+		&primaryInput->a.NextWeapon, &primaryInput->b.PreviousWeapon,
+		&primaryInput->d.Cloak, &primaryInput->e.CycleVisionMode,
+		&secondaryInput->a.NextWeapon, &secondaryInput->b.PreviousWeapon,
+		&secondaryInput->d.Cloak, &secondaryInput->e.CycleVisionMode
+	};
+	int i;
+	int j;
+
+	/* Zoom holding has no meaning outside Smart Zoom and is no longer published. */
+	primaryInput->ReloadWeapon=KEY_VOID;
+	secondaryInput->ReloadWeapon=KEY_VOID;
+
+	/* Zoom in/out revert to ordinary, non-repeating bindings. */
+	for (i=0; i<4; i++)
+	{
+		if (*zoomBindings[i]==KEY_VOID) continue;
+		for (j=0; j<i; j++)
+		{
+			if (*zoomBindings[i]==*zoomBindings[j])
+			{
+				*zoomBindings[i]=KEY_VOID;
+				break;
+			}
+		}
+	}
+
+	/* An action that used a zoom key loses that shared assignment. Any other
+	 * duplicate among the four actions is also cleared deterministically. */
+	for (i=0; i<8; i++)
+	{
+		int sharedWithZoom=0;
+		if (*actionBindings[i]==KEY_VOID) continue;
+		for (j=0; j<4; j++)
+		{
+			if (*actionBindings[i]==*zoomBindings[j])
+			{
+				sharedWithZoom=1;
+				break;
+			}
+		}
+		if (sharedWithZoom)
+		{
+			*actionBindings[i]=KEY_VOID;
+			continue;
+		}
+		for (j=0; j<i; j++)
+		{
+			if (*actionBindings[i]==*actionBindings[j])
+			{
+				*actionBindings[i]=KEY_VOID;
+				break;
+			}
+		}
+	}
+}
+extern int SmartZoomBindingRowPublished;
+
+static int KeyConfigActionRowCount(void);
+static int KeyConfigWeaponRowCount(void);
+static int KeyConfigGlobalCommandRowCount(void);
+static int KeyConfigWeaponSlotForRow(int weaponRow);
+static int KeyConfigWeaponSlotForRow(int weaponRow)
+{
+	static const unsigned char MarineSlots[NUMBER_OF_MARINE_WEAPON_BINDS] = {7,8,0,1,5,2,4,3,6};
+	static const unsigned char PredatorSlots[NUMBER_OF_PREDATOR_WEAPON_BINDS] = {0,1,2,5,4,3};
+
+	switch (AvPMenus.CurrentMenu)
+	{
+		case AVPMENU_MARINEKEYCONFIG: return (weaponRow<NUMBER_OF_MARINE_WEAPON_BINDS) ? MarineSlots[weaponRow] : -1;
+		case AVPMENU_PREDATORKEYCONFIG: return (weaponRow<NUMBER_OF_PREDATOR_WEAPON_BINDS) ? PredatorSlots[weaponRow] : -1;
+		case AVPMENU_ALIENKEYCONFIG: return -1;
+		default: return -1;
+	}
+}
+static unsigned char *KeyConfigBindingPointer(int primary, int menuElementIndex);
 static int OkayToPlayNextEpisode(void);
+extern int LengthOfMenuText(char *textPtr);
+/* Clip only the label, never the stored name, also on the delete prompt. */
+static char *ProfileMenuLabel(const char *name)
+{
+    static char label[MAX_SIZE_OF_USERS_NAME+4];
+    size_t n=strlen(name);
+    if(n>MAX_SIZE_OF_USERS_NAME)n=MAX_SIZE_OF_USERS_NAME;
+    memcpy(label,name,n);label[n]=0;
+    while(n && LengthOfMenuText(label)>MENU_RIGHTXEDGE-MENU_LEFTXEDGE-20)
+    {
+        --n;
+        /* Do not split a UTF-8 suffix in an imported profile name. */
+        while(n && ((unsigned char)name[n]&0xc0)==0x80)--n;
+        memcpy(label,name,n);label[n]=0;strcat(label,"...");
+    }
+    return label;
+}
+static unsigned char PlayerPreviousVisionBindings[2];
 static PLAYER_INPUT_CONFIGURATION PlayerInputPrimaryConfig;
 static PLAYER_INPUT_CONFIGURATION PlayerInputSecondaryConfig;
+static WEAPON_INPUT_CONFIGURATION PlayerWeaponPrimaryConfig;
+static WEAPON_INPUT_CONFIGURATION PlayerWeaponSecondaryConfig;
+static GLOBAL_COMMAND_INPUT_CONFIGURATION PlayerGlobalCommandPrimaryConfig;
+static GLOBAL_COMMAND_INPUT_CONFIGURATION PlayerGlobalCommandSecondaryConfig;
 CONTROL_METHODS PlayerControlMethods;
 JOYSTICK_CONTROL_METHODS PlayerJoystickControlMethods;
 
 static void RenderScrollyMenu();
 static void RenderHelpString();
+static int MenuPreviewAmount,MenuPreviewTarget;
+static double MenuPreviewProgress;
+static double MenuColourBarsProgress=1.0;
+static int MenuColourBarsAlpha=ONE_FIXED;
+static int MenuAVScrollFirst;
+float MenuPreviewBandLow=-1.0f,MenuPreviewBandHigh=-1.0f;
+static Uint64 MenuPreviewLastTick;
+
+static int MenuPreviewThicknessSelected(void)
+{
+ if(AvPMenus.MenusState!=MENUSSTATE_INGAMEMENUS || AvPMenus.CurrentMenu!=AVPMENU_INGAMEAVOPTIONS || AvP.PlayerType!=I_Marine)return 0;
+ if(AvPMenus.CurrentlySelectedElement<0 || AvPMenus.CurrentlySelectedElement>=AvPMenus.NumberOfElementsInMenu)return 0;
+ AVPMENU_ELEMENT *e=&AvPMenus.MenuElements[AvPMenus.CurrentlySelectedElement];
+ return e->ElementID==AVPMENU_ELEMENT_TEXTSLIDER && e->c.SliderValuePtr==&MarineCrosshairThicknessMode;
+}
+static int MenuPreviewSelected(void)
+{
+ AVPMENU_ELEMENT *e;
+ if(AvP.Network!=I_No_Network && !netGameData.skirmishMode)return 0;
+ if(MenuPreviewThicknessSelected())return 1;
+ if(AvPMenus.MenusState!=MENUSSTATE_INGAMEMENUS || AvPMenus.CurrentMenu!=AVPMENU_INGAMEAVOPTIONS)return 0;
+ if(AvPMenus.CurrentlySelectedElement<0||AvPMenus.CurrentlySelectedElement>=AvPMenus.NumberOfElementsInMenu)return 0;
+ e=&AvPMenus.MenuElements[AvPMenus.CurrentlySelectedElement];
+ return e->ElementID==AVPMENU_ELEMENT_FOV || e->ElementID==AVPMENU_ELEMENT_WEAPON_FOV ||
+  e->ElementID==AVPMENU_ELEMENT_HUD_POSITION || e->ElementID==AVPMENU_ELEMENT_HUD_SCALE ||
+  e->ElementID==AVPMENU_ELEMENT_CROSSHAIR_SCALE || e->ElementID==AVPMENU_ELEMENT_HUD_ANCHORED ||
+  (e->ElementID==AVPMENU_ELEMENT_TEXTSLIDER &&
+   (e->c.SliderValuePtr==&WeaponFOVStyle || e->c.SliderValuePtr==&MonitorNoSignalEffectMode ||
+    e->c.SliderValuePtr==&FPSDisplayPosition || e->c.SliderValuePtr==&CRTFilterEnabled || e->c.SliderValuePtr==&WaterEffectMode)) ||
+  (e->ElementID==AVPMENU_ELEMENT_SLIDER && (e->c.SliderValuePtr==&RequestedGammaSetting ||
+   e->c.SliderValuePtr==&ImageBrightness || e->c.SliderValuePtr==&ImageContrast || e->c.SliderValuePtr==&ImageSaturation));
+}
+int AvP_MenuIsActive(void)
+{
+ return AvPMenus.MenusState==MENUSSTATE_MAINMENUS || AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS;
+}
+int AvP_MenuPreviewHideCrosshair(void)
+{
+ /* Paused scene never supplies an aiming reticle. The selected scale control
+  * (or Marine stroke editor) draws its own sample below the row. */
+ return AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS;
+}
+void AvP_UpdateMenuPreview(void)
+{
+ Uint64 now=SDL_GetTicks(),dt=MenuPreviewLastTick?now-MenuPreviewLastTick:0;
+ MenuPreviewBandLow=MenuPreviewBandHigh=-1.0f;MenuPreviewLastTick=now;MenuPreviewTarget=MenuPreviewSelected();
+ if(AvPMenus.MenusState!=MENUSSTATE_INGAMEMENUS){MenuPreviewAmount=MenuPreviewTarget=0;MenuPreviewProgress=0;MenuColourBarsProgress=1;MenuColourBarsAlpha=ONE_FIXED;return;}
+ if(dt>100)dt=100;
+ {
+  int hideBars=0;
+  if(AvPMenus.CurrentMenu==AVPMENU_INGAMEAVOPTIONS && AvPMenus.CurrentlySelectedElement>=0 &&
+     AvPMenus.CurrentlySelectedElement<AvPMenus.NumberOfElementsInMenu){
+   int id=AvPMenus.MenuElements[AvPMenus.CurrentlySelectedElement].ElementID;
+   /* Every scene preview except the four colour controls needs an unobstructed view. */
+   hideBars=MenuPreviewSelected() && id!=AVPMENU_ELEMENT_SLIDER;
+  }
+  MenuColourBarsProgress+=(hideBars?-1.0:1.0)*(double)dt/1600.0;
+  if(MenuColourBarsProgress<0)MenuColourBarsProgress=0;
+  if(MenuColourBarsProgress>1)MenuColourBarsProgress=1;
+  MenuColourBarsAlpha=(int)(ONE_FIXED*MenuColourBarsProgress*MenuColourBarsProgress*(3.0-2.0*MenuColourBarsProgress)+0.5);
+ }
+ MenuPreviewProgress+=(MenuPreviewTarget?1.0:-1.0)*(double)dt/1600.0;
+ if(MenuPreviewProgress<0)MenuPreviewProgress=0;if(MenuPreviewProgress>1)MenuPreviewProgress=1;
+ MenuPreviewAmount=(int)(ONE_FIXED*MenuPreviewProgress*MenuPreviewProgress*(3.0-2.0*MenuPreviewProgress)+0.5);
+}
+int AvP_MenuPreviewScene(void){return MenuPreviewTarget || MenuPreviewAmount>0;}
+static Uint64 TyrargoMenuVersionStart;
+static int TyrargoMenuVersionStarted;
+/* SetupNewMenu selects one of four root variants from the profile/debug state. */
+static int TyrargoMainMenu(void)
+{
+ if(AvPMenus.MenusState!=MENUSSTATE_MAINMENUS)return 0;
+ switch(AvPMenus.CurrentMenu){
+ case AVPMENU_MAIN:
+ case AVPMENU_MAIN_WITHCHEATS:
+ case AVPMENU_DEBUG_MAIN:
+ case AVPMENU_DEBUG_MAIN_WITHCHEATS:return 1;
+ default:return 0;
+ }
+}
+static int TyrargoVersionMenu(void)
+{
+ return TyrargoMainMenu() ||
+        (AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS && (AvPMenus.CurrentMenu==AVPMENU_INGAME || AvPMenus.CurrentMenu==AVPMENU_INNETGAME));
+}
+static int TyrargoVersionReserve(void)
+{
+ int scale=AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS?D3D_GetConsoleTextScaleFixed():ONE_FIXED;
+ return TyrargoVersionMenu()?2*MUL_FIXED(17,scale)+10:0;
+}
+static void RenderTyrargoVersion(void)
+{
+ int alpha,scale,line,y,ingame;
+ if(!TyrargoVersionMenu())return;
+ if(!TyrargoMenuVersionStarted){TyrargoMenuVersionStart=SDL_GetTicks();TyrargoMenuVersionStarted=1;}
+ /* Match idle pause entries exactly; fade towards their existing grey. */
+ alpha=MUL_FIXED(TyrargoVersionOpacity(SDL_GetTicks()-TyrargoMenuVersionStart),BRIGHTNESS_OF_DARKENED_ELEMENT);
+ if(!alpha)return;
+ ingame=AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS;
+ scale=ingame?D3D_GetConsoleTextScaleFixed():ONE_FIXED;
+ line=MUL_FIXED(17,scale);y=ScreenDescriptorBlock.SDB_Height-16-2*line;
+ if(ingame){
+  D3D_SetInGameMenuTextRenderActive(1);
+  Hardware_RenderSmallMenuText(TYRARGO_PROJECT_NAME,ScreenDescriptorBlock.SDB_Width/2,y,alpha,AVPMENUFORMAT_CENTREJUSTIFIED);
+  Hardware_RenderSmallMenuText(TYRARGO_VERSION_LABEL,ScreenDescriptorBlock.SDB_Width/2,y+line,alpha,AVPMENUFORMAT_CENTREJUSTIFIED);
+  D3D_SetInGameMenuTextRenderActive(0);
+ }else{
+  RenderSmallMenuText(TYRARGO_PROJECT_NAME,MENU_CENTREX,y,alpha,AVPMENUFORMAT_CENTREJUSTIFIED);
+  RenderSmallMenuText(TYRARGO_VERSION_LABEL,MENU_CENTREX,y+line,alpha,AVPMENUFORMAT_CENTREJUSTIFIED);
+ }
+}
 static void CheckForLoadGame();
 
 static void UpdateMultiplayerConfigurationMenu();
@@ -227,13 +638,138 @@ static const char* MultiplayerConfigurationName=0; //ditto
 
 extern int DebuggingCommandsActive;
 
+/* Key-config menu rows include text sliders. Map only actual bind rows to the
+   packed configuration structs so options never shift a binding. */
+static int KeyConfigVisibleBindingIndex(int menuElementIndex)
+{
+	int i;
+	int bindingIndex=0;
+	for (i=0; i<menuElementIndex; i++)
+	{
+		if (AvPMenus.MenuElements[i].ElementID==AVPMENU_ELEMENT_KEYCONFIG) bindingIndex++;
+	}
+	return bindingIndex;
+}
+
+static int KeyConfigMenuElementIndexForBinding(int bindingIndex)
+{
+	int i;
+	int current=0;
+	for (i=0; i<AvPMenus.NumberOfElementsInMenu; i++)
+	{
+		if (AvPMenus.MenuElements[i].ElementID==AVPMENU_ELEMENT_KEYCONFIG)
+		{
+			if (current==bindingIndex) return i;
+			current++;
+		}
+	}
+	return -1;
+}
+
+static void NormalizeMarineJetpackBindings(PLAYER_INPUT_CONFIGURATION *primaryInput, PLAYER_INPUT_CONFIGURATION *secondaryInput)
+{
+	/* Smart Jetpack uses a dedicated toggle key; Jump must always stay distinct. */
+	if (primaryInput->f.Jetpack!=KEY_VOID
+		&& (primaryInput->f.Jetpack==primaryInput->Jump || primaryInput->f.Jetpack==secondaryInput->Jump))
+		primaryInput->f.Jetpack=KEY_VOID;
+	if (secondaryInput->f.Jetpack!=KEY_VOID
+		&& (secondaryInput->f.Jetpack==primaryInput->Jump || secondaryInput->f.Jetpack==secondaryInput->Jump))
+		secondaryInput->f.Jetpack=KEY_VOID;
+}
+
+extern int SmartZoomBindingRowPublished;
+
+static int KeyConfigActionRowCount(void)
+{
+	switch (AvPMenus.CurrentMenu)
+	{
+		case AVPMENU_MARINEKEYCONFIG: return NUMBER_OF_MARINE_INPUTS;
+		case AVPMENU_PREDATORKEYCONFIG: return NUMBER_OF_PREDATOR_INPUTS+SmartZoomBindingRowPublished+1;
+		case AVPMENU_ALIENKEYCONFIG: return NUMBER_OF_ALIEN_INPUTS;
+		default: return 0;
+	}
+}
+
+static int KeyConfigWeaponRowCount(void)
+{
+	switch (AvPMenus.CurrentMenu)
+	{
+		case AVPMENU_MARINEKEYCONFIG: return NUMBER_OF_MARINE_WEAPON_BINDS;
+		case AVPMENU_PREDATORKEYCONFIG: return NUMBER_OF_PREDATOR_WEAPON_BINDS;
+		case AVPMENU_ALIENKEYCONFIG: return NUMBER_OF_ALIEN_WEAPON_BINDS;
+		default: return 0;
+	}
+}
+
+static int KeyConfigGlobalCommandRowCount(void)
+{
+	switch (AvPMenus.CurrentMenu)
+	{
+		case AVPMENU_MARINEKEYCONFIG:
+		case AVPMENU_PREDATORKEYCONFIG:
+		case AVPMENU_ALIENKEYCONFIG:
+			return NUMBER_OF_GLOBAL_COMMAND_BINDINGS;
+		default: return 0;
+	}
+}
+
+#define PREDATOR_SMART_ZOOM_HOLDING_BIND_INDEX 23
+
+static unsigned char *KeyConfigBindingPointer(int primary, int menuElementIndex)
+{
+	int visibleIndex = KeyConfigVisibleBindingIndex(menuElementIndex);
+	PLAYER_INPUT_CONFIGURATION *inputConfig = primary ? &PlayerInputPrimaryConfig : &PlayerInputSecondaryConfig;
+	WEAPON_INPUT_CONFIGURATION *weaponConfig = primary ? &PlayerWeaponPrimaryConfig : &PlayerWeaponSecondaryConfig;
+
+    if (visibleIndex < 0) return 0;
+    if (visibleIndex < KeyConfigActionRowCount())
+    {
+        /* Map Predator actions by identity, independently of their display order. */
+        if (AvPMenus.CurrentMenu==AVPMENU_PREDATORKEYCONFIG)
+        {
+            int label=AvPMenus.MenuElements[menuElementIndex].a.TextDescription;
+            if (label==TEXTSTRING_PREDATOR_PREVIOUS_VISION_NEW)
+                return &PlayerPreviousVisionBindings[primary?0:1];
+            if (label==TEXTSTRING_PREDATOR_ZOOM_HOLDING_NEW)
+                return &inputConfig->ReloadWeapon;
+            if (label>=TEXTSTRING_PREDATOR_KEY_FORWARD &&
+                label<TEXTSTRING_PREDATOR_KEY_FORWARD+NUMBER_OF_PREDATOR_INPUTS)
+                return ((unsigned char *)inputConfig)+(label-TEXTSTRING_PREDATOR_KEY_FORWARD);
+            return 0;
+        }
+		if (AvPMenus.CurrentMenu==AVPMENU_MARINEKEYCONFIG
+			&& visibleIndex>=19)
+		{
+			if (visibleIndex==19) return &inputConfig->ReloadWeapon;
+			return ((unsigned char *)inputConfig)+(visibleIndex-1);
+		}
+		return ((unsigned char *)inputConfig)+visibleIndex;
+	}
+
+	visibleIndex -= KeyConfigActionRowCount();
+	if (visibleIndex < KeyConfigWeaponRowCount())
+	{
+		int weaponSlot=KeyConfigWeaponSlotForRow(visibleIndex);
+		if (weaponSlot>=0) return &weaponConfig->Weapon[weaponSlot];
+	}
+	visibleIndex -= KeyConfigWeaponRowCount();
+	if (visibleIndex < KeyConfigGlobalCommandRowCount())
+	{
+		GLOBAL_COMMAND_INPUT_CONFIGURATION *globalConfig = primary
+			? &PlayerGlobalCommandPrimaryConfig : &PlayerGlobalCommandSecondaryConfig;
+		return ((unsigned char *)globalConfig)+visibleIndex;
+	}
+	return 0;
+}
+extern void SetFrontendModalFramesActive(int active);
+
 int AvP_MainMenus(void)
 {
-	#if 0
-	SaveDefaultPrimaryConfigs();
-	#else
-	LoadDefaultPrimaryConfigs();
-	#endif
+ SetFrontendModalFramesActive(0);
+ EventLatencyFrameBegin("[frontend setup]",-1);
+	/* Tyrargo defaults are compiled from the calibrated profile. Legacy
+	 * default.cfg must not silently replace them each time this menu opens.
+	 * Saved user profiles continue to restore their own bindings. */
 	
 	SoundSys_ResetFadeLevel();
 	SoundSys_Management();	
@@ -247,7 +783,7 @@ int AvP_MainMenus(void)
 	
 	TimeStampedMessage("start of menus");
 	// open a 640x480x16 screen     
-	SelectMenuDisplayMode();
+	{ EVENT_TICK stamp=EventLatencyBegin(); SelectMenuDisplayMode(); EventLatencyEnd(stamp,"frontend display mode",0,0,0,0,0); }
 	TimeStampedMessage("after SelectMenuDisplayMode");
 
 	
@@ -269,16 +805,18 @@ int AvP_MainMenus(void)
 	}
 	#endif
 
-	LoadAllAvPMenuGfx();
+	{ EVENT_TICK stamp=EventLatencyBegin(); LoadAllAvPMenuGfx(); EventLatencyEnd(stamp,"frontend load graphics",0,0,0,0,0); }
 	TimeStampedMessage("after LoadAllAvPMenuGfx");
 
 
 
 	ResetFrameCounter();
+ EventLatencyFrameEnd();
 
  	if (!LobbiedGame)	// Edmond
 		PlayIntroSequence();
 	
+ EventLatencyFrameBegin("[frontend entry]",-1);
 	if (VideoModeNotAvailable)
 	{	
 		LoadGameRequest = SAVELOAD_REQUEST_NONE;
@@ -286,12 +824,15 @@ int AvP_MainMenus(void)
 	}
 	VideoModeNotAvailable = 0;
 
-	if(AvP.LevelCompleted && CheatMode_Active == CHEATMODE_NONACTIVE && !DebuggingCommandsActive)
+    /* Play a completed campaign's ending on every run, including replay/debug.
+       Keep the original restrictions on recording progression below. */
+    if(AvP.LevelCompleted && AvP.Network==I_No_Network && !LobbiedGame)
+        HandlePostGameFMVs();
+	if(AvP.LevelCompleted && AvP.Network==I_No_Network && !LobbiedGame && CheatMode_Active == CHEATMODE_NONACTIVE)
 	{
-		HandlePostGameFMVs();
+		AvPMenus.MenusState = MENUSSTATE_MAINMENUS;
 		OkayToPlayNextEpisode();
 		AvP.LevelCompleted = 0;
-		AvPMenus.MenusState = MENUSSTATE_MAINMENUS;
 	}
 	else if(!LobbiedGame)
 	{
@@ -317,29 +858,44 @@ int AvP_MainMenus(void)
 
 	TimeStampedMessage("starting general menus");
 
-	while(AvPMenus.MenusState == MENUSSTATE_MAINMENUS)
+/* Gameplay returns can bypass the logo path; only reopen menu music when inactive. */
+FMVBackend_RefreshMenuAssets();
+FMVBackend_EnsureMenuMusic();
+
+EventLatencyFrameEnd();
+while(AvPMenus.MenusState == MENUSSTATE_MAINMENUS)
 	{
-		CheckForWindowsMessages();
-		DrawMainMenusBackdrop();
-		ReadUserInput();
+ EventLatencyFrameBegin("[frontend]",-1);
+ EventLatencyMenu(AvPMenus.CurrentMenu,AvPMenus.CurrentlySelectedElement);
+		{ EVENT_TICK stamp=EventLatencyBegin();
+          /* SetupNewMenu has completed. Scope permission to this event pump,
+           * never the intro, display setup, credits or graphics teardown. */
+          SetFrontendModalFramesActive(1);
+          CheckForWindowsMessages();
+          SetFrontendModalFramesActive(0);
+          EventLatencyEnd(stamp,"frontend window events",0,0,0,0,0); }
+		{ EVENT_TICK stamp=EventLatencyBegin(); DrawMainMenusBackdrop(); EventLatencyEnd(stamp,"frontend backdrop",0,0,0,0,0); }
+		{ EVENT_TICK stamp=EventLatencyBegin(); ReadUserInput(); EventLatencyEnd(stamp,"frontend input",0,0,0,0,0); }
 		AvP_UpdateMenus();
+        RenderFrontendScreenModeNotice();
    //	BezierCurve();
 		
 		ShowMenuFrameRate();
 
-		FlipBuffers();
-		FrameCounterHandler();
-		PlayMenuMusic();
+		{ EVENT_TICK stamp=EventLatencyBegin(); FlipBuffers(); EventLatencyEnd(stamp,"frontend present / swap",0,0,0,0,0); }
+		{ EVENT_TICK stamp=EventLatencyBegin(); FrameCounterHandler(); EventLatencyEnd(stamp,"frontend frame limiter",0,0,0,0,0); }
+		{ EVENT_TICK stamp=EventLatencyBegin(); PlayMenuMusic(); EventLatencyEnd(stamp,"frontend music",0,0,0,0,0); }
 		#if 0
 		{
 			extern int EffectsSoundVolume;
 			SoundSys_ChangeVolume(EffectsSoundVolume);
 		}
 		#endif
-		SoundSys_Management();
-		UpdateGammaSettings();
+		{ EVENT_TICK stamp=EventLatencyBegin(); SoundSys_Management(); EventLatencyEnd(stamp,"frontend audio",0,0,0,0,0); }
+		{ EVENT_TICK stamp=EventLatencyBegin(); UpdateGammaSettings(); EventLatencyEnd(stamp,"frontend gamma",0,0,0,0,0); }
 
-		CheckForLoadGame();
+		{ EVENT_TICK stamp=EventLatencyBegin(); CheckForLoadGame(); EventLatencyEnd(stamp,"frontend load request",0,0,0,0,0); }
+ EventLatencyFrameEnd();
 	}
 	
 	if (AvPMenus.MenusState==MENUSSTATE_OUTSIDEMENUS)
@@ -353,6 +909,8 @@ int AvP_MainMenus(void)
 				DoCredits();
 		}
 	}
+ EventLatencyFrameBegin("[frontend exit]",-1);
+	AvP_FlushEpisodeSelection();
 	TimeStampedMessage("ready to exit menus");
 	
 	EndMenuMusic();
@@ -370,6 +928,8 @@ int AvP_MainMenus(void)
 	SoundSys_StopAll();
 	SoundSys_Management();
 
+ EventLatencyFrameEnd();
+ EventLatencyFlush();
 	if (CheatMode_Active == CHEATMODE_NONACTIVE) HandlePreGameFMVs();
 
 	HandleCheatModeFeatures();
@@ -459,17 +1019,39 @@ extern void AvP_TriggerInGameMenus(void)
 {
 	AvPMenus.MenusState = MENUSSTATE_INGAMEMENUS;
 	SetupNewMenu(AVPMENU_INGAME);
+	/* Gameplay and the pause menu read the same input snapshot this frame.
+	   Consume the opening ESC edge; keep its held state so key repeat
+	   cannot generate another edge until it has been released. */
+	DebouncedKeyboardInput[KEY_ESCAPE] = 0;
 
 	/* KJL 16:32:55 21/07/98 - tell the console to go away */
 	if (IOFOCUS_AcceptTyping()) IOFOCUS_Toggle();
 //	SoundSys_PauseOn();
 }
 
+static void AvP_OpenInGameSaveLoadMenu(int menuID)
+{
+	if (AvP.Network != I_No_Network) return;
+	AvPMenus.MenusState = MENUSSTATE_INGAMEMENUS;
+	SetupNewMenu(menuID);
+	if (IOFOCUS_AcceptTyping()) IOFOCUS_Toggle();
+}
+
+extern void AvP_OpenInGameSaveMenu(void)
+{
+	AvP_OpenInGameSaveLoadMenu(AVPMENU_SAVEGAME);
+}
+
+extern void AvP_OpenInGameLoadMenu(void)
+{
+	AvP_OpenInGameSaveLoadMenu(AVPMENU_LOADGAME);
+}
+
 int AvP_InGameMenus(void)
 {
 	if(AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS)
 	{
-		D3D_FadeDownScreen(ONE_FIXED/8,0);
+		D3D_FadeDownScreen(AvP_MenuPreviewScene()?MenuPreviewAmount:ONE_FIXED/8,0);
 		AvP_UpdateMenus();
 		UpdateGammaSettings();
 
@@ -482,7 +1064,7 @@ int InGameMenusAreRunning(void)
 {
 	return (AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS);
 }
-extern void AvP_UpdateMenus(void)
+extern void AvP_UpdateMenusLatencyBody(void)
 {
 //      DrawAvPMenuGfx(AVPMENUGFX_BIG_AVP_LOGO,50,50,16384);
 //      DrawAvPMenuGfx(AVPMENUGFX_ALIENS_LOGO,10,75,16384,AVPMENUFORMAT_LEFTJUSTIFIED);
@@ -677,7 +1259,7 @@ extern void AvP_UpdateMenus(void)
 			for (i=0; i<UserProfileNumber; i++)
 				profilePtr = GetNextUserProfile();
 			
-			RenderMenuText(profilePtr->Name,MENU_CENTREX,MENU_CENTREY-100,ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
+			RenderMenuText(ProfileMenuLabel(profilePtr->FullName),MENU_CENTREX,MENU_CENTREY-100,ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
 			RenderSmallMenuText(ctime(&FileTime),MENU_CENTREX,MENU_CENTREY-70,ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
 			
 			RenderMenu();
@@ -702,10 +1284,7 @@ extern void AvP_UpdateMenus(void)
 			CheckForKeysWithMultipleAssignments();
 			RenderKeyConfigurationMenu();
 
-			if (AvPMenus.MenusState == MENUSSTATE_MAINMENUS)
-			{
-				RenderHelpString();
-			}
+			RenderHelpString();
 		
 			break;
 		}
@@ -740,14 +1319,17 @@ extern void AvP_UpdateMenus(void)
  		}
 		case AVPMENU_INGAMEAVOPTIONS:
 		{
+            if(MenuColourBarsAlpha>0){
 			int scale = DIV_FIXED(ScreenDescriptorBlock.SDB_Height,480);
 			int h = scale/2048;
 			int offset = scale/4096;
-			D3D_DrawColourBar(offset, offset+h,  ONE_FIXED, 0, 0);
-			D3D_DrawColourBar(offset*2+h, offset*2+h*2,  0, ONE_FIXED, 0);
-			D3D_DrawColourBar(ScreenDescriptorBlock.SDB_Height-offset*2-h*2, ScreenDescriptorBlock.SDB_Height-offset*2-h,  0, 0, ONE_FIXED);
-			D3D_DrawColourBar(ScreenDescriptorBlock.SDB_Height-offset-h, ScreenDescriptorBlock.SDB_Height-offset, ONE_FIXED, ONE_FIXED, ONE_FIXED);
+			D3D_DrawColourBarAlpha(offset, offset+h,  ONE_FIXED, 0, 0,MenuColourBarsAlpha);
+			D3D_DrawColourBarAlpha(offset*2+h, offset*2+h*2,  0, ONE_FIXED, 0,MenuColourBarsAlpha);
+			D3D_DrawColourBarAlpha(ScreenDescriptorBlock.SDB_Height-offset*2-h*2, ScreenDescriptorBlock.SDB_Height-offset*2-h,  0, 0, ONE_FIXED,MenuColourBarsAlpha);
+			D3D_DrawColourBarAlpha(ScreenDescriptorBlock.SDB_Height-offset-h, ScreenDescriptorBlock.SDB_Height-offset, ONE_FIXED, ONE_FIXED, ONE_FIXED,MenuColourBarsAlpha);
+            }
 			RenderMenu();
+			RenderHelpString();
 			break;
 		}
 
@@ -765,19 +1347,117 @@ extern void AvP_UpdateMenus(void)
 			break;
 		}
 	}
+	RenderTyrargoVersion();
 	ActUponUsersInput();
 
 }
-
-static void SetupNewMenu(enum AVPMENU_ID menuID)
+extern void AvP_UpdateMenus(void)
 {
-	enum AVPMENU_ID previousMenuID = AvPMenus.CurrentMenu;
+ EventLatencyMenu(AvPMenus.CurrentMenu,AvPMenus.CurrentlySelectedElement);
+ EVENT_TICK stamp=EventLatencyBegin();
+ AvP_UpdateMenusLatencyBody();
+ EventLatencyEnd(stamp,"menu update/draw",AvPMenus.CurrentMenu,AvPMenus.CurrentlySelectedElement,0,0,0);
+}
+
+/* Separate storage keeps all ordinary Controls/pause data unchanged. */
+static AVPMENU_ELEMENT DevControlsElements[64], DevPauseElements[32];
+static AVPMENU_ELEMENT *DevControlsMenu(AVPMENU_ELEMENT *base)
+{
+    int n=0,i;
+    while(base[n].ElementID!=AVPMENU_ELEMENT_ENDOFMENU && n<40){DevControlsElements[n]=base[n];n++;}
+    for(i=0;i<DEV_FLAME_COUNT;i++){
+        AVPMENU_ELEMENT *e=&DevControlsElements[n++];memset(e,0,sizeof(*e));
+        e->ElementID=AVPMENU_ELEMENT_DEV_WEAPON_Z;e->a.TextDescription=TEXTSTRING_BLANK;e->c.Value=DEV_VIEWMODEL_COUNT+i;e->HelpString=TEXTSTRING_BLANK;
+    }
+    for(i=0;i<DEV_VIEWMODEL_COUNT;i++){
+        AVPMENU_ELEMENT *e=&DevControlsElements[n++];memset(e,0,sizeof(*e));
+        e->ElementID=AVPMENU_ELEMENT_DEV_WEAPON_Z;e->a.TextDescription=TEXTSTRING_BLANK;e->c.Value=DevViewmodelMenuIndex(i);e->HelpString=TEXTSTRING_BLANK;
+    }
+    memset(&DevControlsElements[n],0,2*sizeof(AVPMENU_ELEMENT));
+    DevControlsElements[n].ElementID=AVPMENU_ELEMENT_DEV_EXPORT;
+    DevControlsElements[n].a.TextDescription=DevControlsElements[n].HelpString=TEXTSTRING_BLANK;
+    DevControlsElements[n+1].ElementID=AVPMENU_ELEMENT_ENDOFMENU;
+    return DevControlsElements;
+}
+static AVPMENU_ELEMENT *DevPauseMenu(AVPMENU_ELEMENT *base)
+{
+    int n=0,i=0;
+    while(base[i].ElementID!=AVPMENU_ELEMENT_ENDOFMENU && n<30){
+        if(base[i].ElementID==AVPMENU_ELEMENT_QUITGAME){
+            AVPMENU_ELEMENT *e=&DevPauseElements[n++];memset(e,0,sizeof(*e));
+            e->ElementID=AVPMENU_ELEMENT_GOTOMENU;e->a.TextDescription=TEXTSTRING_MAINMENU_GAMEPLAYOPTIONS;e->b.MenuToGoTo=AVPMENU_OPTIONS;
+        }
+        DevPauseElements[n++]=base[i++];
+    }
+    memset(&DevPauseElements[n],0,sizeof(AVPMENU_ELEMENT));DevPauseElements[n].ElementID=AVPMENU_ELEMENT_ENDOFMENU;
+    return DevPauseElements;
+}
+
+static AVPMENU_ELEMENT MotionElements[MP_COUNT+2];
+static AVPMENU_ELEMENT *MotionCalibrationMenu(void){
+ int i;memset(MotionElements,0,sizeof MotionElements);
+ for(i=0;i<MP_COUNT;i++){
+  MotionElements[i].ElementID=AVPMENU_ELEMENT_MOTION_PARAM;
+  MotionElements[i].a.TextDescription=MotionElements[i].HelpString=TEXTSTRING_BLANK;
+  MotionElements[i].c.Value=MotionParamMenuIndex(i);
+ }
+ MotionElements[MP_COUNT].ElementID=AVPMENU_ELEMENT_MOTION_EXPORT;
+ MotionElements[MP_COUNT].a.TextDescription=MotionElements[MP_COUNT].HelpString=TEXTSTRING_BLANK;
+ MotionElements[MP_COUNT+1].ElementID=AVPMENU_ELEMENT_ENDOFMENU;
+ return MotionElements;
+}
+static AVPMENU_ELEMENT ShakeElements[HP_COUNT+2];
+static AVPMENU_ELEMENT *ShakeCalibrationMenu(void){
+ int i;memset(ShakeElements,0,sizeof ShakeElements);
+ for(i=0;i<HP_COUNT;i++){
+  ShakeElements[i].ElementID=AVPMENU_ELEMENT_SHAKE_PARAM;
+  ShakeElements[i].a.TextDescription=ShakeElements[i].HelpString=TEXTSTRING_BLANK;
+  ShakeElements[i].c.Value=ShakeParamMenuIndex(i);
+ }
+ ShakeElements[HP_COUNT].ElementID=AVPMENU_ELEMENT_SHAKE_EXPORT;
+ ShakeElements[HP_COUNT].a.TextDescription=ShakeElements[HP_COUNT].HelpString=TEXTSTRING_BLANK;
+ ShakeElements[HP_COUNT+1].ElementID=AVPMENU_ELEMENT_ENDOFMENU;
+ return ShakeElements;
+}
+/* Publish into separate storage only with -dev2. No phantom rows, changed
+ * stock indices, or mutation of the ordinary main/pause menu arrays. */
+static AVPMENU_ELEMENT ShakeRootElements[64];
+static AVPMENU_ELEMENT *ShakeRootMenu(AVPMENU_ELEMENT *base,int ingame){
+ int n=0;
+ while(base[n].ElementID!=AVPMENU_ELEMENT_ENDOFMENU && n<61){ShakeRootElements[n]=base[n];n++;}
+ if(base[n].ElementID!=AVPMENU_ELEMENT_ENDOFMENU)return base;
+ int position=n;
+ if(n&&ShakeRootElements[n-1].ElementID==AVPMENU_ELEMENT_QUITGAME)position=n-1;
+ memmove(&ShakeRootElements[position+1],&ShakeRootElements[position],(n-position)*sizeof(*base));
+ AVPMENU_ELEMENT *entry=&ShakeRootElements[position];memset(entry,0,sizeof(*entry));
+ entry->ElementID=AVPMENU_ELEMENT_GOTOMENU;entry->a.TextDescription=TEXTSTRING_EXPERIMENTAL2_NEW;
+ entry->b.MenuToGoTo=ingame?AVPMENU_INGAMEEXPERIMENTAL2:AVPMENU_EXPERIMENTAL2;
+ entry->HelpString=TEXTSTRING_EXPERIMENTAL2_HELP_NEW;
+ memset(&ShakeRootElements[n+1],0,sizeof(*base));ShakeRootElements[n+1].ElementID=AVPMENU_ELEMENT_ENDOFMENU;
+ return ShakeRootElements;
+}
+
+
+static void SetupNewMenuLatencyBody(enum AVPMENU_ID menuID)
+{
+ if(!TYRARGO_MOTION_CALIBRATION&&(menuID==AVPMENU_EXPERIMENTAL||menuID==AVPMENU_INGAMEEXPERIMENTAL))return;
+ if(!ShakeEnabled&&(menuID==AVPMENU_EXPERIMENTAL2||menuID==AVPMENU_INGAMEEXPERIMENTAL2))return;
+ enum AVPMENU_ID previousMenuID = AvPMenus.CurrentMenu;
+ if(previousMenuID!=menuID && IsEpisodeSelector(previousMenuID))AvP_FlushEpisodeSelection();
+	TyrargoMenuVersionStarted = 0;
 	AvPMenus.CurrentMenu = menuID;
 
 	/* set pointer to the start of the menu's element data */
 	AvPMenus.MenuElements = AvPMenusData[menuID].MenuElements; // could use default
+ if(menuID==AVPMENU_EXPERIMENTAL||menuID==AVPMENU_INGAMEEXPERIMENTAL)AvPMenus.MenuElements=MotionCalibrationMenu();
+ if(ShakeEnabled&&(menuID==AVPMENU_EXPERIMENTAL2||menuID==AVPMENU_INGAMEEXPERIMENTAL2))AvPMenus.MenuElements=ShakeCalibrationMenu();
 
 	AvPMenus.FontToUse = AvPMenusData[menuID].FontToUse;
+    if(DevViewmodelEnabled && menuID==AVPMENU_OPTIONS){
+        AvPMenus.MenuElements=DevControlsMenu(AvPMenus.MenuElements);
+        AvPMenus.FontToUse=AVPMENU_FONT_SMALL;
+    }
+
 	AvPMenus.CurrentlySelectedElement = 0;
 	AvPMenus.UserEnteringText = 0;
 	AvPMenus.UserEnteringNumber = 0;
@@ -818,6 +1498,7 @@ static void SetupNewMenu(enum AVPMENU_ID menuID)
 		}
 		
 		case AVPMENU_VIDEOMODE:
+		case AVPMENU_INGAMEVIDEOMODE:
 		{	
 			LoadDeviceAndVideoModePreferences();
 			break;
@@ -825,7 +1506,7 @@ static void SetupNewMenu(enum AVPMENU_ID menuID)
 
 		case AVPMENU_USERPROFILESELECT:
 		{
-			InitialiseGammaSettings(128);
+			InitialiseGammaSettings(DEFAULT_GAMMA_SETTING);
 			EpisodeSelectScrollOffset=0;
 			ExamineSavedUserProfiles();
 			MakeUserProfileSelectMenu();
@@ -834,10 +1515,11 @@ static void SetupNewMenu(enum AVPMENU_ID menuID)
 		case AVPMENU_USERPROFILEENTERNAME:
 		{
 			AvPMenus.UserEnteringText = 1;
-			SDL_StartTextInput(NULL);
+			SDL_StartTextInput(window);
 			KeyboardEntryQueue_Clear();
-			AvPMenus.MenuElements->c.TextPtr = UserProfilePtr->Name;
-			UserProfilePtr->Name[0] = 0;
+			AvPMenus.MenuElements->c.TextPtr = UserProfilePtr->FullName;
+			UserProfilePtr->FullName[0] = 0;
+			AvPMenus.PositionInTextField = 0;
 			AvPMenus.WidthLeftForText = 0; //will be calculated properly when menus are drawn
 			break;
 		}
@@ -857,26 +1539,23 @@ static void SetupNewMenu(enum AVPMENU_ID menuID)
 	
 		case AVPMENU_MARINELEVELS:
 		{
-			MarineEpisodeToPlay=0;
 			EpisodeSelectScrollOffset=0;
 			AvPMenus.MenuElements->b.MaxSliderValue = NumberOfAvailableLevels(I_Marine);
-			*AvPMenus.MenuElements->c.SliderValuePtr = LevelMostLikelyToPlay(I_Marine);
+			*AvPMenus.MenuElements->c.SliderValuePtr = RememberedEpisode(I_Marine);
 			break;
 		}
 		case AVPMENU_PREDATORLEVELS:
 		{
-			PredatorEpisodeToPlay=0;
 			EpisodeSelectScrollOffset=0;
 			AvPMenus.MenuElements->b.MaxSliderValue = NumberOfAvailableLevels(I_Predator);
-			*AvPMenus.MenuElements->c.SliderValuePtr = LevelMostLikelyToPlay(I_Predator);
+			*AvPMenus.MenuElements->c.SliderValuePtr = RememberedEpisode(I_Predator);
 			break;
 		}
 		case AVPMENU_ALIENLEVELS:
 		{
-			AlienEpisodeToPlay=0;
 			EpisodeSelectScrollOffset=0;
 			AvPMenus.MenuElements->b.MaxSliderValue = NumberOfAvailableLevels(I_Alien);
-			*AvPMenus.MenuElements->c.SliderValuePtr = LevelMostLikelyToPlay(I_Alien);
+			*AvPMenus.MenuElements->c.SliderValuePtr = RememberedEpisode(I_Alien);
 			break;
 		}
 		case AVPMENU_MULTIPLAYERSELECTSESSION:
@@ -939,9 +1618,12 @@ static void SetupNewMenu(enum AVPMENU_ID menuID)
 				menuID=AVPMENU_INNETGAME;
 				AvPMenus.CurrentMenu = menuID;
 				AvPMenus.MenuElements = AvPMenusData[menuID].MenuElements; // could use default
+ if(menuID==AVPMENU_EXPERIMENTAL||menuID==AVPMENU_INGAMEEXPERIMENTAL)AvPMenus.MenuElements=MotionCalibrationMenu();
+ if(ShakeEnabled&&(menuID==AVPMENU_EXPERIMENTAL2||menuID==AVPMENU_INGAMEEXPERIMENTAL2))AvPMenus.MenuElements=ShakeCalibrationMenu();
 				AvPMenus.FontToUse = AvPMenusData[menuID].FontToUse;
 			}
 			MakeInGameMenu();
+            if(DevViewmodelEnabled)AvPMenus.MenuElements=DevPauseMenu(AvPMenus.MenuElements);
 			break;
 		}
 		case AVPMENU_MARINEKEYCONFIG:
@@ -949,6 +1631,10 @@ static void SetupNewMenu(enum AVPMENU_ID menuID)
 			MakeMarineKeyConfigMenu();
 			PlayerInputPrimaryConfig = MarineInputPrimaryConfig;
 			PlayerInputSecondaryConfig = MarineInputSecondaryConfig;
+			PlayerWeaponPrimaryConfig = MarineWeaponPrimaryConfig;
+			PlayerWeaponSecondaryConfig = MarineWeaponSecondaryConfig;
+			PlayerGlobalCommandPrimaryConfig = GlobalCommandPrimaryConfig;
+			PlayerGlobalCommandSecondaryConfig = GlobalCommandSecondaryConfig;
 			EpisodeSelectScrollOffset=0;
 			KeyConfigSelectionColumn = 0;
 			break;
@@ -956,8 +1642,13 @@ static void SetupNewMenu(enum AVPMENU_ID menuID)
 		case AVPMENU_PREDATORKEYCONFIG:
 		{
 			MakePredatorKeyConfigMenu();
+            memcpy(PlayerPreviousVisionBindings,PredatorPreviousVisionBindings,2);
 			PlayerInputPrimaryConfig = PredatorInputPrimaryConfig;
 			PlayerInputSecondaryConfig = PredatorInputSecondaryConfig;
+			PlayerWeaponPrimaryConfig = PredatorWeaponPrimaryConfig;
+			PlayerWeaponSecondaryConfig = PredatorWeaponSecondaryConfig;
+			PlayerGlobalCommandPrimaryConfig = GlobalCommandPrimaryConfig;
+			PlayerGlobalCommandSecondaryConfig = GlobalCommandSecondaryConfig;
 			EpisodeSelectScrollOffset=0;
 			KeyConfigSelectionColumn = 0;
 			break;
@@ -967,6 +1658,10 @@ static void SetupNewMenu(enum AVPMENU_ID menuID)
 			MakeAlienKeyConfigMenu();
 			PlayerInputPrimaryConfig = AlienInputPrimaryConfig;
 			PlayerInputSecondaryConfig = AlienInputSecondaryConfig;
+			PlayerWeaponPrimaryConfig = AlienWeaponPrimaryConfig;
+			PlayerWeaponSecondaryConfig = AlienWeaponSecondaryConfig;
+			PlayerGlobalCommandPrimaryConfig = GlobalCommandPrimaryConfig;
+			PlayerGlobalCommandSecondaryConfig = GlobalCommandSecondaryConfig;
 			EpisodeSelectScrollOffset=0;
 			KeyConfigSelectionColumn = 0;
 			break;
@@ -1079,7 +1774,9 @@ static void SetupNewMenu(enum AVPMENU_ID menuID)
 			break;
 	}
 
-	/* count the number of elements in the menu */
+ if(ShakeEnabled&&(TyrargoMainMenu()||menuID==AVPMENU_INGAME||menuID==AVPMENU_INNETGAME))
+  AvPMenus.MenuElements=ShakeRootMenu(AvPMenus.MenuElements,menuID==AVPMENU_INGAME||menuID==AVPMENU_INNETGAME);
+ /* count the number of elements in the menu */
 	{
 		AVPMENU_ELEMENT *elementPtr = AvPMenus.MenuElements;
 		AvPMenus.NumberOfElementsInMenu=0;
@@ -1095,6 +1792,12 @@ static void SetupNewMenu(enum AVPMENU_ID menuID)
 		}
 		while(elementPtr->ElementID != AVPMENU_ELEMENT_ENDOFMENU);
 	}       
+
+	if (menuID == AVPMENU_SAVEGAME || menuID == AVPMENU_LOADGAME)
+	{
+		/* Generic layout must never use the full height of 50 data rows. */
+		AvPMenus.MenuHeight = MENU_HEIGHT;
+	}
 
 	switch(menuID)
 	{
@@ -1133,6 +1836,8 @@ static void SetupNewMenu(enum AVPMENU_ID menuID)
 			
 			/* find available difficulty levels */
 			AvPMenus.NumberOfElementsInMenu=MaxDifficultyLevelAllowed(AvP.PlayerType, episodeToPlay);
+            AvPMenus.MenuHeight=0;
+            for(int row=0;row<AvPMenus.NumberOfElementsInMenu;row++)AvPMenus.MenuHeight+=HeightOfMenuElement(&AvPMenus.MenuElements[row]);
 			/* highlight a suitable level of difficulty */
 			if (episodeToPlay)
 			{
@@ -1169,6 +1874,10 @@ static void SetupNewMenu(enum AVPMENU_ID menuID)
 				}
 			}
 			
+            AvPMenus.NumberOfElementsInMenu=MaxDifficultyLevelAllowed(AvP.PlayerType, episodeToPlay);
+            AvPMenus.MenuHeight=0;
+            for(int row=0;row<AvPMenus.NumberOfElementsInMenu;row++)AvPMenus.MenuHeight+=HeightOfMenuElement(&AvPMenus.MenuElements[row]);
+			AvPMenus.CurrentlySelectedElement = 1; /* Same default as basic episode one. */
 			SetBriefingTextForEpisode(episodeToPlay, AvP.PlayerType);
 			break;
 		}
@@ -1177,89 +1886,275 @@ static void SetupNewMenu(enum AVPMENU_ID menuID)
 			break;
 	}
 }
+static void SetupNewMenu(enum AVPMENU_ID menuID)
+{
+ EVENT_TICK stamp=EventLatencyBegin();
+ SetupNewMenuLatencyBody(menuID);
+ EventLatencyEnd(stamp,"menu setup",menuID,AvPMenus.MenusState,0,0,2);
+}
 
+
+int LengthOfSmallMenuText(char *textPtr);
+static int MotionMenuLanguage(void){
+ const char*label=GetTextString(TEXTSTRING_MOUSECONTROLS_AUTOCENTRE);
+ if(label&&(!strcmp(label,"Auto-centrar")||!strcmp(label,"Auto Centrar")))return I_Spanish;
+ return AvP.Language>=0&&AvP.Language<6?AvP.Language:I_English;
+}
+static int WrapMenuHelp(const char *text,char lines[64][512],int width,int scale){
+ int row=0,n=0,lastSpace=-1;lines[0][0]=0;if(!text)return 0;
+ while(*text&&row<64){
+  unsigned char c=(unsigned char)*text++;
+  if(c=='\r')continue;
+  if(c=='\n'){lines[row][n]=0;if(++row==64)return 64;n=0;lastSpace=-1;lines[row][0]=0;continue;}
+  if(!n&&c==' ')continue;
+  if(n>=510){lines[row][n]=0;if(++row==64)return 64;n=0;lastSpace=-1;}
+  lines[row][n++]=(char)c;lines[row][n]=0;if(c==' ')lastSpace=n-1;
+  if(MUL_FIXED(LengthOfSmallMenuText(lines[row]),scale)>width&&n>1){
+   int cut=lastSpace>0?lastSpace:n-1,skip=lastSpace>0?1:0,rest=n-cut-skip;
+   char carry[512];memcpy(carry,lines[row]+cut+skip,rest);carry[rest]=0;lines[row][cut]=0;
+   if(++row==64)return 64;memcpy(lines[row],carry,rest+1);n=rest;lastSpace=-1;
+  }
+ }
+ return row+(n>0);
+}
+static const char *MenuHelpText(void){
+ AVPMENU_ELEMENT*e=&AvPMenus.MenuElements[AvPMenus.CurrentlySelectedElement];
+ static char help[1536];int lang=MotionMenuLanguage();
+ if(e->ElementID==AVPMENU_ELEMENT_SHAKE_PARAM)return ShakeParamHelp(e->c.Value,lang);
+ if(e->ElementID==AVPMENU_ELEMENT_SHAKE_EXPORT){
+  snprintf(help,sizeof help,"%s. %s",ShakeParamsStatus(lang),ShakeParamsHelp(lang,1));return help;
+ }
+ if(e->ElementID==AVPMENU_ELEMENT_MOTION_PARAM)return MotionParamHelp(e->c.Value,lang);
+ if(e->ElementID==AVPMENU_ELEMENT_MOTION_EXPORT){
+  snprintf(help,sizeof help,"%s. %s",MotionParamsStatus(lang),MotionParamsHelp(lang,e->ElementID==AVPMENU_ELEMENT_MOTION_EXPORT));return help;
+ }
+ if(e->HelpString!=TEXTSTRING_BLANK)return GetTextString(e->HelpString);
+ return "";
+}
+static int MenuHelpVisibleLines(int count,int scale){
+ int lineHeight=MUL_FIXED(17,scale),maxLines=(ScreenDescriptorBlock.SDB_Height/3)/lineHeight;
+ if(AvPMenus.CurrentMenu==AVPMENU_LEVELBRIEFING_BASIC || AvPMenus.CurrentMenu==AVPMENU_LEVELBRIEFING_BONUS)maxLines=4;
+ if(AvPMenus.CurrentMenu==AVPMENU_SINGLEPLAYER)maxLines=3; /* Keep long campaign help below the fixed option row. */
+ int rowHeight=MUL_FIXED(HeightOfMenuElement(&AvPMenus.MenuElements[AvPMenus.CurrentlySelectedElement]),scale);
+ int room=(ScreenDescriptorBlock.SDB_Height-rowHeight-MUL_FIXED(24,scale)-64)/lineHeight;
+ if(room<maxLines)maxLines=room;
+ if(maxLines<1)maxLines=1;return count<maxLines?count:maxLines;
+}
+static int MenuHelpReserve(void){
+ char lines[64][512];int scale=AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS?D3D_GetConsoleTextScaleFixed():ONE_FIXED;
+ int count=WrapMenuHelp(MenuHelpText(),lines,ScreenDescriptorBlock.SDB_Width-48,scale);
+ return MenuHelpVisibleLines(count,scale)*MUL_FIXED(17,scale)+32+TyrargoVersionReserve();
+}
+static int MotionParamLabel(int id,char lines[64][512]){
+ char label[256];int scale=AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS?D3D_GetConsoleTextScaleFixed():ONE_FIXED;
+ snprintf(label,sizeof label,"%s = %.4g %s",MotionParams[id].label[MotionMenuLanguage()],MotionValues[id],MotionParams[id].unit);
+ {
+  int count=WrapMenuHelp(label,lines,ScreenDescriptorBlock.SDB_Width-48,scale);
+  int maxLines=(ScreenDescriptorBlock.SDB_Height-80-MUL_FIXED(63,scale))/MUL_FIXED(17,scale);
+  static int previousMenu=-1,previousElement=-1;static Uint64 start=0;
+  if(previousMenu!=AvPMenus.CurrentMenu||previousElement!=AvPMenus.CurrentlySelectedElement){start=SDL_GetTicks();previousMenu=AvPMenus.CurrentMenu;previousElement=AvPMenus.CurrentlySelectedElement;}
+  if(maxLines<1)maxLines=1;
+  if(count>maxLines){
+   int first=(int)(((SDL_GetTicks()-start)/6500)%((count+maxLines-1)/maxLines))*maxLines,i;
+   for(i=0;i<maxLines;i++){if(first+i<count)memmove(lines[i],lines[first+i],512);else lines[i][0]=0;}
+   return maxLines;
+  }
+  return count;
+ }
+}
+static int ShakeParamLabel(int id,char lines[64][512]){
+ char label[256];int scale=AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS?D3D_GetConsoleTextScaleFixed():ONE_FIXED;
+ snprintf(label,sizeof label,"%s = %.4g %s",ShakeParams[id].label[MotionMenuLanguage()],ShakeValues[id],ShakeParams[id].unit);
+ {
+  int count=WrapMenuHelp(label,lines,ScreenDescriptorBlock.SDB_Width-48,scale);
+  int maxLines=(ScreenDescriptorBlock.SDB_Height-80-MUL_FIXED(63,scale))/MUL_FIXED(17,scale);
+  static int previousMenu=-1,previousElement=-1;static Uint64 start=0;
+  if(previousMenu!=AvPMenus.CurrentMenu||previousElement!=AvPMenus.CurrentlySelectedElement){start=SDL_GetTicks();previousMenu=AvPMenus.CurrentMenu;previousElement=AvPMenus.CurrentlySelectedElement;}
+  if(maxLines<1)maxLines=1;
+  if(maxLines>4)maxLines=4; /* Page unusually long labels before crowding help. */
+  if(count>maxLines){
+   int first=(int)(((SDL_GetTicks()-start)/6500)%((count+maxLines-1)/maxLines))*maxLines,i;
+   for(i=0;i<maxLines;i++){if(first+i<count)memmove(lines[i],lines[first+i],512);else lines[i][0]=0;}
+   return maxLines;
+  }
+  return count;
+ }
+}
+
+static void RenderPreviewRow(AVPMENU_ELEMENT *element,int index,int y,int scale)
+{
+ int pad=MUL_FIXED(3,scale),bottom=y+MUL_FIXED(HeightOfMenuElement(element),scale);
+ MenuPreviewBandLow=1.0f-(float)bottom/ScreenDescriptorBlock.SDB_Height;
+ MenuPreviewBandHigh=1.0f-(float)(y-pad)/ScreenDescriptorBlock.SDB_Height;
+ D3D_DrawSolidRect(0,y-pad,ScreenDescriptorBlock.SDB_Width,bottom,0xff000000u,0);
+ RenderMenuElement(element,index,y);
+ if(element->ElementID==AVPMENU_ELEMENT_CROSSHAIR_SCALE || MenuPreviewThicknessSelected()){
+  int half=MUL_FIXED(HUD_GetCrosshairScaleFixed(),9)+4;
+  int sampleY=bottom+MUL_FIXED(12,scale)+half;
+  int limit=ScreenDescriptorBlock.SDB_Height-MenuHelpReserve()-half;
+  if(sampleY>limit)sampleY=limit;
+  RenderMenuCrosshairPreview(ScreenDescriptorBlock.SDB_Width/2,sampleY,
+    MarineCrosshairThicknessMode);
+ }
+}
+
+static int IsMissionBriefingMenu(void)
+{
+    return AvPMenus.CurrentMenu==AVPMENU_LEVELBRIEFING_BASIC ||
+           AvPMenus.CurrentMenu==AVPMENU_LEVELBRIEFING_BONUS;
+}
 
 static void RenderMenu(void)
 {
-	AVPMENU_ELEMENT *elementPtr = AvPMenus.MenuElements;
+	AVPMENU_ELEMENT *elementPtr;
 	int e;
 	int y;
-	
-	
-	if (AvPMenus.MenusState == MENUSSTATE_MAINMENUS)
-	{
-		if ((AvPMenus.CurrentMenu == AVPMENU_LEVELBRIEFING_BASIC)
-		  ||(AvPMenus.CurrentMenu == AVPMENU_LEVELBRIEFING_BONUS))
-		{
-			y = MENU_BOTTOMYEDGE - AvPMenus.MenuHeight;
-			RenderBriefingScreenInfo();
-		}
-		else
-		{
-			y = MENU_CENTREY - (AvPMenus.MenuHeight)/2;
-		}
-	}
-	else // in game menus
-	{
-		y = (ScreenDescriptorBlock.SDB_Height - AvPMenus.MenuHeight)/2;
-	}
+	int firstElement = 0;
+	int lastElement = AvPMenus.NumberOfElementsInMenu - 1;
+	const int inGameMenuText = (AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS);
+	const int textScaleFixed = inGameMenuText ? D3D_GetConsoleTextScaleFixed() : ONE_FIXED;
+	int renderedMenuHeight = AvPMenus.MenuHeight;
+    if(AvPMenus.NumberOfElementsInMenu>0 && AvPMenus.CurrentlySelectedElement>=0 &&
+       AvPMenus.CurrentlySelectedElement<AvPMenus.NumberOfElementsInMenu &&
+       !MenuElementIsVisible(&AvPMenus.MenuElements[AvPMenus.CurrentlySelectedElement])){
+        int count=AvPMenus.NumberOfElementsInMenu;
+        for(int q=1;q<count;++q){
+            int next=(AvPMenus.CurrentlySelectedElement+q)%count;
+            if(MenuElementIsVisible(&AvPMenus.MenuElements[next])){AvPMenus.CurrentlySelectedElement=next;break;}
+        }
+    }
+	const int devControls = DevViewmodelEnabled && AvPMenus.CurrentMenu==AVPMENU_OPTIONS;
+ const int experimental = AvPMenus.CurrentMenu==AVPMENU_EXPERIMENTAL || AvPMenus.CurrentMenu==AVPMENU_INGAMEEXPERIMENTAL || AvPMenus.CurrentMenu==AVPMENU_EXPERIMENTAL2 || AvPMenus.CurrentMenu==AVPMENU_INGAMEEXPERIMENTAL2;
+ const int useDevControlsCarousel = devControls || inGameMenuText || experimental;
+	const int useAVOptionsCarousel = (AvPMenus.MenusState == MENUSSTATE_MAINMENUS && AvPMenus.CurrentMenu == AVPMENU_MAINMENUAVOPTIONS);
 
-	for (e = 0; e<AvPMenus.NumberOfElementsInMenu; e++, elementPtr++)
+    const int dynamicList = TyrargoMainMenu() || inGameMenuText || devControls || experimental || useAVOptionsCarousel ||
+        AvPMenus.CurrentMenu==AVPMENU_JOYSTICKCONTROLS || AvPMenus.CurrentMenu==AVPMENU_DETAILLEVELS || (AvPMenus.MenuHeight>MENU_HEIGHT && AvPMenus.FontToUse==AVPMENU_FONT_SMALL);
+    if(dynamicList){
+        int top,bottom,count=AvPMenus.NumberOfElementsInMenu;
+        int heights[count>0?count:1];
+        MenuListBounds(ScreenDescriptorBlock.SDB_Height,textScaleFixed,MenuHelpReserve(),!inGameMenuText,&top,&bottom);
+        /* Keep the root list between its raised title and the reserved help/footer. */
+        if(TyrargoMainMenu()){top=132;bottom+=12;} /* Lower only the options, preserving list height. */
+        if(inGameMenuText && AvPMenus.CurrentMenu==AVPMENU_INGAMEAVOPTIONS){
+            int bandTop,bandBottom;MenuAVBandBounds(ScreenDescriptorBlock.SDB_Height,textScaleFixed,&bandTop,&bandBottom);
+            if(top<bandTop)top=bandTop;if(bottom>bandBottom)bottom=bandBottom;
+        }
+        if(devControls)bottom-=MUL_FIXED(54,textScaleFixed);
+        if(AvPMenus.CurrentMenu==AVPMENU_EXPERIMENTAL2||AvPMenus.CurrentMenu==AVPMENU_INGAMEEXPERIMENTAL2){
+            /* Reserve the counter explicitly; use the actual slider height.
+             * Large text still fits at 640x480 without touching the help. */
+            if(inGameMenuText)top=MUL_FIXED(4,textScaleFixed);
+            bottom=ScreenDescriptorBlock.SDB_Height-MenuHelpReserve()-8-MUL_FIXED(21,textScaleFixed);
+        }
+        for(int q=0;q<count;q++)heights[q]=MUL_FIXED(HeightOfMenuElement(&AvPMenus.MenuElements[q]),textScaleFixed);
+        if(inGameMenuText && AvPMenus.CurrentMenu==AVPMENU_INGAMEAVOPTIONS){
+            MenuStableVisibleRange(heights,count,AvPMenus.CurrentlySelectedElement,bottom-top,&MenuAVScrollFirst,&lastElement,&renderedMenuHeight);
+            firstElement=MenuAVScrollFirst;
+        }else {
+            MenuAVScrollFirst=0;
+            MenuVisibleRange(heights,count,AvPMenus.CurrentlySelectedElement,bottom-top,&firstElement,&lastElement,&renderedMenuHeight);
+        }
+        y=(inGameMenuText && AvPMenus.CurrentMenu==AVPMENU_INGAMEAVOPTIONS)?top:top+(bottom-top-renderedMenuHeight)/2;
+        if(y<top)y=top;
+    } else if(AvPMenus.CurrentMenu==AVPMENU_LEVELBRIEFING_BASIC || AvPMenus.CurrentMenu==AVPMENU_LEVELBRIEFING_BONUS){
+        y=MENU_BOTTOMYEDGE+3-AvPMenus.MenuHeight;RenderBriefingScreenInfo();
+    } else y=MENU_CENTREY-AvPMenus.MenuHeight/2-(AvPMenus.CurrentMenu==AVPMENU_SINGLEPLAYER?24+(40-(HUD_FONT_HEIGHT+5))/2:0);
+
+	/* Preserve brightness animation for carousel entries outside the viewport. */
+	elementPtr = AvPMenus.MenuElements;
+	for (e = 0; e < AvPMenus.NumberOfElementsInMenu; e++, elementPtr++)
 	{
-		int targetBrightness;
-
-		if (e==AvPMenus.CurrentlySelectedElement)
-		{
-			targetBrightness = BRIGHTNESS_OF_HIGHLIGHTED_ELEMENT;
-		}
-		else
-		{ 
-			targetBrightness = BRIGHTNESS_OF_DARKENED_ELEMENT;
-		}
-
+		int targetBrightness = (e == AvPMenus.CurrentlySelectedElement) ? BRIGHTNESS_OF_HIGHLIGHTED_ELEMENT : BRIGHTNESS_OF_DARKENED_ELEMENT;
 		if (targetBrightness > elementPtr->Brightness)
 		{
-			elementPtr->Brightness+=BRIGHTNESS_CHANGE_SPEED;
-			if(elementPtr->Brightness>targetBrightness)
-			{
-				elementPtr->Brightness = targetBrightness;
-			}
+			elementPtr->Brightness += BRIGHTNESS_CHANGE_SPEED;
+			if (elementPtr->Brightness > targetBrightness) elementPtr->Brightness = targetBrightness;
 		}
 		else
 		{
-			elementPtr->Brightness-=BRIGHTNESS_CHANGE_SPEED;
-			if(elementPtr->Brightness<targetBrightness)
-			{
-				elementPtr->Brightness = targetBrightness;
-			}
-			
+			elementPtr->Brightness -= BRIGHTNESS_CHANGE_SPEED;
+			if (elementPtr->Brightness < targetBrightness) elementPtr->Brightness = targetBrightness;
 		}
-		
-		RenderMenuElement(elementPtr,e,y);
-		y += HeightOfMenuElement(elementPtr);
 	}
 
-	/* Render Menu Title */
+	elementPtr = &AvPMenus.MenuElements[firstElement];
+	if (inGameMenuText) D3D_SetInGameMenuTextRenderActive(1);
+	for (e = firstElement; e <= lastElement; e++, elementPtr++)
+	{
+        SetMenuAVContrast(AvPMenus.MenusState==MENUSSTATE_MAINMENUS&&AvPMenus.CurrentMenu==AVPMENU_MAINMENUAVOPTIONS ? (e==AvPMenus.CurrentlySelectedElement?2:1) : 0);
+        if(inGameMenuText && MenuPreviewTarget && e==AvPMenus.CurrentlySelectedElement)
+            RenderPreviewRow(elementPtr,e,y,textScaleFixed);
+        else if(!inGameMenuText || !MenuPreviewTarget)
+            RenderMenuElement(elementPtr,e,y);
+        SetMenuAVContrast(0);
+		y += MUL_FIXED(HeightOfMenuElement(elementPtr), textScaleFixed);
+	}
+    if(useDevControlsCarousel){
+        int (*text)(char*,int,int,int,enum AVPMENUFORMAT_ID)=inGameMenuText?Hardware_RenderSmallMenuText:RenderSmallMenuText;
+        if(experimental || devControls){
+            char position[40];
+            snprintf(position,sizeof position,"%d / %d",AvPMenus.CurrentlySelectedElement+1,AvPMenus.NumberOfElementsInMenu);
+            text(position,ScreenDescriptorBlock.SDB_Width/2,y+MUL_FIXED(4,textScaleFixed),ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
+        }
+        if(devControls){
+            text((char*)DevViewmodelHelp(),MENU_CENTREX,y+MUL_FIXED(22,textScaleFixed),ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
+            text((char*)DevViewmodelStatus(),MENU_CENTREX,y+MUL_FIXED(40,textScaleFixed),ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
+        }
+    }
+	if (inGameMenuText) D3D_SetInGameMenuTextRenderActive(0);
+
 	if (AvPMenus.MenusState == MENUSSTATE_MAINMENUS)
 	{
+        if(TyrargoMainMenu()&&!TyrargoMenuVersionStarted){TyrargoMenuVersionStart=SDL_GetTicks();TyrargoMenuVersionStarted=1;}
 		char *textPtr = GetTextString(AvPMenusData[AvPMenus.CurrentMenu].MenuTitle);
-		RenderMenuText(textPtr,MENU_CENTREX,70,ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
-		
-#if 1 // and now we've been told to remove the "Gamers Edition" etc. :)
-		// main menu subtitle e.g. "Gamers Edition" etc.
+		RenderMenuText(textPtr,MENU_CENTREX,AvPMenus.CurrentMenu==AVPMENU_SINGLEPLAYER?15:(TyrargoMainMenu()?21:(IsMissionBriefingMenu()?70-BRIEFING_HEADER_LIFT:70)),ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
+#if 1
 		if (AvPMenusData[AvPMenus.CurrentMenu].MenuTitle==TEXTSTRING_MAINMENU_TITLE)
-			RenderMenuText(GetTextString(TEXTSTRING_MAINMENU_SUBTITLE),MENU_CENTREX,100,ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
+        {
+            extern void RenderTyrargoTitle(int centreX,int y,int alpha,double pulse);
+            Uint64 elapsed=SDL_GetTicks()-TyrargoMenuVersionStart;
+            RenderTyrargoTitle(MENU_CENTREX,60,TyrargoVersionOpacity(elapsed),0.88+0.12*sin((double)elapsed*6.283185307179586/4400.0));
+        }
 #endif
 	}
+}
 
-	#if 0
-	else
-	{
-		char *textPtr = GetTextString(AvPMenusData[AvPMenus.CurrentMenu].MenuTitle);
-		Hardware_RenderSmallMenuText(textPtr,MENU_CENTREX,70,ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
-	}
-	#endif
+void ToggleFPSCounterFromConsole(void)
+{
+	if (FPSDisplayPosition == FPS_DISPLAY_OFF) FPSDisplayPosition = FPS_DISPLAY_TOP_RIGHT;
+	else FPSDisplayPosition = FPS_DISPLAY_OFF;
+}
 
+int LengthOfSmallMenuText(char *textPtr);
+
+void RenderFPSCounter(void)
+{
+ char text[24];int x,y,textScaleFixed,width,digitWidth=0,digits=3;
+ int right=(FPSDisplayPosition==FPS_DISPLAY_TOP_RIGHT || FPSDisplayPosition==FPS_DISPLAY_BOTTOM_RIGHT);
+ if(FPSDisplayPosition<=FPS_DISPLAY_OFF || FPSDisplayPosition>FPS_DISPLAY_BOTTOM_LEFT)return;
+ textScaleFixed=D3D_GetConsoleTextScaleFixed();
+ sprintf(text,"FPS %d",FrameRate);
+ /* Keep a compact 3-digit field stable across 99 -> 100.
+    Grow only for genuinely larger counters, never reserve six empty places. */
+ for(int n=FrameRate;n>=1000;n/=10)digits++;
+ for(char digit='0';digit<='9';digit++){
+  char sample[2]={digit,0};int w=LengthOfSmallMenuText(sample);if(w>digitWidth)digitWidth=w;
+ }
+ width=MUL_FIXED(LengthOfSmallMenuText("FPS ")+digits*digitWidth,textScaleFixed);
+ y=(FPSDisplayPosition==FPS_DISPLAY_BOTTOM_RIGHT || FPSDisplayPosition==FPS_DISPLAY_BOTTOM_LEFT)?ScreenDescriptorBlock.SDB_Height-MUL_FIXED(HUD_FONT_HEIGHT,textScaleFixed)-16:16;
+ x=right?ScreenDescriptorBlock.SDB_Width-16:16;
+ HUD_ResolveFPSCounterPlacement(FPSDisplayPosition,width,MUL_FIXED(HUD_FONT_HEIGHT,textScaleFixed),&x,&y);
+ D3D_SetFPSCounterTextRenderActive(1);
+ if(right){
+  /* Keep the label fixed and the numeric field flush with the right anchor.
+     Unused digits belong between label and value, not in the screen margin. */
+  Hardware_RenderSmallMenuText("FPS",x-width,y,ONE_FIXED,AVPMENUFORMAT_LEFTJUSTIFIED);
+  Hardware_RenderSmallMenuText(text+4,x,y,ONE_FIXED,AVPMENUFORMAT_RIGHTJUSTIFIED);
+ }else{
+  Hardware_RenderSmallMenuText(text,x,y,ONE_FIXED,AVPMENUFORMAT_LEFTJUSTIFIED);
+ }
+ D3D_SetFPSCounterTextRenderActive(0);
 }
 static void RenderBriefingScreenInfo(void)
 {
@@ -1282,7 +2177,7 @@ static void RenderBriefingScreenInfo(void)
 			break;
 		}
 	}
-	RenderMenuText(GetTextString(textID),MENU_LEFTXEDGE,120,ONE_FIXED,AVPMENUFORMAT_LEFTJUSTIFIED);
+	RenderMenuText(GetTextString(textID),MENU_LEFTXEDGE,135-BRIEFING_HEADER_LIFT,ONE_FIXED,AVPMENUFORMAT_LEFTJUSTIFIED);
 #if 0
 	switch (AvP.PlayerType)
 	{
@@ -1304,7 +2199,9 @@ static void RenderBriefingScreenInfo(void)
 	}
 	RenderMenuText(GetTextString(textID),MENU_LEFTXEDGE,180,ONE_FIXED/2,AVPMENUFORMAT_LEFTJUSTIFIED);
 #endif	
-	RenderBriefingText(ScreenDescriptorBlock.SDB_Height/2,ONE_FIXED);
+	/* Move this selection-screen briefing only; loading/in-game briefings
+     * retain their own placement. The difficulty list stays anchored below. */
+    RenderBriefingText(ScreenDescriptorBlock.SDB_Height/2-65,ONE_FIXED);
 }
 /* KJL 12:11:18 24/09/98 - specialised code to handle episode selection screen, which
 has features which make it too awkward to add to the general system */
@@ -1401,7 +2298,7 @@ static void RenderEpisodeSelectMenu(void)
 
 					if (i<numberOfBasicLevels)
 					{
-						completedTextPtr = GetTextString(TEXTSTRING_NOTYETCOMPLETED+UserProfilePtr->LevelCompleted[playerID][i]);
+						completedTextPtr = GetTextString(UserProfilePtr->LevelCompleted[playerID][i]>=5 ? TEXTSTRING_COMPLETED_ACID_NEW : UserProfilePtr->LevelCompleted[playerID][i]>=4 ? TEXTSTRING_COMPLETED_IMPOSSIBLE_NEW : TEXTSTRING_NOTYETCOMPLETED+UserProfilePtr->LevelCompleted[playerID][i]);
 					}
 					else
 					{
@@ -1476,13 +2373,55 @@ static void RenderEpisodeSelectMenu(void)
 
 	
 }
+static void RenderInGameKeyConfiguration(void)
+{
+ int scale=D3D_GetConsoleTextScaleFixed(),count=AvPMenus.NumberOfElementsInMenu;
+ int row=MUL_FIXED(20,scale),pad=MUL_FIXED(10,scale),help=0,i,top,bottom,first,last,used;
+ char lines[64][512];
+ for(i=0;i<count;i++){
+  AVPMENU_ELEMENT *e=&AvPMenus.MenuElements[i];
+  int n=WrapMenuHelp(e->HelpString==TEXTSTRING_BLANK?"":GetTextString(e->HelpString),lines,ScreenDescriptorBlock.SDB_Width-48,scale);
+  int reserve=MenuHelpVisibleLines(n,scale)*MUL_FIXED(17,scale)+32;
+  if(reserve>help)help=reserve;
+ }
+ D3D_SetInGameMenuTextRenderActive(1);InGameMenuTextUsesNativeAnchors=1;
+ if(MenuPreviewTarget && MenuPreviewThicknessSelected()){
+  RenderPreviewRow(&AvPMenus.MenuElements[AvPMenus.CurrentlySelectedElement],AvPMenus.CurrentlySelectedElement,
+                   ScreenDescriptorBlock.SDB_Height/2-row/2,scale);
+ }else{
+  int headerY;MenuKeyConfigBounds(ScreenDescriptorBlock.SDB_Height,scale,help,&headerY,&top,&bottom);
+  for(i=0;i<2;i++){
+   AvPMenus.MenuElements[i].Brightness=i==AvPMenus.CurrentlySelectedElement?BRIGHTNESS_OF_HIGHLIGHTED_ELEMENT:BRIGHTNESS_OF_DARKENED_ELEMENT;
+   RenderMenuElement(&AvPMenus.MenuElements[i],i,headerY+i*row);
+  }
+  Hardware_RenderKeyConfigRectangle(AvPMenus.CurrentlySelectedElement>=2?ONE_FIXED:ONE_FIXED/4,top,bottom);
+  if(count>2){
+   int heights[count-2],selected=AvPMenus.CurrentlySelectedElement-2;
+   for(i=0;i<count-2;i++)heights[i]=MUL_FIXED(HeightOfMenuElement(&AvPMenus.MenuElements[i+2]),scale);
+   MenuVisibleRange(heights,count-2,selected,bottom-top-2*pad,&first,&last,&used);
+   int y=top+pad;
+   for(i=first;i<=last;i++){
+    AVPMENU_ELEMENT *e=&AvPMenus.MenuElements[i+2];
+    e->Brightness=i+2==AvPMenus.CurrentlySelectedElement?BRIGHTNESS_OF_HIGHLIGHTED_ELEMENT:BRIGHTNESS_OF_DARKENED_ELEMENT;
+    RenderMenuElement(e,i+2,y);y+=heights[i];
+   }
+  }
+ }
+ InGameMenuTextUsesNativeAnchors=0;D3D_SetInGameMenuTextRenderActive(0);
+}
 static void RenderKeyConfigurationMenu(void)
 {
+ if(AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS){RenderInGameKeyConfiguration();return;}
 	AVPMENU_ELEMENT *elementPtr = AvPMenus.MenuElements;//AvPMenus.CurrentlySelectedElement];
 	int centrePosition;
 	int i;
 	int centreY = ScreenDescriptorBlock.SDB_Height/2+25;
 	int y;
+	int keyConfigFrameAlpha = 0;
+	int keyConfigListTop = -100;
+	int keyConfigListBottom = 100;
+	const int inGameMenuText = (AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS);
+	const int textScaleFixed = inGameMenuText ? D3D_GetConsoleTextScaleFixed() : ONE_FIXED;
 	
 	if (AvPMenus.MenusState == MENUSSTATE_MAINMENUS)
 	{
@@ -1502,19 +2441,21 @@ static void RenderKeyConfigurationMenu(void)
 	}
 	else
 	{
-		int b;
 		if (AvPMenus.CurrentlySelectedElement>=2)
 		{
-			b = ONE_FIXED;
+			keyConfigFrameAlpha = ONE_FIXED;
 		}
 		else
 		{
-			b = ONE_FIXED/4;
+			keyConfigFrameAlpha = ONE_FIXED/4;
 		}
-		
-		Hardware_RenderKeyConfigRectangle(b);
+	}
+	if (inGameMenuText)
+	{
+		D3D_SetInGameMenuTextRenderActive(1);
+		InGameMenuTextUsesNativeAnchors = 1;
 	}		       
-	y = centreY-160;
+	y = centreY-MUL_FIXED(160, textScaleFixed);
 	for (i = 0; i<2; i++, elementPtr++)
 	{
 		int targetBrightness;
@@ -1547,16 +2488,25 @@ static void RenderKeyConfigurationMenu(void)
 		}
 		
 		RenderMenuElement(elementPtr,i,y);
-		y += HeightOfMenuElement(elementPtr);
+		y += MUL_FIXED(HeightOfMenuElement(elementPtr), textScaleFixed);
 	}
-	centrePosition = (AvPMenus.CurrentlySelectedElement)*ONE_FIXED;
+	if (inGameMenuText)
+	{
+		int keyConfigFrameTop = y + MUL_FIXED(10, textScaleFixed);
+		int keyConfigFrameBottom = ScreenDescriptorBlock.SDB_Height - 80;
+		if (keyConfigFrameTop < 150) keyConfigFrameTop = 150;
+		Hardware_RenderKeyConfigRectangle(keyConfigFrameAlpha, keyConfigFrameTop, keyConfigFrameBottom);
+		keyConfigListTop = keyConfigFrameTop + MUL_FIXED(15, textScaleFixed) - centreY;
+		keyConfigListBottom = keyConfigFrameBottom - MUL_FIXED(15, textScaleFixed) - centreY;
+	}
+	centrePosition = (AvPMenus.CurrentlySelectedElement) * ONE_FIXED;
 	if (centrePosition<2*ONE_FIXED) centrePosition = 2*ONE_FIXED;
 	for (i=2; i<AvPMenus.NumberOfElementsInMenu; i++,elementPtr++)
 	{
 
-		y = MUL_FIXED(i*65536-centrePosition,20);
+		y = MUL_FIXED(MUL_FIXED(i*65536-centrePosition,20), textScaleFixed);
 
-		if (y>=-100 && y<=100)
+		if (y>=keyConfigListTop && y<=keyConfigListBottom)
 		{
 //			char *textPtr = GetTextString(elementPtr->TextDescription);
 			int targetBrightness;
@@ -1621,6 +2571,11 @@ static void RenderKeyConfigurationMenu(void)
 		{
 			EpisodeSelectScrollOffset=0;
 		}
+	}
+	if (inGameMenuText)
+	{
+		InGameMenuTextUsesNativeAnchors = 0;
+		D3D_SetInGameMenuTextRenderActive(0);
 	}
 }
 
@@ -1737,7 +2692,7 @@ static void RenderUserProfileSelectMenu(void)
 
 		if (y>=-150 && y<=150)
 		{
-			char *textPtr = profilePtr->Name;
+            char *textPtr = ProfileMenuLabel(profilePtr->FullName);
 			time_t FileTime = profilePtr->FileTime;
 			int b;
 			int targetBrightness;
@@ -1794,157 +2749,214 @@ static void RenderUserProfileSelectMenu(void)
 	
 }
 
+extern int RenderSmallMenuText_QuickLoad(char*,int,int,int,enum AVPMENUFORMAT_ID);
+extern int Hardware_RenderSmallMenuText_QuickLoad(char*,int,int,int,enum AVPMENUFORMAT_ID);
+static int QuickLoadText(char *text,int x,int y,int alpha,enum AVPMENUFORMAT_ID format)
+{
+ if(AvPMenus.CurrentlySelectedElement==0)return RenderSmallMenuText_QuickLoad(text,x,y,alpha,format);
+ return RenderSmallMenuText_Coloured(text,x,y,alpha,format,178*ONE_FIXED/255,24*ONE_FIXED/255,240*ONE_FIXED/255);
+}
+static int HardwareQuickLoadText(char *text,int x,int y,int alpha,enum AVPMENUFORMAT_ID format)
+{
+ if(AvPMenus.CurrentlySelectedElement==0)return Hardware_RenderSmallMenuText_QuickLoad(text,x,y,alpha,format);
+ return Hardware_RenderSmallMenuText_Coloured(text,x,y,alpha,format,178*ONE_FIXED/255,24*ONE_FIXED/255,240*ONE_FIXED/255);
+}
+
 static void RenderLoadGameMenu(void)
 {
-	AVPMENU_ELEMENT *elementPtr = AvPMenus.MenuElements;
+	AVPMENU_ELEMENT *elementPtr;
 	int e;
 	int y;
+	int first;
+	int last;
+	int visibleRows;
+	int visibleHeight = 0;
 	int (*RenderText)(char *textPtr, int x, int y, int alpha, enum AVPMENUFORMAT_ID format);
-	
+	const int inGameMenuText = (AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS);
+	const int textScaleFixed = inGameMenuText ? D3D_GetConsoleTextScaleFixed() : ONE_FIXED;
+
+	/* 50 manual rows plus one read-only Quick Load row; render a stable nine-row window. */
+	if (AvPMenus.NumberOfElementsInMenu <= 0)
+		return;
+	if (inGameMenuText) D3D_SetInGameMenuTextRenderActive(1);
+	if (AvPMenus.CurrentlySelectedElement < 0)
+		AvPMenus.CurrentlySelectedElement = 0;
+	if (AvPMenus.CurrentlySelectedElement >= AvPMenus.NumberOfElementsInMenu)
+		AvPMenus.CurrentlySelectedElement = AvPMenus.NumberOfElementsInMenu - 1;
+
+    if(!inGameMenuText){
+        int count=AvPMenus.NumberOfElementsInMenu,heights[count],top=MENU_TOPY;
+        int bottom=ScreenDescriptorBlock.SDB_Height-MenuHelpReserve()-12;
+        for(e=0;e<count;e++)heights[e]=HeightOfMenuElement(&AvPMenus.MenuElements[e]);
+        MenuVisibleRange(heights,count,AvPMenus.CurrentlySelectedElement,bottom-top,&first,&last,&visibleHeight);
+        y=top;RenderText=RenderSmallMenuText;
+    }else{
+	visibleRows = AvPMenus.NumberOfElementsInMenu;
+	if (visibleRows > 9)
+		visibleRows = 9;
+	first = AvPMenus.CurrentlySelectedElement - visibleRows / 2;
+	if (first < 0)
+		first = 0;
+	if (first + visibleRows > AvPMenus.NumberOfElementsInMenu)
+		first = AvPMenus.NumberOfElementsInMenu - visibleRows;
+	last = first + visibleRows - 1;
+
+	for (e = first; e <= last; e++)
+		visibleHeight += MUL_FIXED(HeightOfMenuElement(&AvPMenus.MenuElements[e]), textScaleFixed);
+
 	if (AvPMenus.MenusState == MENUSSTATE_MAINMENUS)
 	{
-		y = MENU_CENTREY - (AvPMenus.MenuHeight)/2;
+		y = MENU_TOPY;
 		RenderText = RenderSmallMenuText;
 	}
-	else // in game menus
+	else
 	{
-		y = (ScreenDescriptorBlock.SDB_Height - AvPMenus.MenuHeight)/2;
+		y = (ScreenDescriptorBlock.SDB_Height - visibleHeight) / 2;
 		RenderText = Hardware_RenderSmallMenuText;
 	}
 
-	for (e = 0; e<AvPMenus.NumberOfElementsInMenu; e++, elementPtr++)
+    }
+	elementPtr = &AvPMenus.MenuElements[first];
+	for (e = first; e <= last; e++, elementPtr++)
 	{
 		char buffer[100];
-		SAVE_SLOT_HEADER *slotPtr = &SaveGameSlot[e];
+		int isQuickLoadRow = (AvPMenus.CurrentMenu == AVPMENU_LOADGAME && e == 0);
+		int slot = isQuickLoadRow ? QUICK_SAVE_SLOT : ((AvPMenus.CurrentMenu == AVPMENU_LOADGAME) ? e - 1 : e);
+		SAVE_SLOT_HEADER *slotPtr = &SaveGameSlot[slot];
 		int targetBrightness;
+        int (*RenderRowText)(char *,int,int,int,enum AVPMENUFORMAT_ID) =
+            isQuickLoadRow ? (inGameMenuText ? HardwareQuickLoadText : QuickLoadText) : RenderText;
 
-		if (e==AvPMenus.CurrentlySelectedElement)
+		if (e == AvPMenus.CurrentlySelectedElement)
 		{
-			if(AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS)
-			{
-				Hardware_RenderHighlightRectangle(MENU_LEFTXEDGE,y-2,MENU_RIGHTXEDGE,y+4+HUD_FONT_HEIGHT*2,0,128,0);
-			}
+			if (AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS)
+				Hardware_RenderHighlightRectangle(MENU_LEFTXEDGE, y - MUL_FIXED(2, textScaleFixed), MENU_RIGHTXEDGE, y + MUL_FIXED(4 + HUD_FONT_HEIGHT * 2, textScaleFixed), 0, 128, isQuickLoadRow ? 192 : 0);
 			else
-			{
-				RenderHighlightRectangle(MENU_LEFTXEDGE,y-2,MENU_RIGHTXEDGE,y+4+HUD_FONT_HEIGHT*2,0,128,0);
-			}
+				RenderHighlightRectangle(MENU_LEFTXEDGE, y - 2, MENU_RIGHTXEDGE, y + 4 + HUD_FONT_HEIGHT * 2, 0, 128, isQuickLoadRow ? 192 : 0);
 			targetBrightness = BRIGHTNESS_OF_HIGHLIGHTED_ELEMENT;
 		}
 		else
-		{ 
+		{
 			targetBrightness = BRIGHTNESS_OF_DARKENED_ELEMENT;
 		}
 
 		if (targetBrightness > elementPtr->Brightness)
 		{
-			elementPtr->Brightness+=BRIGHTNESS_CHANGE_SPEED;
-			if(elementPtr->Brightness>targetBrightness)
-			{
-				elementPtr->Brightness = targetBrightness;
-			}
+			elementPtr->Brightness += BRIGHTNESS_CHANGE_SPEED;
+			if (elementPtr->Brightness > targetBrightness) elementPtr->Brightness = targetBrightness;
 		}
 		else
 		{
-			elementPtr->Brightness-=BRIGHTNESS_CHANGE_SPEED;
-			if(elementPtr->Brightness<targetBrightness)
-			{
-				elementPtr->Brightness = targetBrightness;
-			}
-			
+			elementPtr->Brightness -= BRIGHTNESS_CHANGE_SPEED;
+			if (elementPtr->Brightness < targetBrightness) elementPtr->Brightness = targetBrightness;
 		}
-		
-		sprintf(buffer,"%d.",e+1);
-		RenderText(buffer,MENU_LEFTXEDGE+20,y,elementPtr->Brightness,AVPMENUFORMAT_RIGHTJUSTIFIED);
-		
+
+		if (isQuickLoadRow)
+		{
+			/* Right-aligned label replaces the quick-slot difficulty field. */
+			RenderRowText(GetTextString(TEXTSTRING_GLOBAL_QUICKLOAD_NEW), MENU_RIGHTXEDGE - 30, y, elementPtr->Brightness, AVPMENUFORMAT_RIGHTJUSTIFIED);
+		}
+		else
+		{
+			sprintf(buffer, "%d.", (AvPMenus.CurrentMenu == AVPMENU_LOADGAME) ? e : e + 1);
+			RenderRowText(buffer, MENU_LEFTXEDGE + 20, y, elementPtr->Brightness, AVPMENUFORMAT_RIGHTJUSTIFIED);
+		}
 		if (slotPtr->SlotUsed)
 		{
 			int textID;
 			int numberOfBasicEpisodes;
-			switch(slotPtr->Species)
+			switch (slotPtr->Species)
 			{
-				case I_Marine:
-				{
-					textID = TEXTSTRING_MARINELEVELS_1;
-					numberOfBasicEpisodes = MAX_NO_OF_BASIC_MARINE_EPISODES;
-					break;
-				}
-				case I_Alien:
-				{
-					textID = TEXTSTRING_ALIENLEVELS_1;
-					numberOfBasicEpisodes = MAX_NO_OF_BASIC_ALIEN_EPISODES;
-					break;
-				}
+				case I_Marine: textID = TEXTSTRING_MARINELEVELS_1; numberOfBasicEpisodes = MAX_NO_OF_BASIC_MARINE_EPISODES; break;
+				case I_Alien: textID = TEXTSTRING_ALIENLEVELS_1; numberOfBasicEpisodes = MAX_NO_OF_BASIC_ALIEN_EPISODES; break;
 				case I_Predator:
-				{
-					textID = TEXTSTRING_PREDATORLEVELS_1;
-					numberOfBasicEpisodes = MAX_NO_OF_BASIC_PREDATOR_EPISODES;
-					break;
-				}
+				default: textID = TEXTSTRING_PREDATORLEVELS_1; numberOfBasicEpisodes = MAX_NO_OF_BASIC_PREDATOR_EPISODES; break;
 			}
-		
-
-			sprintf(buffer,"%s",GetTextString(TEXTSTRING_MULTIPLAYER_MARINE+slotPtr->Species));
-			RenderText(buffer,MENU_LEFTXEDGE+30,y,elementPtr->Brightness,AVPMENUFORMAT_LEFTJUSTIFIED);
-			
-			sprintf(buffer,"%s",GetTextString(textID+slotPtr->Episode));
-			RenderText(buffer,MENU_CENTREX,y,elementPtr->Brightness,AVPMENUFORMAT_CENTREJUSTIFIED);
-
-			if (numberOfBasicEpisodes>slotPtr->Episode)
+				sprintf(buffer, "%s", GetTextString(TEXTSTRING_MULTIPLAYER_MARINE + slotPtr->Species));
+				RenderRowText(buffer, MENU_LEFTXEDGE + 30, y, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED);
+			sprintf(buffer, "%s", GetTextString(textID + slotPtr->Episode));
+			RenderRowText(buffer, MENU_CENTREX, y, elementPtr->Brightness, AVPMENUFORMAT_CENTREJUSTIFIED);
+			if (numberOfBasicEpisodes > slotPtr->Episode && !isQuickLoadRow)
 			{
-				sprintf(buffer,"%s",GetTextString(TEXTSTRING_DIFFICULTY_EASY+slotPtr->Difficulty));
-				RenderText(buffer,MENU_RIGHTXEDGE-30,y,elementPtr->Brightness,AVPMENUFORMAT_RIGHTJUSTIFIED);
+				if(slotPtr->AcidTier)snprintf(buffer,sizeof buffer,"%s %s",GetTextString(TEXTSTRING_MOLECULAR_ACID_NEW),AcidMultiplierLabel(slotPtr->AcidTier));
+                else sprintf(buffer, "%s", GetTextString(slotPtr->Difficulty==I_Impossible ? TEXTSTRING_DIFFICULTY_IMPOSSIBLE_NEW : TEXTSTRING_DIFFICULTY_EASY + slotPtr->Difficulty));
+				RenderRowText(buffer, MENU_RIGHTXEDGE - 30, y, elementPtr->Brightness, AVPMENUFORMAT_RIGHTJUSTIFIED);
 			}
-
-			sprintf(buffer, "%s %02d:%02d:%02d",GetTextString(TEXTSTRING_GAMESTATS_TIMEELAPSED),slotPtr->ElapsedTime_Hours,slotPtr->ElapsedTime_Minutes,slotPtr->ElapsedTime_Seconds);
-			RenderText(buffer,MENU_LEFTXEDGE+30,y+HUD_FONT_HEIGHT+1,elementPtr->Brightness,AVPMENUFORMAT_LEFTJUSTIFIED);
-
-			sprintf(buffer, "%s: %d",GetTextString(TEXTSTRING_SAVEGAME_SAVESLEFT),slotPtr->SavesLeft);
-			RenderText(buffer,MENU_CENTREX,y+HUD_FONT_HEIGHT+1,elementPtr->Brightness,AVPMENUFORMAT_CENTREJUSTIFIED);
-			RenderText(ctime(&slotPtr->TimeStamp),MENU_RIGHTXEDGE-30,y+HUD_FONT_HEIGHT+1,elementPtr->Brightness,AVPMENUFORMAT_RIGHTJUSTIFIED);
+			sprintf(buffer, "%s %02d:%02d:%02d", GetTextString(TEXTSTRING_GAMESTATS_TIMEELAPSED), slotPtr->ElapsedTime_Hours, slotPtr->ElapsedTime_Minutes, slotPtr->ElapsedTime_Seconds);
+			RenderRowText(buffer, MENU_LEFTXEDGE + 30, y + MUL_FIXED(HUD_FONT_HEIGHT + 1, textScaleFixed), elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED);
+			sprintf(buffer, "%s: %d", GetTextString(TEXTSTRING_SAVEGAME_SAVESLEFT), slotPtr->SavesLeft);
+			RenderRowText(buffer, MENU_CENTREX, y + MUL_FIXED(HUD_FONT_HEIGHT + 1, textScaleFixed), elementPtr->Brightness, AVPMENUFORMAT_CENTREJUSTIFIED);
+			RenderRowText(ctime(&slotPtr->TimeStamp), MENU_RIGHTXEDGE - 30, y + MUL_FIXED(HUD_FONT_HEIGHT + 1, textScaleFixed), elementPtr->Brightness, AVPMENUFORMAT_RIGHTJUSTIFIED);
 		}
 		else
 		{
-			RenderText(GetTextString(TEXTSTRING_SAVEGAME_EMPTYSLOT),MENU_CENTREX,y,elementPtr->Brightness,AVPMENUFORMAT_CENTREJUSTIFIED);
+			RenderRowText(GetTextString(TEXTSTRING_SAVEGAME_EMPTYSLOT), MENU_CENTREX, y, elementPtr->Brightness, AVPMENUFORMAT_CENTREJUSTIFIED);
 		}
-
-		y += HeightOfMenuElement(elementPtr);
+		y += MUL_FIXED(HeightOfMenuElement(elementPtr), textScaleFixed);
 	}
 
-
-	/* Render Menu Title */
 	if (AvPMenus.MenusState == MENUSSTATE_MAINMENUS)
 	{
-		char *textPtr = GetTextString(AvPMenusData[AvPMenus.CurrentMenu].MenuTitle);
-		RenderMenuText(textPtr,MENU_CENTREX,70,ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
+		RenderMenuText(GetTextString(AvPMenusData[AvPMenus.CurrentMenu].MenuTitle), MENU_CENTREX, 70, ONE_FIXED, AVPMENUFORMAT_CENTREJUSTIFIED);
 	}
 	else
 	{
-		char *textPtr = GetTextString(AvPMenusData[AvPMenus.CurrentMenu].MenuTitle);
-		AVPMENU_ELEMENT *elementPtr = &AvPMenus.MenuElements[AvPMenus.CurrentlySelectedElement];
-		y = (ScreenDescriptorBlock.SDB_Height - AvPMenus.MenuHeight)/2 - 30;
-		RenderText(textPtr,MENU_CENTREX,y,ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
-		y = (ScreenDescriptorBlock.SDB_Height + AvPMenus.MenuHeight)/2 + 20;
-		RenderText(GetTextString(elementPtr->HelpString),MENU_CENTREX,y,ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
+		int listTop = (ScreenDescriptorBlock.SDB_Height - visibleHeight) / 2;
+		AVPMENU_ELEMENT *selectedElement = &AvPMenus.MenuElements[AvPMenus.CurrentlySelectedElement];
+		RenderText(GetTextString(AvPMenusData[AvPMenus.CurrentMenu].MenuTitle), MENU_CENTREX, listTop - MUL_FIXED(30, textScaleFixed), ONE_FIXED, AVPMENUFORMAT_CENTREJUSTIFIED);
+		RenderText(GetTextString(selectedElement->HelpString), MENU_CENTREX, listTop + visibleHeight + MUL_FIXED(20, textScaleFixed), ONE_FIXED, AVPMENUFORMAT_CENTREJUSTIFIED);
 	}
+	if (inGameMenuText) D3D_SetInGameMenuTextRenderActive(0);
 }
 
-static void RenderHelpString()
+extern void D3D_RenderHUDStringOutlined(char *text,int x,int y,int colour,int radius);
+static int MenuHelpNeedsOutline(int y,int lineHeight)
 {
-	AVPMENU_ELEMENT *elementPtr = &AvPMenus.MenuElements[AvPMenus.CurrentlySelectedElement];
+ if(AvPMenus.MenusState!=MENUSSTATE_INGAMEMENUS || AvPMenus.CurrentMenu!=AVPMENU_INGAMEAVOPTIONS)return 0;
+ if(AvPMenus.CurrentlySelectedElement<0 || AvPMenus.CurrentlySelectedElement>=AvPMenus.NumberOfElementsInMenu)return 0;
+ if(MenuColourBarsAlpha>0){
+  int scale=DIV_FIXED(ScreenDescriptorBlock.SDB_Height,480),h=scale/2048,offset=scale/4096;
+  int top=ScreenDescriptorBlock.SDB_Height-offset-h,bottom=ScreenDescriptorBlock.SDB_Height-offset;
+  if(y<bottom && y+lineHeight>top)return 1;
+ }
+ AVPMENU_ELEMENT *e=&AvPMenus.MenuElements[AvPMenus.CurrentlySelectedElement];
+ if(e->HelpString==TEXTSTRING_FMV_SCALE_HELP_NEW || e->HelpString==TEXTSTRING_MUSIC_PLAY_MODE_HELP_NEW)return 1;
+ return AvP.PlayerType==I_Alien && MenuPreviewSelected();
+}
 
-	if(elementPtr->HelpString!=TEXTSTRING_BLANK && AvPMenus.MenusState != MENUSSTATE_INGAMEMENUS)
-	{
-		RECT area;
-		//draw the attached string at the bottom of the screen
-
-		area.left=MENU_LEFTXEDGE;
-		area.right=MENU_RIGHTXEDGE;
-		area.top=420;
-		area.bottom=ScreenDescriptorBlock.SDB_Height;
-
-		RenderSmallFontString_Wrapped(GetTextString(elementPtr->HelpString),&area,BRIGHTNESS_OF_HIGHLIGHTED_ELEMENT,0,0);
-		
-	}
+static void RenderHelpString(void)
+{
+ if(IsMissionBriefingMenu()||AvPMenus.CurrentMenu==AVPMENU_SINGLEPLAYER||TyrargoVersionMenu()||AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS||AvPMenus.CurrentMenu==AVPMENU_EXPERIMENTAL||AvPMenus.CurrentMenu==AVPMENU_EXPERIMENTAL2||AvPMenus.CurrentMenu==AVPMENU_MAINMENUAVOPTIONS||AvPMenus.CurrentMenu==AVPMENU_JOYSTICKCONTROLS||AvPMenus.CurrentMenu==AVPMENU_DETAILLEVELS||AvPMenus.MenuHeight>MENU_HEIGHT){
+  char lines[64][512];int scale=AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS?D3D_GetConsoleTextScaleFixed():ONE_FIXED;
+  int count=WrapMenuHelp(MenuHelpText(),lines,ScreenDescriptorBlock.SDB_Width-48,scale);
+  int lineHeight=MUL_FIXED(17,scale),visible=MenuHelpVisibleLines(count,scale),first=0,i,y;
+  static int previousMenu=-1,previousElement=-1,previousScale=-1;static Uint64 start=0;
+  if(previousMenu!=AvPMenus.CurrentMenu||previousElement!=AvPMenus.CurrentlySelectedElement||previousScale!=scale){start=SDL_GetTicks();previousMenu=AvPMenus.CurrentMenu;previousElement=AvPMenus.CurrentlySelectedElement;previousScale=scale;}
+  if(!count)return;
+  /* Preserve the selected text size. Long descriptions page, never shrink. */
+  if(count>visible)first=(int)(((SDL_GetTicks()-start)/6500)%((count+visible-1)/visible))*visible;
+  y=ScreenDescriptorBlock.SDB_Height-16-visible*lineHeight-TyrargoVersionReserve();
+  if(AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS)D3D_SetInGameMenuTextRenderActive(1);
+  SetMenuAVContrast(AvPMenus.MenusState==MENUSSTATE_MAINMENUS&&AvPMenus.CurrentMenu==AVPMENU_MAINMENUAVOPTIONS?3:0);
+  for(i=0;i<visible&&first+i<count;i++){
+   if(MenuHelpNeedsOutline(y+i*lineHeight,lineHeight)){
+    int width=MUL_FIXED(AvPTextStringWidth(lines[first+i],AAFontWidths),scale);
+    int radius=(scale+ONE_FIXED-1)/ONE_FIXED;
+    D3D_RenderHUDStringOutlined(lines[first+i],(ScreenDescriptorBlock.SDB_Width-width)/2,
+                               y+i*lineHeight,0xffffffff,radius);
+   }else if(AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS)Hardware_RenderSmallMenuText(lines[first+i],ScreenDescriptorBlock.SDB_Width/2,y+i*lineHeight,ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
+   else RenderSmallMenuText(lines[first+i],MENU_CENTREX,y+i*lineHeight,ONE_FIXED,AVPMENUFORMAT_CENTREJUSTIFIED);
+  }
+  SetMenuAVContrast(0);
+  if(AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS)D3D_SetInGameMenuTextRenderActive(0);
+  return;
+ }
+ {AVPMENU_ELEMENT*e=&AvPMenus.MenuElements[AvPMenus.CurrentlySelectedElement];
+  if(e->HelpString!=TEXTSTRING_BLANK){
+   RECT area;area.left=MENU_LEFTXEDGE;area.right=MENU_RIGHTXEDGE;area.top=420;area.bottom=ScreenDescriptorBlock.SDB_Height;
+   RenderSmallFontString_Wrapped(GetTextString(e->HelpString),&area,BRIGHTNESS_OF_HIGHLIGHTED_ELEMENT,0,0);
+  }
+ }
 }
 
 static void RenderConfigurationDescriptionString()
@@ -2019,16 +3031,28 @@ static void ActUponUsersInput(void)
 			elementPtr->c.TextPtr[AvPMenus.PositionInTextField] = 0;
 			AvPMenus.UserEnteringText = 0;
 
-			// KJL 10:09:35 09/02/00 - when the user has entered their name,
-			// move down to the next option. If the user enters a null
-			// string, replace it with a placeholder name		
-			if((AvPMenus.CurrentMenu == AVPMENU_USERPROFILEENTERNAME)
- 			 ||(AvPMenus.CurrentMenu == AVPMENU_MULTIPLAYER_SKIRMISH)
+			/* A profile must never silently become a random filename. Escape cancels
+			   creation; Return on an empty field keeps the cursor in the field. */
+			if (AvPMenus.CurrentMenu == AVPMENU_USERPROFILEENTERNAME)
+			{
+				if (DebouncedKeyboardInput[KEY_ESCAPE])
+				{
+					SetupNewMenu(AVPMENU_USERPROFILESELECT);
+					return;
+				}
+				if (AvPMenus.PositionInTextField == 0)
+				{
+					AvPMenus.UserEnteringText = 1;
+					SDL_StartTextInput(window);
+					return;
+				}
+				AvPMenus.CurrentlySelectedElement++;
+			}
+			else if((AvPMenus.CurrentMenu == AVPMENU_MULTIPLAYER_SKIRMISH)
  			 ||(AvPMenus.CurrentMenu == AVPMENU_MULTIPLAYER))
 			{
 				if(AvPMenus.PositionInTextField==0)
 				{
-					// Generate a random name
 					GenerateRandomName(elementPtr->c.TextPtr, elementPtr->b.MaxTextLength);
 					AvPMenus.PositionInTextField = strlen(elementPtr->c.TextPtr);
 				}
@@ -2103,35 +3127,49 @@ static void ActUponUsersInput(void)
 	else if (AvPMenus.UserEnteringNumber)
 	{
 		AVPMENU_ELEMENT *elementPtr = &AvPMenus.MenuElements[AvPMenus.CurrentlySelectedElement];
-
-		if (DebouncedKeyboardInput[KEY_ESCAPE] || DebouncedKeyboardInput[KEY_CR])
+		if (DebouncedKeyboardInput[KEY_ESCAPE] || DebouncedKeyboardInput[KEY_CR] || DebouncedKeyboardInput[KEY_NUMPADENTER])
 		{
+			if (elementPtr->ElementID == AVPMENU_ELEMENT_VIDEO_FPSCAP && (*elementPtr->c.NumberPtr < 1 || *elementPtr->c.NumberPtr > 1000))
+				*elementPtr->c.NumberPtr = 60;
+			VideoFPSCapCustomEditStartsFresh = 0;
 			AvPMenus.UserEnteringNumber = 0;
 		}
 		else if (DebouncedKeyboardInput[KEY_BACKSPACE] || DebouncedKeyboardInput[KEY_LEFT])
 		{
-			(*elementPtr->c.NumberPtr)/=10;
+			if (elementPtr->ElementID == AVPMENU_ELEMENT_VIDEO_FPSCAP && VideoFPSCapCustomEditStartsFresh)
+				*elementPtr->c.NumberPtr = 0;
+			else
+				(*elementPtr->c.NumberPtr) /= 10;
+			VideoFPSCapCustomEditStartsFresh = 0;
 		}
 		else
 		{
-			char c=0;
-			
-			KeyboardEntryQueue_StartProcessing();
-			while((c=KeyboardEntryQueue_ProcessCharacter()))
-			{
-				if (AvPMenus.PositionInTextField<elementPtr->b.MaxTextLength)
-				{
-					if(c>='0' && c<='9')
-					{
-						(*elementPtr->c.NumberPtr)*=10;
-						(*elementPtr->c.NumberPtr)+=c-'0';
+			int digit = -1;
+			int key;
 
-						if((*elementPtr->c.NumberPtr)>elementPtr->b.MaxValue)
-						{
-							(*elementPtr->c.NumberPtr)=elementPtr->b.MaxValue;
-						}
-					}
+			/* SDL text-input events are locale/IME dependent. Numeric menu fields
+			 * deliberately use NakedAVP's debounced physical-key path instead. */
+			for (key = KEY_0; key <= KEY_9; ++key)
+			{
+				if (DebouncedKeyboardInput[key]) { digit = key - KEY_0; break; }
+			}
+			if (digit < 0)
+			{
+				for (key = KEY_NUMPAD0; key <= KEY_NUMPAD9; ++key)
+				{
+					if (DebouncedKeyboardInput[key]) { digit = key - KEY_NUMPAD0; break; }
 				}
+			}
+			if (digit >= 0)
+			{
+				if (elementPtr->ElementID == AVPMENU_ELEMENT_VIDEO_FPSCAP && VideoFPSCapCustomEditStartsFresh)
+				{
+					*elementPtr->c.NumberPtr = 0;
+					VideoFPSCapCustomEditStartsFresh = 0;
+				}
+				(*elementPtr->c.NumberPtr) = (*elementPtr->c.NumberPtr) * 10 + digit;
+				if (*elementPtr->c.NumberPtr > elementPtr->b.MaxValue)
+					*elementPtr->c.NumberPtr = elementPtr->b.MaxValue;
 			}
 		}
 		KeyboardEntryQueue_Clear();
@@ -2147,17 +3185,12 @@ static void ActUponUsersInput(void)
 			signed int key,selectedKey=-1;
 
 			// see if a valid key has been pressed
-			for (key = 0 ; key <= MAX_NUMBER_OF_INPUT_KEYS ; key++)
+			for (key = 0 ; key < MAX_NUMBER_OF_INPUT_KEYS ; key++)
 			{
-				if (!(key == KEY_ESCAPE) &&
-//					!(key >= KEY_F1 && key <= KEY_F12) &&
-					!(key >= KEY_0 && key <= KEY_9) )
+				if ((key != KEY_ESCAPE) && DebouncedKeyboardInput[key])
 				{
-					if (DebouncedKeyboardInput[key])
-					{
-						selectedKey = key;
-						break;
-					}
+					selectedKey = key;
+					break;
 				}
 			}
 			
@@ -2165,7 +3198,16 @@ static void ActUponUsersInput(void)
 			{
 				if (selectedKey!=-1)
 				{
-					*(((unsigned char*)&PlayerInputPrimaryConfig)+AvPMenus.CurrentlySelectedElement-2) = selectedKey;
+					if (AvPMenus.CurrentMenu==AVPMENU_MARINEKEYCONFIG)
+{
+	extern int SmartJetpackEnabled_Temp;
+	int bindingIndex=KeyConfigVisibleBindingIndex(AvPMenus.CurrentlySelectedElement);
+	if (bindingIndex==12
+		&& (selectedKey==PlayerInputPrimaryConfig.f.Jetpack || selectedKey==PlayerInputSecondaryConfig.f.Jetpack)) selectedKey=-1;
+	if (bindingIndex==22
+		&& (selectedKey==PlayerInputPrimaryConfig.Jump || selectedKey==PlayerInputSecondaryConfig.Jump)) selectedKey=-1;
+}
+if (selectedKey!=-1) *KeyConfigBindingPointer(1,AvPMenus.CurrentlySelectedElement) = selectedKey;
 					AvPMenus.UserChangingKeyConfig=0;
 				}
 			}
@@ -2173,7 +3215,16 @@ static void ActUponUsersInput(void)
 			{
 				if (selectedKey!=-1)
 				{
-					*(((unsigned char*)&PlayerInputSecondaryConfig)+AvPMenus.CurrentlySelectedElement-2) = selectedKey;
+					if (AvPMenus.CurrentMenu==AVPMENU_MARINEKEYCONFIG)
+{
+	extern int SmartJetpackEnabled_Temp;
+	int bindingIndex=KeyConfigVisibleBindingIndex(AvPMenus.CurrentlySelectedElement);
+	if (bindingIndex==12
+		&& (selectedKey==PlayerInputPrimaryConfig.f.Jetpack || selectedKey==PlayerInputSecondaryConfig.f.Jetpack)) selectedKey=-1;
+	if (bindingIndex==22
+		&& (selectedKey==PlayerInputPrimaryConfig.Jump || selectedKey==PlayerInputSecondaryConfig.Jump)) selectedKey=-1;
+}
+if (selectedKey!=-1) *KeyConfigBindingPointer(0,AvPMenus.CurrentlySelectedElement) = selectedKey;
 					AvPMenus.UserChangingKeyConfig=0;
 				}
 			}
@@ -2181,8 +3232,35 @@ static void ActUponUsersInput(void)
 	}
 	else
 	{	
-		if (DebouncedKeyboardInput[KEY_ESCAPE] && (AvPMenus.CurrentMenu != AVPMENU_MAIN && AvPMenus.CurrentMenu != AVPMENU_INGAME))
+        if (DebouncedKeyboardInput[KEY_ESCAPE] && AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS && AvPMenus.CurrentMenu==AVPMENU_INGAME)
+        {
+            Sound_Play(SID_MENUS_SELECT_ITEM,"r");
+            ResumeGameFromMenu();
+        }
+        else if (DebouncedKeyboardInput[KEY_ESCAPE]
+            && AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS
+			&& (AvPMenus.CurrentMenu == AVPMENU_SAVEGAME || AvPMenus.CurrentMenu == AVPMENU_LOADGAME))
 		{
+			/* Direct save/load binds never make the player walk back through pause. */
+			AvPMenus.MenusState = MENUSSTATE_STARTGAME;
+		}
+		else if (DebouncedKeyboardInput[KEY_ESCAPE] && (AvPMenus.CurrentMenu != AVPMENU_MAIN && AvPMenus.CurrentMenu != AVPMENU_INGAME))
+		{
+            /* Escape applies the exact same pending controls as the OK row.
+             * Key-capture cancellation is handled above and stays separate. */
+            if (AvPMenus.CurrentMenu==AVPMENU_MARINEKEYCONFIG ||
+                AvPMenus.CurrentMenu==AVPMENU_PREDATORKEYCONFIG ||
+                AvPMenus.CurrentMenu==AVPMENU_ALIENKEYCONFIG ||
+                AvPMenus.CurrentMenu==AVPMENU_CONTROLS ||
+                AvPMenus.CurrentMenu==AVPMENU_JOYSTICKCONTROLS)
+            {
+                for(int row=0;row<AvPMenus.NumberOfElementsInMenu;row++)
+                    if(AvPMenus.MenuElements[row].ElementID==AVPMENU_ELEMENT_KEYCONFIGOK){
+                        AvPMenus.CurrentlySelectedElement=row;
+                        InteractWithMenuElement(AVPMENU_ELEMENT_INTERACTION_SELECT);
+                        return;
+                    }
+            }
 			//if (AvPMenus.CurrentMenu == AVPMENU_MULTIPLAYERJOINGAME2)
 			switch(AvPMenus.CurrentMenu)
 			{
@@ -2200,6 +3278,7 @@ static void ActUponUsersInput(void)
 				{
 					SetDetailLevelsFromMenu();
 					SaveUserProfile(UserProfilePtr);
+					SaveDeviceAndVideoModePreferences();
 					if(AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS)
 					{
 						SetupNewMenu(AVPMENU_INGAMEAVOPTIONS);
@@ -2210,6 +3289,7 @@ static void ActUponUsersInput(void)
 				case AVPMENU_MAINMENUAVOPTIONS:
 				{
 					SaveUserProfile(UserProfilePtr);
+                    SaveDeviceAndVideoModePreferences();
 					break;
 				}
 				case AVPMENU_CHEATOPTIONS:
@@ -2234,10 +3314,11 @@ static void ActUponUsersInput(void)
 
 
 			if(AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS)
-			{
-				SetupNewMenu(AVPMENU_INGAME);
-			}
-			else
+				{
+					/* Escape from the in-game video picker returns to InGame AV Options. */
+					SetupNewMenu((AvPMenus.CurrentMenu == AVPMENU_INGAMEVIDEOMODE) ? AVPMENU_INGAMEAVOPTIONS : AVPMENU_INGAME);
+				}
+				else
 			{
 				SetupNewMenu(AvPMenusData[AvPMenus.CurrentMenu].ParentMenu);
 			}
@@ -2264,23 +3345,19 @@ static void ActUponUsersInput(void)
 						InteractWithMenuElement(AVPMENU_ELEMENT_INTERACTION_DECREASE);
 						break;
 					}
-					case AVPMENU_MARINEKEYCONFIG:
-				    case AVPMENU_PREDATORKEYCONFIG:
-					case AVPMENU_ALIENKEYCONFIG:
-					{
-						if (AvPMenus.CurrentlySelectedElement>0)
-						{
-							AvPMenus.CurrentlySelectedElement--;
-							Sound_Play(SID_MENUS_CHANGE_ITEM,"r");
-						}
-						break;
-					}
 					default:
 					{
 						AvPMenus.CurrentlySelectedElement--;
 						if (AvPMenus.CurrentlySelectedElement<0)
 						{
 							AvPMenus.CurrentlySelectedElement= AvPMenus.NumberOfElementsInMenu-1;
+						}
+						/* Renderer is informational and is skipped by video-menu navigation. */
+						if ((AvPMenus.CurrentMenu==AVPMENU_VIDEOMODE || AvPMenus.CurrentMenu==AVPMENU_INGAMEVIDEOMODE) && AvPMenus.CurrentlySelectedElement==0)
+							AvPMenus.CurrentlySelectedElement=AvPMenus.NumberOfElementsInMenu-1;						while (!MenuElementIsVisible(&AvPMenus.MenuElements[AvPMenus.CurrentlySelectedElement]))
+						{
+							AvPMenus.CurrentlySelectedElement--;
+							if (AvPMenus.CurrentlySelectedElement<0) AvPMenus.CurrentlySelectedElement=AvPMenus.NumberOfElementsInMenu-1;
 						}
 						Sound_Play(SID_MENUS_CHANGE_ITEM,"r");
 						break;
@@ -2308,23 +3385,19 @@ static void ActUponUsersInput(void)
 						InteractWithMenuElement(AVPMENU_ELEMENT_INTERACTION_INCREASE);
 						break;
 					}
-					case AVPMENU_MARINEKEYCONFIG:
-				    case AVPMENU_PREDATORKEYCONFIG:
-					case AVPMENU_ALIENKEYCONFIG:
-					{
-						if (AvPMenus.CurrentlySelectedElement<AvPMenus.NumberOfElementsInMenu-1)
-						{
-							AvPMenus.CurrentlySelectedElement++;
-							Sound_Play(SID_MENUS_CHANGE_ITEM,"r");
-						}
-						break;
-					}
 					default:
 					{
 						AvPMenus.CurrentlySelectedElement++;
 						if (AvPMenus.CurrentlySelectedElement>=AvPMenus.NumberOfElementsInMenu)
 						{
 							AvPMenus.CurrentlySelectedElement= 0;
+						}
+						/* Renderer is informational and is skipped by video-menu navigation. */
+						if ((AvPMenus.CurrentMenu==AVPMENU_VIDEOMODE || AvPMenus.CurrentMenu==AVPMENU_INGAMEVIDEOMODE) && AvPMenus.CurrentlySelectedElement==0)
+							AvPMenus.CurrentlySelectedElement=1;						while (!MenuElementIsVisible(&AvPMenus.MenuElements[AvPMenus.CurrentlySelectedElement]))
+						{
+							AvPMenus.CurrentlySelectedElement++;
+							if (AvPMenus.CurrentlySelectedElement>=AvPMenus.NumberOfElementsInMenu) AvPMenus.CurrentlySelectedElement=0;
 						}
 						Sound_Play(SID_MENUS_CHANGE_ITEM,"r");
 						break;
@@ -2370,11 +3443,11 @@ static void ActUponUsersInput(void)
 				{
 					if (!KeyConfigSelectionColumn)
 					{
-						*(((unsigned char*)&PlayerInputPrimaryConfig)+AvPMenus.CurrentlySelectedElement-2) = KEY_VOID;
+						*KeyConfigBindingPointer(1,AvPMenus.CurrentlySelectedElement) = KEY_VOID;
 					}
 					else // changing Secondary
 					{
-						*(((unsigned char*)&PlayerInputSecondaryConfig)+AvPMenus.CurrentlySelectedElement-2) = KEY_VOID;
+						*KeyConfigBindingPointer(0,AvPMenus.CurrentlySelectedElement) = KEY_VOID;
 					}
 					break;
 				}
@@ -2410,6 +3483,64 @@ static void ActUponUsersInput(void)
 	}
 
 }
+static int MenuElementIsVisible(AVPMENU_ELEMENT *elementPtr)
+{
+    if(elementPtr->ElementID==AVPMENU_ELEMENT_TEXTSLIDER &&
+       elementPtr->c.SliderValuePtr==&MenuMusicMode && !MenuMusic99Available)return 0;
+    if(elementPtr->ElementID==AVPMENU_ELEMENT_HUD_ANIMATION_INTENSITY){
+        int flags=CameraMotionFlags(MarineCameraMode);
+        if(AvP.PlayerType!=I_Marine)return 0;
+        if(elementPtr->c.SliderValuePtr==&HUDShakeIntensity)return (flags&4)!=0;
+        if(elementPtr->c.SliderValuePtr==&HUDSwayIntensity)return (flags&1)!=0;
+        if(elementPtr->c.SliderValuePtr==&HUDBobbingIntensity)return (flags&2)!=0;
+        return 0;
+    }
+    if(elementPtr->ElementID==AVPMENU_ELEMENT_TEXTSLIDER &&
+       elementPtr->c.SliderValuePtr==&MarineCrosshairThicknessMode && AvP.PlayerType!=I_Marine)return 0;
+    if(!VideoHUDUsesWideLayout() &&
+       (elementPtr->ElementID==AVPMENU_ELEMENT_HUD_ANCHORED ||
+        elementPtr->ElementID==AVPMENU_ELEMENT_HUD_POSITION))return 0;
+	if(AvP.PlayerType==I_Alien &&
+       (elementPtr->ElementID==AVPMENU_ELEMENT_CROSSHAIR_SCALE ||
+        elementPtr->ElementID==AVPMENU_ELEMENT_HUD_ANCHORED ||
+        elementPtr->ElementID==AVPMENU_ELEMENT_HUD_POSITION))return 0;
+	return (elementPtr->ElementID != AVPMENU_ELEMENT_HUD_POSITION
+		|| HUDAnchorMode == HUD_ANCHOR_UNLOCKED);
+}
+
+static int HUDPositionForAspect(int numerator, int denominator)
+{
+	int width = ScreenDescriptorBlock.SDB_Width;
+	int height = ScreenDescriptorBlock.SDB_Height;
+	int minimumWidth = (height * 4) / 3;
+	int desiredWidth = (height * numerator) / denominator;
+	int position;
+
+	if (minimumWidth > width) minimumWidth = width;
+	if (desiredWidth < minimumWidth) desiredWidth = minimumWidth;
+	if (desiredWidth > width) desiredWidth = width;
+	if (width <= minimumWidth) return 0;
+	position = ((desiredWidth - minimumWidth) * 100 + (width - minimumWidth) / 2) / (width - minimumWidth);
+	if (position < 0) return 0;
+	if (position > 100) return 100;
+	return position;
+}
+
+static void HUDPositionDescription(char *buffer, int bufferSize)
+{
+	int layoutWidth = HUD_GetLayoutWidth();
+	int layoutHeight = HUD_GetLayoutHeight();
+	if (layoutHeight <= 0) layoutHeight = 1;
+	if (HUDAnchorPosition == 0) {
+		snprintf(buffer, bufferSize, "4:3");
+	} else if (HUDAnchorPosition == HUDPositionForAspect(16,9)) {
+		snprintf(buffer, bufferSize, "16:9");
+	} else {
+		snprintf(buffer, bufferSize, "%.2f:1", (double)layoutWidth/(double)layoutHeight);
+	}
+}
+static void ResumeGameFromMenu(void) { AvPMenus.MenusState=MENUSSTATE_STARTGAME; }
+
 static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interactionID)
 {
 	AVPMENU_ELEMENT *elementPtr = &AvPMenus.MenuElements[AvPMenus.CurrentlySelectedElement];
@@ -2423,7 +3554,29 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 		Sound_Play(SID_MENUS_CHANGE_ITEM,"r");
 	}
 	switch(elementPtr->ElementID)
-	{
+    {
+        case AVPMENU_ELEMENT_SHAKE_PARAM:
+            if(interactionID==AVPMENU_ELEMENT_INTERACTION_SELECT)ShakeParamDefault(elementPtr->c.Value);
+            else ShakeParamAdjust(elementPtr->c.Value,interactionID==AVPMENU_ELEMENT_INTERACTION_INCREASE?1:-1);
+            break;
+        case AVPMENU_ELEMENT_SHAKE_EXPORT:
+            if(interactionID==AVPMENU_ELEMENT_INTERACTION_SELECT)ShakeParamsExport();
+            break;
+        case AVPMENU_ELEMENT_MOTION_PARAM:
+            if(interactionID==AVPMENU_ELEMENT_INTERACTION_SELECT)MotionParamDefault(elementPtr->c.Value);
+            else MotionParamAdjust(elementPtr->c.Value,interactionID==AVPMENU_ELEMENT_INTERACTION_INCREASE?1:-1);
+            break;
+        case AVPMENU_ELEMENT_MOTION_EXPORT:
+            if(interactionID==AVPMENU_ELEMENT_INTERACTION_SELECT)MotionParamsExport();
+            break;
+        case AVPMENU_ELEMENT_DEV_WEAPON_Z:
+            if(interactionID==AVPMENU_ELEMENT_INTERACTION_SELECT)DevViewmodelToggle(elementPtr->c.Value);
+            else DevViewmodelAdjust(elementPtr->c.Value,interactionID==AVPMENU_ELEMENT_INTERACTION_INCREASE?1:-1);
+            break;
+        case AVPMENU_ELEMENT_DEV_EXPORT:
+            if(interactionID==AVPMENU_ELEMENT_INTERACTION_SELECT)DevViewmodelExport();
+            break;
+
 		default:
 		GLOBALASSERT("UNKNOWN MENU ELEMENT"==0);
 		case AVPMENU_ELEMENT_GOTOMENU:
@@ -2510,8 +3663,149 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 		{
 			break;
 		}
-		case AVPMENU_ELEMENT_SLIDER:
+						case AVPMENU_ELEMENT_WEAPON_FOV:
 		{
+			SynchroniseWeaponFOVForCurrentSpecies();
+			if (interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT)
+			{
+				WeaponFOV = WeaponFOVDefaultForCurrentSpecies();
+			}
+			else if (interactionID == AVPMENU_ELEMENT_INTERACTION_INCREASE)
+			{
+				if (WeaponFOV < WeaponFOVMaximumForCurrentSpecies()) WeaponFOV++;
+			}
+			else
+			{
+				if (WeaponFOV > WEAPON_FOV_MINIMUM) WeaponFOV--;
+			}
+			SynchroniseWeaponFOVForCurrentSpecies();
+			break;
+		}
+		case AVPMENU_ELEMENT_FOV:
+		{
+			ClampPlayerFOVForCurrentSpecies();
+
+if (interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT)
+			{
+				/* ENTER restores the active species native FOV. */
+				PlayerFOV = PlayerFOVDefaultForCurrentSpecies();
+			}
+			else if (interactionID == AVPMENU_ELEMENT_INTERACTION_INCREASE)
+			{
+				if (PlayerFOV < PlayerFOVMaximumForCurrentSpecies()) PlayerFOV++;
+			}
+			else
+			{
+				if (PlayerFOV > PlayerFOVMinimumForCurrentSpecies()) PlayerFOV--;
+			}
+			RefreshPlayerFOV();
+			break;
+		}
+		case AVPMENU_ELEMENT_HUD_ANIMATION_INTENSITY:
+        if(interactionID==AVPMENU_ELEMENT_INTERACTION_SELECT)(*elementPtr->c.SliderValuePtr)=50;
+        else if(interactionID==AVPMENU_ELEMENT_INTERACTION_INCREASE){if((*elementPtr->c.SliderValuePtr)<100)(*elementPtr->c.SliderValuePtr)++;}
+        else if((*elementPtr->c.SliderValuePtr)>1)(*elementPtr->c.SliderValuePtr)--;
+        break;
+        case AVPMENU_ELEMENT_HUD_SCALE:
+		{
+			HUD_SynchronisePerSpeciesOptions();
+			if (interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT) HUDUserScaleTenths = HUD_USER_SCALE_TENTHS_DEFAULT;
+			else if (interactionID == AVPMENU_ELEMENT_INTERACTION_INCREASE) { if (HUDUserScaleTenths < HUD_USER_SCALE_TENTHS_MAXIMUM) HUDUserScaleTenths++; }
+			else { if (HUDUserScaleTenths > HUD_USER_SCALE_TENTHS_MINIMUM) HUDUserScaleTenths--; }
+			HUD_GetUserScaleFixed();
+			break;
+		}
+				case AVPMENU_ELEMENT_CROSSHAIR_SCALE:
+		{
+			HUD_ClampCrosshairScaleForCurrentSpecies();
+			if (interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT) CrosshairScaleTenths = AvP.PlayerType==I_Predator?20:CROSSHAIR_SCALE_TENTHS_DEFAULT;
+			else if (interactionID == AVPMENU_ELEMENT_INTERACTION_INCREASE) { if (CrosshairScaleTenths < CROSSHAIR_SCALE_TENTHS_MAXIMUM) CrosshairScaleTenths++; }
+			else { if (CrosshairScaleTenths > CROSSHAIR_SCALE_TENTHS_MINIMUM) CrosshairScaleTenths--; }
+			HUD_GetCrosshairScaleFixed();
+			break;
+		}case AVPMENU_ELEMENT_HUD_ANCHORED:
+		{
+			if (interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT)
+			{
+				HUDAnchorMode = HUD_ANCHOR_16_9;
+				HUDAnchorPosition = HUDPositionForAspect(16,9);
+			}
+			else if (interactionID == AVPMENU_ELEMENT_INTERACTION_INCREASE)
+			{
+				HUDAnchorMode++;
+				if (HUDAnchorMode > HUD_ANCHOR_UNLOCKED) HUDAnchorMode = HUD_ANCHOR_4_3;
+			}
+			else
+			{
+				HUDAnchorMode--;
+				if (HUDAnchorMode < HUD_ANCHOR_4_3) HUDAnchorMode = HUD_ANCHOR_UNLOCKED;
+			}
+			if (HUDAnchorMode == HUD_ANCHOR_UNLOCKED)
+			{
+				HUDAnchorPosition = HUDAnchorUnlockedPosition;
+			}
+			HUD_RefreshLayout();
+			break;
+		}
+		case AVPMENU_ELEMENT_HUD_POSITION:
+		{
+			int aspect16By9;
+			HUD_SynchronisePerSpeciesOptions();
+			aspect16By9 = HUDPositionForAspect(16,9);
+			if (interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT)
+			{
+				if (HUDAnchorPosition == 0)
+					HUDAnchorPosition = aspect16By9;
+				else if (HUDAnchorPosition == aspect16By9)
+					HUDAnchorPosition = HUDAnchorUnlockedPosition;
+				else
+					HUDAnchorPosition = 0;
+			}
+			else if (interactionID == AVPMENU_ELEMENT_INTERACTION_INCREASE)
+			{
+				if (HUDAnchorPosition < 100) HUDAnchorPosition++;
+				HUDAnchorUnlockedPosition = HUDAnchorPosition;
+			}
+			else
+			{
+				if (HUDAnchorPosition > 0) HUDAnchorPosition--;
+				HUDAnchorUnlockedPosition = HUDAnchorPosition;
+			}
+			HUD_SynchronisePerSpeciesOptions();
+			HUD_RefreshLayout();
+			break;
+		}case AVPMENU_ELEMENT_ZOOM_SENSITIVITY:
+		{
+			/* ENTER resets this one slider; left/right retain the usual fine steps. */
+			if (interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT)
+			{
+				*elementPtr->c.SliderValuePtr = 13;
+			}
+			else if (interactionID == AVPMENU_ELEMENT_INTERACTION_INCREASE)
+			{
+				if (*elementPtr->c.SliderValuePtr < elementPtr->b.MaxSliderValue)
+					*elementPtr->c.SliderValuePtr += 1;
+			}
+			else if (*elementPtr->c.SliderValuePtr > 0)
+			{
+				*elementPtr->c.SliderValuePtr -= 1;
+			}
+			break;
+		}		case AVPMENU_ELEMENT_SLIDER:
+		{
+            if(interactionID==AVPMENU_ELEMENT_INTERACTION_SELECT &&
+                (elementPtr->a.TextDescription==TEXTSTRING_IMAGE_BRIGHTNESS_NEW || elementPtr->a.TextDescription==TEXTSTRING_IMAGE_CONTRAST_NEW || elementPtr->a.TextDescription==TEXTSTRING_IMAGE_SATURATION_NEW)){
+                *elementPtr->c.SliderValuePtr=elementPtr->a.TextDescription==TEXTSTRING_IMAGE_BRIGHTNESS_NEW?50:100;break;
+            }
+
+			/* ENTER restores Gamma to its original vanilla midpoint (128).
+			   Left/right retain their regular one-step behaviour. */
+			if ((interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT)
+				&& (elementPtr->a.TextDescription == TEXTSTRING_AVOPTIONS_GAMMASETTING))
+			{
+				InitialiseGammaSettings(DEFAULT_GAMMA_SETTING);
+				break;
+			}
 			if ((interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT)
 			  ||(interactionID == AVPMENU_ELEMENT_INTERACTION_INCREASE))
 			{
@@ -2532,6 +3826,15 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 		case AVPMENU_ELEMENT_TEXTSLIDER:
 		case AVPMENU_ELEMENT_TEXTSLIDER_POINTER:
 		{
+            if(elementPtr->c.SliderValuePtr==&ConsoleTextScaleMode) {
+                ConsoleTextScaleMode=ConsoleScaleStep(ConsoleTextScaleMode,interactionID!=AVPMENU_ELEMENT_INTERACTION_DECREASE);
+                break;
+            }
+			if ((interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT)
+			 && ResetRequestedTextSliderOnSelect(elementPtr))
+			{
+				break;
+			}
 			if ((interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT)
 			  ||(interactionID == AVPMENU_ELEMENT_INTERACTION_INCREASE))
 			{
@@ -2549,6 +3852,21 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 					*elementPtr->c.SliderValuePtr=elementPtr->b.MaxSliderValue;
 				}
 			}
+			if(elementPtr->c.SliderValuePtr==&FMVFilterMode || elementPtr->c.SliderValuePtr==&RetainPlayerState || elementPtr->c.SliderValuePtr==&OptimizedAmmo)SaveDeviceAndVideoModePreferences();
+            if(elementPtr->c.SliderValuePtr==&MarineCrosshairThicknessMode && UserProfilePtr)
+                SaveUserProfile(UserProfilePtr);
+            if (elementPtr->c.SliderValuePtr == &ScreenshotFormat) {
+                SaveDeviceAndVideoModePreferences();
+                if(UserProfilePtr)SaveUserProfile(UserProfilePtr);
+            }
+			/* Esta preferencia es global: persiste aunque se salga sin aplicar el men?. */
+			if ((elementPtr->c.SliderValuePtr == &MusicPlayMode || elementPtr->c.SliderValuePtr == &CRTFilterEnabled) && UserProfilePtr)
+			{
+				if (MusicPlayMode < 0 || MusicPlayMode > 2) MusicPlayMode = 1;
+				if (CRTFilterEnabled != 0) CRTFilterEnabled = 1;
+				SaveUserProfile(UserProfilePtr);
+			}
+
 			break;
 		}
 		case AVPMENU_ELEMENT_SPECIES_TEXTSLIDER:
@@ -2728,16 +4046,14 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 		}
 		case AVPMENU_ELEMENT_DIFFICULTYLEVEL:
 		{
+            if(AvPMenus.CurrentlySelectedElement==4 && interactionID!=AVPMENU_ELEMENT_INTERACTION_SELECT){
+                AcidMenuTier+=(interactionID==AVPMENU_ELEMENT_INTERACTION_INCREASE)?1:-1;
+                if(AcidMenuTier>3)AcidMenuTier=1;if(AcidMenuTier<1)AcidMenuTier=3;
+            }
 			if (interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT)
 			{
-				if (AvPMenus.CurrentMenu == AVPMENU_LEVELBRIEFING_BASIC)
-				{
-					AvP.Difficulty = AvPMenus.CurrentlySelectedElement;
-				}
-				else
-				{
-					AvP.Difficulty = 1;
-				}
+				if(AvPMenus.CurrentlySelectedElement==4)AcidSetTier(AcidMenuTier);
+                else{AcidSetTier(0);AvP.Difficulty=AvPMenus.CurrentlySelectedElement;}
 				AvPMenus.MenusState = MENUSSTATE_STARTGAME;
 			}
 			break;
@@ -2749,7 +4065,8 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 			  &&MaximumSelectableLevel>=*elementPtr->c.SliderValuePtr)
 			{
 				AvP.PlayerType = I_Alien;
-				SetLevelToLoadForAlien(AlienEpisodeToPlay);
+				RememberEpisode(I_Alien,AlienEpisodeToPlay);
+                SetLevelToLoadForAlien(AlienEpisodeToPlay);
 
 				if (AlienEpisodeToPlay<MAX_NO_OF_BASIC_ALIEN_EPISODES)
 				{
@@ -2771,7 +4088,8 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 				&&MaximumSelectableLevel>=*elementPtr->c.SliderValuePtr)
 			{
 				AvP.PlayerType = I_Marine;
-				SetLevelToLoadForMarine(MarineEpisodeToPlay);
+				RememberEpisode(I_Marine,MarineEpisodeToPlay);
+                SetLevelToLoadForMarine(MarineEpisodeToPlay);
 
 				if (MarineEpisodeToPlay<MAX_NO_OF_BASIC_MARINE_EPISODES)
 				{
@@ -2792,7 +4110,8 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 				&&MaximumSelectableLevel>=*elementPtr->c.SliderValuePtr)
 			{
 				AvP.PlayerType = I_Predator;
-				SetLevelToLoadForPredator(PredatorEpisodeToPlay);
+				RememberEpisode(I_Predator,PredatorEpisodeToPlay);
+                SetLevelToLoadForPredator(PredatorEpisodeToPlay);
 
 				if (PredatorEpisodeToPlay<MAX_NO_OF_BASIC_PREDATOR_EPISODES)
 				{
@@ -2827,6 +4146,9 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 					EpisodeSelectScrollOffset+=ONE_FIXED;
 				}
 			}
+            if(elementPtr->ElementID==AVPMENU_ELEMENT_ALIENEPISODE)RememberEpisode(I_Alien,AlienEpisodeToPlay);
+            else if(elementPtr->ElementID==AVPMENU_ELEMENT_MARINEEPISODE)RememberEpisode(I_Marine,MarineEpisodeToPlay);
+            else if(elementPtr->ElementID==AVPMENU_ELEMENT_PREDATOREPISODE)RememberEpisode(I_Predator,PredatorEpisodeToPlay);
 			break;
 		}
 		case AVPMENU_ELEMENT_BUTTONSETTING:
@@ -2863,7 +4185,7 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 			{
 				AvPMenus.MenusState = MENUSSTATE_STARTGAME;
 				AvP.PlayerType = I_Marine;
-				AvP.Difficulty = 1;
+				AcidSetTier(0);AvP.Difficulty = 1;
 				SetLevelToLoad(AVP_ENVIRONMENT_INVASION);
 			}
 			break;
@@ -2874,7 +4196,7 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 			{
 				AvPMenus.MenusState = MENUSSTATE_STARTGAME;
 				AvP.PlayerType = I_Predator;
-				AvP.Difficulty = 1;
+				AcidSetTier(0);AvP.Difficulty = 1;
 				SetLevelToLoad(AVP_ENVIRONMENT_INVASION_P);
 			}
 			break;
@@ -2885,7 +4207,7 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 			{
 				AvPMenus.MenusState = MENUSSTATE_STARTGAME;
 				AvP.PlayerType = I_Alien;
-				AvP.Difficulty = 1;
+				AcidSetTier(0);AvP.Difficulty = 1;
 				SetLevelToLoad(AVP_ENVIRONMENT_INVASION_A);
 			}
 			break;
@@ -2896,7 +4218,7 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 			{
 				AvPMenus.MenusState = MENUSSTATE_STARTGAME;
 				AvP.PlayerType = CheatMode_Species;
-				AvP.Difficulty = 1;
+				AcidSetTier(0);AvP.Difficulty = 1;
 				SetLevelToLoadForCheatMode(CheatMode_Environment);
 			}
 			break;
@@ -2918,7 +4240,7 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 				SaveMultiplayerConfiguration(GetTextString(TEXTSTRING_PREVIOUSGAME_FILENAME));
 
 				
-				AvP.Difficulty = 1;
+				AcidSetTier(0);AvP.Difficulty = 1;
 
 				if (DirectPlay_HostGame(MP_PlayerName,MP_SessionName,MP_Species,netGameData.gameType,netGameData.levelNumber))
 				{
@@ -3033,23 +4355,66 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 		}
 		
 		case AVPMENU_ELEMENT_VIDEOMODE:
+		case AVPMENU_ELEMENT_VIDEO_RESOLUTION:
 		{
-			if ((interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT)
-			  ||(interactionID == AVPMENU_ELEMENT_INTERACTION_INCREASE))
-			{
-				NextVideoMode2();
-			}
-			else
-			{
-				PreviousVideoMode2();
-			}
+			if ((interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT) || (interactionID == AVPMENU_ELEMENT_INTERACTION_INCREASE)) NextVideoMode2();
+			else PreviousVideoMode2();
+			break;
+		}
+		case AVPMENU_ELEMENT_VIDEO_ASPECT:
+		{
+			if ((interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT) || (interactionID == AVPMENU_ELEMENT_INTERACTION_INCREASE)) NextVideoAspect();
+			else PreviousVideoAspect();
+			break;
+		}
+		case AVPMENU_ELEMENT_VIDEO_REFRESH:
+		{
+			if ((interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT) || (interactionID == AVPMENU_ELEMENT_INTERACTION_INCREASE)) NextVideoRefresh();
+			else PreviousVideoRefresh();
+			break;
+		}
+		case AVPMENU_ELEMENT_VIDEO_SCREENMODE:
+		{
+			if ((interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT) || (interactionID == AVPMENU_ELEMENT_INTERACTION_INCREASE)) NextVideoScreenMode();
+			else PreviousVideoScreenMode();
+			break;
+		}
+		case AVPMENU_ELEMENT_VIDEO_VSYNC:
+{
+    if ((interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT) || (interactionID == AVPMENU_ELEMENT_INTERACTION_INCREASE)) NextVideoVSync();
+    else PreviousVideoVSync();
+    break;
+}
+case AVPMENU_ELEMENT_VIDEO_FPSCAP:
+{
+    if (interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT)
+    {
+        if (VideoFPSCapIsCustom())
+        {
+            CurrentVideoFPSCapCustom = 100;
+            VideoFPSCapCustomEditStartsFresh = 1;
+            AvPMenus.PositionInTextField = 0;
+            AvPMenus.UserEnteringNumber = 1;
+            SDL_StartTextInput(NULL);
+            KeyboardEntryQueue_Clear();
+        }
+        else ResetVideoFPSCapToDefault();
+    }
+    else if (interactionID == AVPMENU_ELEMENT_INTERACTION_INCREASE) NextVideoFPSCap();
+    else PreviousVideoFPSCap();
+    break;
+}
+case AVPMENU_ELEMENT_VIDEO_RENDERER:
+		{
 			break;
 		}
 		case AVPMENU_ELEMENT_VIDEOMODEOK:
 		{
 			if (interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT)
 			{
+				ApplySelectedVideoMode();
 				SaveDeviceAndVideoModePreferences();
+				/* The table records the correct parent for frontend and in-game callers. */
 				SetupNewMenu(elementPtr->b.MenuToGoTo);
 			}
 			break;
@@ -3058,7 +4423,7 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 		{
 			if (interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT)
 			{
-				AvPMenus.MenusState = MENUSSTATE_STARTGAME;
+				ResumeGameFromMenu();
 			}
 			break;
 		}
@@ -3102,23 +4467,33 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 					{
 						MarineInputPrimaryConfig   = PlayerInputPrimaryConfig;
 						MarineInputSecondaryConfig = PlayerInputSecondaryConfig;
+						MarineWeaponPrimaryConfig = PlayerWeaponPrimaryConfig;
+						MarineWeaponSecondaryConfig = PlayerWeaponSecondaryConfig;
 						{
 							extern int AutoWeaponChangeOn_Temp;
 							extern int AutoWeaponChangeOn;
 							AutoWeaponChangeOn = AutoWeaponChangeOn_Temp;
 						}
-						break;
+					{
+										NormalizeMarineJetpackBindings(&MarineInputPrimaryConfig,&MarineInputSecondaryConfig);
+					}
+					break;
 					}
 					case AVPMENU_PREDATORKEYCONFIG:
 					{
-						PredatorInputPrimaryConfig       = PlayerInputPrimaryConfig;
+						memcpy(PredatorPreviousVisionBindings,PlayerPreviousVisionBindings,2);
+                        PredatorInputPrimaryConfig       = PlayerInputPrimaryConfig;
 						PredatorInputSecondaryConfig = PlayerInputSecondaryConfig;
+						PredatorWeaponPrimaryConfig = PlayerWeaponPrimaryConfig;
+						PredatorWeaponSecondaryConfig = PlayerWeaponSecondaryConfig;
 						break;
 					}
 					case AVPMENU_ALIENKEYCONFIG:
 					{
 						AlienInputPrimaryConfig   = PlayerInputPrimaryConfig;
 						AlienInputSecondaryConfig = PlayerInputSecondaryConfig;
+						AlienWeaponPrimaryConfig = PlayerWeaponPrimaryConfig;
+						AlienWeaponSecondaryConfig = PlayerWeaponSecondaryConfig;
 						break;
 					}
 					case AVPMENU_CONTROLS:
@@ -3135,8 +4510,48 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 					default:
 						break;
 				}
-								
-				
+
+				if (AvPMenus.CurrentMenu==AVPMENU_MARINEKEYCONFIG
+				 || AvPMenus.CurrentMenu==AVPMENU_PREDATORKEYCONFIG
+				 || AvPMenus.CurrentMenu==AVPMENU_ALIENKEYCONFIG)
+				{
+					GlobalCommandPrimaryConfig = PlayerGlobalCommandPrimaryConfig;
+					GlobalCommandSecondaryConfig = PlayerGlobalCommandSecondaryConfig;
+                    AlwaysRunBySpecies[AlwaysRunSpecies_Temp]=AlwaysRun_Temp==1;
+				}
+
+				/* These options are shared profile preferences, edited by all three keyboard menus. */
+				{
+					extern int CrouchIsToggleKey_Temp;
+					extern int UnlimitedSaveGames_Temp;
+					extern int SmartJetpackEnabled_Temp;
+					
+					extern int SmartZoomEnabled_Temp;
+					extern int FullVerticalPitchEnabled_Temp;
+					extern int CrouchIsToggleKey;
+					extern int UnlimitedSaveGames;
+					extern int SmartJetpackEnabled;
+					extern int MarineCrosshairThicknessMode;
+					extern int SmartZoomEnabled;
+					extern int FullVerticalPitchEnabled;
+					CrouchIsToggleKey=CrouchIsToggleKey_Temp;
+					UnlimitedSaveGames=UnlimitedSaveGames_Temp;
+					FullVerticalPitchEnabled=FullVerticalPitchEnabled_Temp ? 1 : 0;
+					if (AvPMenus.CurrentMenu==AVPMENU_MARINEKEYCONFIG)
+					{
+						SmartJetpackEnabled=SmartJetpackEnabled_Temp;
+						
+					}
+					if (AvPMenus.CurrentMenu==AVPMENU_PREDATORKEYCONFIG)
+					{
+						SmartZoomEnabled=SmartZoomEnabled_Temp ? 1 : 0;
+						if (!SmartZoomEnabled)
+							NormalizePredatorSmartZoomDisabledBindings(&PredatorInputPrimaryConfig,&PredatorInputSecondaryConfig);
+						/* The next visit rebuilds the list with or without Zoom holding. */
+						SmartZoomBindingRowPublished=SmartZoomEnabled;
+					}
+				}
+
 				SaveUserProfile(UserProfilePtr);
 
 				if(AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS)
@@ -3160,18 +4575,54 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 					{
 						PlayerInputPrimaryConfig = DefaultMarineInputPrimaryConfig;
 						PlayerInputSecondaryConfig = DefaultMarineInputSecondaryConfig;
+						PlayerWeaponPrimaryConfig = DefaultMarineWeaponPrimaryConfig;
+						PlayerWeaponSecondaryConfig = DefaultMarineWeaponSecondaryConfig;
+						extern int AutoWeaponChangeOn_Temp;
+						extern int CrouchIsToggleKey_Temp;
+						extern int UnlimitedSaveGames_Temp;
+						extern int SmartJetpackEnabled_Temp;
+						
+						extern int SmartZoomEnabled_Temp;
+						extern int FullVerticalPitchEnabled_Temp;
+						AutoWeaponChangeOn_Temp=TRUE;
+						CrouchIsToggleKey_Temp=0;
+						UnlimitedSaveGames_Temp=0;
+						FullVerticalPitchEnabled_Temp=0;
+						SmartJetpackEnabled_Temp=0;
+						
 						break;
 					}
 					case AVPMENU_PREDATORKEYCONFIG:
 					{
-						PlayerInputPrimaryConfig = DefaultPredatorInputPrimaryConfig;
+						PlayerPreviousVisionBindings[0]=KEY_X;PlayerPreviousVisionBindings[1]=KEY_VOID;
+                        PlayerInputPrimaryConfig = DefaultPredatorInputPrimaryConfig;
 						PlayerInputSecondaryConfig = DefaultPredatorInputSecondaryConfig;
+						PlayerWeaponPrimaryConfig = DefaultPredatorWeaponPrimaryConfig;
+						PlayerWeaponSecondaryConfig = DefaultPredatorWeaponSecondaryConfig;
+					extern int CrouchIsToggleKey_Temp;
+					extern int UnlimitedSaveGames_Temp;
+					extern int SmartJetpackEnabled_Temp;
+					extern int SmartZoomEnabled_Temp;
+					extern int FullVerticalPitchEnabled_Temp;
+					CrouchIsToggleKey_Temp=0;
+					UnlimitedSaveGames_Temp=0;
+					FullVerticalPitchEnabled_Temp=0;
 						break;
 					}
 					case AVPMENU_ALIENKEYCONFIG:
 					{
 						PlayerInputPrimaryConfig = DefaultAlienInputPrimaryConfig;
 						PlayerInputSecondaryConfig = DefaultAlienInputSecondaryConfig;
+						PlayerWeaponPrimaryConfig = DefaultAlienWeaponPrimaryConfig;
+						PlayerWeaponSecondaryConfig = DefaultAlienWeaponSecondaryConfig;
+					extern int CrouchIsToggleKey_Temp;
+					extern int UnlimitedSaveGames_Temp;
+					extern int SmartJetpackEnabled_Temp;
+					extern int SmartZoomEnabled_Temp;
+					extern int FullVerticalPitchEnabled_Temp;
+					CrouchIsToggleKey_Temp=0;
+					UnlimitedSaveGames_Temp=0;
+					FullVerticalPitchEnabled_Temp=0;
 						break;
 					}
 					case AVPMENU_CONTROLS:
@@ -3187,6 +4638,14 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 					
 					default:
 						break;
+				}
+				if (AvPMenus.CurrentMenu==AVPMENU_MARINEKEYCONFIG
+				 || AvPMenus.CurrentMenu==AVPMENU_PREDATORKEYCONFIG
+				 || AvPMenus.CurrentMenu==AVPMENU_ALIENKEYCONFIG)
+				{
+					PlayerGlobalCommandPrimaryConfig = DefaultGlobalCommandPrimaryConfig;
+					PlayerGlobalCommandSecondaryConfig = DefaultGlobalCommandSecondaryConfig;
+                    AlwaysRun_Temp=0;
 				}
 			}
 			break;
@@ -3205,7 +4664,14 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 			if (interactionID == AVPMENU_ELEMENT_INTERACTION_SELECT)
 			{
 				SetDetailLevelsFromMenu();
+				/* Reuse this existing Detail Levels confirmation as the single
+				 * user-facing point where a changed AA mode rebuilds OpenGL. */
+				if (AvPMenus.CurrentMenu == AVPMENU_DETAILLEVELS)
+				{
+					RestartOpenGLVideoContextIfNeeded();
+				}
 				SaveUserProfile(UserProfilePtr);
+				SaveDeviceAndVideoModePreferences();
 				
 				if(AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS)
 				{
@@ -3228,13 +4694,14 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 	
 		case AVPMENU_ELEMENT_LOADGAME:
 		{
-			int slot = AvPMenus.CurrentlySelectedElement;
+			int slot = (AvPMenus.CurrentlySelectedElement == 0) ? QUICK_SAVE_SLOT : AvPMenus.CurrentlySelectedElement - 1;
 			if(slot>=0 && slot<NUMBER_OF_SAVE_SLOTS)
 			{
 				if(SaveGameSlot[slot].SlotUsed)
 				{
 					//set the request
 					LoadGameRequest = slot;
+					EventLatencyLoadCheckpoint("menu load selected",slot);
 					if(AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS)
 					{
 						//leave the menus
@@ -3247,7 +4714,7 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 		case AVPMENU_ELEMENT_SAVEGAME:
 		{
 			int slot = AvPMenus.CurrentlySelectedElement;
-			if(slot>=0 && slot<NUMBER_OF_SAVE_SLOTS)
+			if(slot>=0 && slot<NUMBER_OF_MANUAL_SAVE_SLOTS)
 			{
 				//set the request
 				SaveGameRequest = slot;
@@ -3266,8 +4733,36 @@ static void InteractWithMenuElement(enum AVPMENU_ELEMENT_INTERACTION_ID interact
 int LengthOfMenuText(char *textPtr);
 int LengthOfSmallMenuText(char *textPtr);
 
+/* Scale all horizontal menu anchors about the physical centre while the
+   in-game text scope is active. */
+static int ScaleInGameMenuTextX(int x)
+{
+	return MENU_CENTREX + MUL_FIXED(x-MENU_CENTREX, D3D_GetActiveConsoleTextScaleFixed());
+}
+
+static int Hardware_RenderScaledInGameMenuText(char *textPtr, int x, int y, int alpha, enum AVPMENUFORMAT_ID format)
+{
+	return Hardware_RenderSmallMenuText(textPtr, ScaleInGameMenuTextX(x), y, alpha, format);
+}
+
+static int Hardware_RenderScaledInGameMenuText_Coloured(char *textPtr, int x, int y, int alpha, enum AVPMENUFORMAT_ID format, int red, int green, int blue)
+{
+	return Hardware_RenderSmallMenuText_Coloured(textPtr, ScaleInGameMenuTextX(x), y, alpha, format, red, green, blue);
+}
+
+extern void RenderOptimizedAmmoText(char *text,int x,int y,int alpha,int enabled);
 static void RenderMenuElement(AVPMENU_ELEMENT *elementPtr, int e, int y)
 {
+ if(elementPtr->ElementID==AVPMENU_ELEMENT_TEXTSLIDER && elementPtr->c.SliderValuePtr==&OptimizedAmmo){
+  char label[256];snprintf(label,sizeof label,"%s = %s",GetTextString(TEXTSTRING_OPTIMIZED_AMMO_NEW),GetTextString(OptimizedAmmo?TEXTSTRING_YES:TEXTSTRING_NO));
+  RenderOptimizedAmmoText(label,MENU_CENTREX,y+12,elementPtr->Brightness,OptimizedAmmo);return;
+ }
+ if(elementPtr->ElementID==AVPMENU_ELEMENT_TEXTSLIDER && elementPtr->c.SliderValuePtr==&RetainPlayerState){
+  char label[256];snprintf(label,sizeof label,"%s: %s",GetTextString(TEXTSTRING_RETAIN_STATE_NEW),
+      GetTextString(RetainPlayerState==CAMPAIGN_RETAIN?TEXTSTRING_RETAIN_ON_NEW:(RetainPlayerState==CAMPAIGN_CHAINED?TEXTSTRING_RETAIN_CHAINED_NEW:TEXTSTRING_RETAIN_OFF_NEW)));
+  RenderCampaignModeText(label,MENU_CENTREX,y+12,elementPtr->Brightness,RetainPlayerState);return;
+ }
+	if (!MenuElementIsVisible(elementPtr)) return;
 	int (*RenderText)(char *textPtr, int x, int y, int alpha, enum AVPMENUFORMAT_ID format);
 	int (*RenderText_Coloured)(char *textPtr, int x, int y, int alpha, enum AVPMENUFORMAT_ID format, int r, int g, int b);
 	int (*MenuTextLength)(char *textPtr);
@@ -3281,9 +4776,16 @@ static void RenderMenuElement(AVPMENU_ELEMENT *elementPtr, int e, int y)
 	{
 		if(AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS)
 		{
-			RenderText = Hardware_RenderSmallMenuText;
-			RenderText_Coloured = Hardware_RenderSmallMenuText_Coloured;
-
+			if (InGameMenuTextUsesNativeAnchors)
+			{
+				RenderText = Hardware_RenderSmallMenuText;
+				RenderText_Coloured = Hardware_RenderSmallMenuText_Coloured;
+			}
+			else
+			{
+				RenderText = Hardware_RenderScaledInGameMenuText;
+				RenderText_Coloured = Hardware_RenderScaledInGameMenuText_Coloured;
+			}
 		}
 		else
 		{
@@ -3294,7 +4796,66 @@ static void RenderMenuElement(AVPMENU_ELEMENT *elementPtr, int e, int y)
 	}
 
 	switch(elementPtr->ElementID)
-	{
+    {
+        case AVPMENU_ELEMENT_SHAKE_PARAM:
+        {
+            int row=elementPtr->c.Value,i,scale=AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS?D3D_GetConsoleTextScaleFixed():ONE_FIXED;
+            char lines[64][512];int count=ShakeParamLabel(row,lines),barX=ScreenDescriptorBlock.SDB_Width/2-107,sliderY=y+count*MUL_FIXED(17,scale);
+            double fraction=(ShakeValues[row]-ShakeParams[row].min)/(ShakeParams[row].max-ShakeParams[row].min);
+            int x=barX+3+(int)(201*fraction);
+            for(i=0;i<count;i++)RenderText(lines[i],ScreenDescriptorBlock.SDB_Width/2,y+i*MUL_FIXED(17,scale),elementPtr->Brightness,AVPMENUFORMAT_CENTREJUSTIFIED);
+            if(AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS){
+                D3D_SetInGameMenuTextRenderActive(0);D3D_DrawSliderBar(barX,sliderY+1,elementPtr->Brightness);D3D_DrawSlider(x,sliderY+4,elementPtr->Brightness);D3D_SetInGameMenuTextRenderActive(1);
+            }else{DrawAvPMenuGfx(AVPMENUGFX_SLIDERBAR,barX,sliderY+1,elementPtr->Brightness,AVPMENUFORMAT_LEFTJUSTIFIED);DrawAvPMenuGfx(AVPMENUGFX_SLIDER,x,sliderY+4,elementPtr->Brightness,AVPMENUFORMAT_LEFTJUSTIFIED);}
+            break;
+        }
+        case AVPMENU_ELEMENT_SHAKE_EXPORT:
+            RenderText("export",ScreenDescriptorBlock.SDB_Width/2,y,elementPtr->Brightness,AVPMENUFORMAT_CENTREJUSTIFIED);break;
+        case AVPMENU_ELEMENT_MOTION_PARAM:
+        {
+            int row=elementPtr->c.Value,i,scale=AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS?D3D_GetConsoleTextScaleFixed():ONE_FIXED;
+            char lines[64][512];int count=MotionParamLabel(row,lines),barX=ScreenDescriptorBlock.SDB_Width/2-107,sliderY=y+count*MUL_FIXED(17,scale);
+            double fraction=(MotionValues[row]-MotionParams[row].min)/(MotionParams[row].max-MotionParams[row].min);
+            int x=barX+3+(int)(201*fraction);
+            for(i=0;i<count;i++)RenderText(lines[i],ScreenDescriptorBlock.SDB_Width/2,y+i*MUL_FIXED(17,scale),elementPtr->Brightness,AVPMENUFORMAT_CENTREJUSTIFIED);
+            if(AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS){
+                D3D_SetInGameMenuTextRenderActive(0);D3D_DrawSliderBar(barX,sliderY+1,elementPtr->Brightness);D3D_DrawSlider(x,sliderY+4,elementPtr->Brightness);D3D_SetInGameMenuTextRenderActive(1);
+            }else{DrawAvPMenuGfx(AVPMENUGFX_SLIDERBAR,barX,sliderY+1,elementPtr->Brightness,AVPMENUFORMAT_LEFTJUSTIFIED);DrawAvPMenuGfx(AVPMENUGFX_SLIDER,x,sliderY+4,elementPtr->Brightness,AVPMENUFORMAT_LEFTJUSTIFIED);}
+            break;
+        }
+        case AVPMENU_ELEMENT_DIFFICULTYLEVEL:
+            if(elementPtr->a.TextDescription==TEXTSTRING_MOLECULAR_ACID_NEW){
+                char label[256];snprintf(label,sizeof label,"%s  %s",GetTextString(TEXTSTRING_MOLECULAR_ACID_NEW),AcidMultiplierLabel(AcidMenuTier));
+                RenderAcidMenuText(label,MENU_CENTREX,y,elementPtr->Brightness);
+            }else RenderText(GetTextString(elementPtr->a.TextDescription),MENU_CENTREX,y,elementPtr->Brightness,AVPMENUFORMAT_CENTREJUSTIFIED);
+            break;
+        case AVPMENU_ELEMENT_MOTION_EXPORT:
+            RenderText("export",ScreenDescriptorBlock.SDB_Width/2,y,elementPtr->Brightness,AVPMENUFORMAT_CENTREJUSTIFIED);break;
+        case AVPMENU_ELEMENT_DEV_WEAPON_Z:
+        {
+            int row=elementPtr->c.Value,z=DevViewmodelValue(row);
+            int barX=MENU_CENTREX-80;
+            int scale=AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS?D3D_GetConsoleTextScaleFixed():ONE_FIXED;
+            int sliderY=y+MUL_FIXED(HUD_FONT_HEIGHT+2,scale);
+            int x=barX+3+(int)(((int64_t)(z-DevViewmodelMinimum(row))*201)/(DevViewmodelMaximum(row)-DevViewmodelMinimum(row)));
+            char label[96];DevViewmodelFormat(row,label,sizeof label);
+            /* Long labels must also fit low resolutions at console scale x3. */
+            if(AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS && MUL_FIXED(LengthOfSmallMenuText(label),scale)>ScreenDescriptorBlock.SDB_Width-32){
+                D3D_SetInGameMenuTextRenderActive(0);
+                Hardware_RenderSmallMenuText(label,MENU_CENTREX,y,elementPtr->Brightness,AVPMENUFORMAT_CENTREJUSTIFIED);
+                D3D_SetInGameMenuTextRenderActive(1);
+            }else RenderText(label,MENU_CENTREX,y,elementPtr->Brightness,AVPMENUFORMAT_CENTREJUSTIFIED);
+            /* Slider geometry uses physical anchors, including its left toggle. */
+            if(AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS)Hardware_RenderSmallMenuText(DevViewmodelEditing(row)?"[on]":"[off]",barX-8,sliderY,elementPtr->Brightness,AVPMENUFORMAT_RIGHTJUSTIFIED);
+            else RenderText(DevViewmodelEditing(row)?"[on]":"[off]",barX-8,sliderY,elementPtr->Brightness,AVPMENUFORMAT_RIGHTJUSTIFIED);
+            if(AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS){D3D_DrawSliderBar(barX,sliderY+1,elementPtr->Brightness);D3D_DrawSlider(x,sliderY+4,elementPtr->Brightness);}
+            else{DrawAvPMenuGfx(AVPMENUGFX_SLIDERBAR,barX,sliderY+1,elementPtr->Brightness,AVPMENUFORMAT_LEFTJUSTIFIED);DrawAvPMenuGfx(AVPMENUGFX_SLIDER,x,sliderY+4,elementPtr->Brightness,AVPMENUFORMAT_LEFTJUSTIFIED);}
+            break;
+        }
+        case AVPMENU_ELEMENT_DEV_EXPORT:
+            RenderText("export",MENU_CENTREX,y,elementPtr->Brightness,AVPMENUFORMAT_CENTREJUSTIFIED);
+            break;
+
 		default:
 		GLOBALASSERT("UNKNOWN MENU ELEMENT"==0);
 		case AVPMENU_ELEMENT_GOTOMENU:
@@ -3311,7 +4872,6 @@ static void RenderMenuElement(AVPMENU_ELEMENT *elementPtr, int e, int y)
 		case AVPMENU_ELEMENT_STARTALIENDEMO:
 		case AVPMENU_ELEMENT_STARTLEVELWITHCHEAT:
 		case AVPMENU_ELEMENT_SAVEMPCONFIG:
-		case AVPMENU_ELEMENT_DIFFICULTYLEVEL:
 		case AVPMENU_ELEMENT_JOINLOBBIED:
 		case AVPMENU_ELEMENT_CONNECTIONCHOICE :
 		case AVPMENU_ELEMENT_USERPROFILE_DELETE:
@@ -3365,7 +4925,9 @@ static void RenderMenuElement(AVPMENU_ELEMENT *elementPtr, int e, int y)
 			else
 			{
 				//we have the index of the first string
-				textPtr = GetTextString(elementPtr->d.FirstTextSliderString+*(elementPtr->c.SliderValuePtr));
+				if(elementPtr->c.SliderValuePtr==&ConsoleTextScaleMode && ConsoleTextScaleMode>=9)
+                    textPtr=ConsoleTextScaleMode==9?"x0.8":"x0.9";
+                else textPtr = GetTextString(elementPtr->d.FirstTextSliderString+*(elementPtr->c.SliderValuePtr));
 			}
 			
 			if(elementPtr->a.TextDescription!=TEXTSTRING_BLANK)
@@ -3452,6 +5014,26 @@ static void RenderMenuElement(AVPMENU_ELEMENT *elementPtr, int e, int y)
 		case AVPMENU_ELEMENT_DUMMYTEXTFIELD:
 		case AVPMENU_ELEMENT_TEXTFIELD:
 		{
+            if (AvPMenus.CurrentMenu == AVPMENU_USERPROFILEENTERNAME)
+            {
+                char *visible=elementPtr->c.TextPtr;
+                const int width=MENU_RIGHTXEDGE-MENU_LEFTXEDGE-40;
+                while (*visible && LengthOfMenuText(visible)>width)
+                {
+                    const char *next=visible;
+                    AvPTextNextGlyphConst(&next);
+                    visible=(char*)next;
+                }
+                int x=RenderText(visible,MENU_CENTREX,y,elementPtr->Brightness,AVPMENUFORMAT_CENTREJUSTIFIED);
+                if (AvPMenus.UserEnteringText)
+                {
+                    int b=GetSin(CloakingPhase&4095);
+                    RenderText("I",x,y,MUL_FIXED(b,b),AVPMENUFORMAT_CENTREJUSTIFIED);
+                }
+                AvPMenus.WidthLeftForText=4096;
+                break;
+            }
+
 			if (elementPtr->a.TextDescription==TEXTSTRING_BLANK)
 			{
 				if (AvPMenus.UserEnteringText && e==AvPMenus.CurrentlySelectedElement)
@@ -3654,9 +5236,146 @@ static void RenderMenuElement(AVPMENU_ELEMENT *elementPtr, int e, int y)
 		{
 			break;
 		}
-		case AVPMENU_ELEMENT_SLIDER:
+						case AVPMENU_ELEMENT_WEAPON_FOV:
+		{
+			char fovText[16];
+			SynchroniseWeaponFOVForCurrentSpecies();
+			int x = MENU_CENTREX+MENU_ELEMENT_SPACING+3;
+			x += (201*(WeaponFOV-WEAPON_FOV_MINIMUM))/(WeaponFOVMaximumForCurrentSpecies()-WEAPON_FOV_MINIMUM);
+			sprintf(fovText, "%d", WeaponFOV);
+			RenderText(GetTextString(elementPtr->a.TextDescription), MENU_CENTREX-MENU_ELEMENT_SPACING, y, elementPtr->Brightness, AVPMENUFORMAT_RIGHTJUSTIFIED);
+			if (AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS)
+			{
+				D3D_DrawSliderBar(MENU_CENTREX+MENU_ELEMENT_SPACING, y+1, elementPtr->Brightness);
+				D3D_DrawSlider(x, y+4, elementPtr->Brightness);
+			}
+			else
+			{
+				DrawAvPMenuGfx(AVPMENUGFX_SLIDERBAR, MENU_CENTREX+MENU_ELEMENT_SPACING, y+1, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED);
+				DrawAvPMenuGfx(AVPMENUGFX_SLIDER, x, y+4, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED);
+			}
+			RenderText(fovText, MENU_CENTREX+MENU_ELEMENT_SPACING+220, y, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED);
+			break;
+		}
+		case AVPMENU_ELEMENT_FOV:
+		{
+			ClampPlayerFOVForCurrentSpecies();
+
+char fovText[16];
+			int minimum = PlayerFOVMinimumForCurrentSpecies();
+			int maximum = PlayerFOVMaximumForCurrentSpecies();
+			int x = MENU_CENTREX+MENU_ELEMENT_SPACING+3;
+			x += (201*(PlayerFOV-minimum))/(maximum-minimum);
+			sprintf(fovText, "%d", PlayerFOV);
+			RenderText(GetTextString(elementPtr->a.TextDescription), MENU_CENTREX-MENU_ELEMENT_SPACING, y, elementPtr->Brightness, AVPMENUFORMAT_RIGHTJUSTIFIED);
+			if (AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS)
+			{
+				D3D_DrawSliderBar(MENU_CENTREX+MENU_ELEMENT_SPACING, y+1, elementPtr->Brightness);
+				D3D_DrawSlider(x, y+4, elementPtr->Brightness);
+			}
+			else
+			{
+				DrawAvPMenuGfx(AVPMENUGFX_SLIDERBAR, MENU_CENTREX+MENU_ELEMENT_SPACING, y+1, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED);
+				DrawAvPMenuGfx(AVPMENUGFX_SLIDER, x, y+4, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED);
+			}
+			RenderText(fovText, MENU_CENTREX+MENU_ELEMENT_SPACING+220, y, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED);
+			break;
+		}
+		case AVPMENU_ELEMENT_HUD_ANIMATION_INTENSITY:
+		{
+			char hudScaleText[16];
+			
+			int x = MENU_CENTREX + MENU_ELEMENT_SPACING + 3;
+			x += (201 * ((*elementPtr->c.SliderValuePtr) - 1)) / (100 - 1);
+			snprintf(hudScaleText, sizeof(hudScaleText), "%d", (*elementPtr->c.SliderValuePtr));
+			RenderText(GetTextString(elementPtr->a.TextDescription), MENU_CENTREX-MENU_ELEMENT_SPACING, y, elementPtr->Brightness, AVPMENUFORMAT_RIGHTJUSTIFIED);
+			if (AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS) { D3D_DrawSliderBar(MENU_CENTREX+MENU_ELEMENT_SPACING, y+1, elementPtr->Brightness); D3D_DrawSlider(x, y+4, elementPtr->Brightness); }
+			else { DrawAvPMenuGfx(AVPMENUGFX_SLIDERBAR, MENU_CENTREX+MENU_ELEMENT_SPACING, y+1, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED); DrawAvPMenuGfx(AVPMENUGFX_SLIDER, x, y+4, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED); }
+			RenderText(hudScaleText, MENU_CENTREX+MENU_ELEMENT_SPACING+220, y, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED);
+			break;
+		}
+				case AVPMENU_ELEMENT_HUD_SCALE:
+		{
+			char hudScaleText[16];
+			HUD_SynchronisePerSpeciesOptions();
+			int x = MENU_CENTREX + MENU_ELEMENT_SPACING + 3;
+			x += (201 * (HUDUserScaleTenths - HUD_USER_SCALE_TENTHS_MINIMUM)) / (HUD_USER_SCALE_TENTHS_MAXIMUM - HUD_USER_SCALE_TENTHS_MINIMUM);
+			snprintf(hudScaleText, sizeof(hudScaleText), "x%.1f", (double)HUDUserScaleTenths / 10.0);
+			RenderText(GetTextString(elementPtr->a.TextDescription), MENU_CENTREX-MENU_ELEMENT_SPACING, y, elementPtr->Brightness, AVPMENUFORMAT_RIGHTJUSTIFIED);
+			if (AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS) { D3D_DrawSliderBar(MENU_CENTREX+MENU_ELEMENT_SPACING, y+1, elementPtr->Brightness); D3D_DrawSlider(x, y+4, elementPtr->Brightness); }
+			else { DrawAvPMenuGfx(AVPMENUGFX_SLIDERBAR, MENU_CENTREX+MENU_ELEMENT_SPACING, y+1, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED); DrawAvPMenuGfx(AVPMENUGFX_SLIDER, x, y+4, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED); }
+			RenderText(hudScaleText, MENU_CENTREX+MENU_ELEMENT_SPACING+220, y, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED);
+			break;
+		}
+				case AVPMENU_ELEMENT_CROSSHAIR_SCALE:
+		{
+			HUD_ClampCrosshairScaleForCurrentSpecies();
+			char crosshairScaleText[16];
+			int x = MENU_CENTREX + MENU_ELEMENT_SPACING + 3;
+			x += (201 * (CrosshairScaleTenths - CROSSHAIR_SCALE_TENTHS_MINIMUM)) / (CROSSHAIR_SCALE_TENTHS_MAXIMUM - CROSSHAIR_SCALE_TENTHS_MINIMUM);
+			snprintf(crosshairScaleText, sizeof(crosshairScaleText), "x%.1f", (double)CrosshairScaleTenths / 10.0);
+			RenderText(GetTextString(elementPtr->a.TextDescription), MENU_CENTREX-MENU_ELEMENT_SPACING, y, elementPtr->Brightness, AVPMENUFORMAT_RIGHTJUSTIFIED);
+			if (AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS) { D3D_DrawSliderBar(MENU_CENTREX+MENU_ELEMENT_SPACING, y+1, elementPtr->Brightness); D3D_DrawSlider(x, y+4, elementPtr->Brightness); }
+			else { DrawAvPMenuGfx(AVPMENUGFX_SLIDERBAR, MENU_CENTREX+MENU_ELEMENT_SPACING, y+1, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED); DrawAvPMenuGfx(AVPMENUGFX_SLIDER, x, y+4, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED); }
+			RenderText(crosshairScaleText, MENU_CENTREX+MENU_ELEMENT_SPACING+220, y, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED);
+			break;
+		}case AVPMENU_ELEMENT_HUD_ANCHORED:
+		{
+			char *hudAnchorText;
+			switch (HUDAnchorMode)
+			{
+				case HUD_ANCHOR_16_9: hudAnchorText = GetTextString(TEXTSTRING_HUD_ANCHORED_16_9_NEW); break;
+				case HUD_ANCHOR_UNLOCKED: hudAnchorText = GetTextString(TEXTSTRING_HUD_ANCHORED_UNLOCKED_NEW); break;
+				case HUD_ANCHOR_4_3:
+				default: hudAnchorText = GetTextString(TEXTSTRING_HUD_ANCHORED_4_3_NEW); break;
+			}
+			RenderText(GetTextString(elementPtr->a.TextDescription), MENU_CENTREX-MENU_ELEMENT_SPACING, y, elementPtr->Brightness, AVPMENUFORMAT_RIGHTJUSTIFIED);
+			RenderText(hudAnchorText, MENU_CENTREX+MENU_ELEMENT_SPACING, y, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED);
+			break;
+		}
+		case AVPMENU_ELEMENT_HUD_POSITION:
+		{
+			char hudPositionText[16];
+			HUD_SynchronisePerSpeciesOptions();
+			int x = MENU_CENTREX+MENU_ELEMENT_SPACING+3;
+			x += (201*HUDAnchorPosition)/100;
+			HUDPositionDescription(hudPositionText, sizeof(hudPositionText));
+			RenderText(GetTextString(elementPtr->a.TextDescription), MENU_CENTREX-MENU_ELEMENT_SPACING, y, elementPtr->Brightness, AVPMENUFORMAT_RIGHTJUSTIFIED);
+			if (AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS)
+			{
+				D3D_DrawSliderBar(MENU_CENTREX+MENU_ELEMENT_SPACING, y+1, elementPtr->Brightness);
+				D3D_DrawSlider(x, y+4, elementPtr->Brightness);
+			}
+			else
+			{
+				DrawAvPMenuGfx(AVPMENUGFX_SLIDERBAR, MENU_CENTREX+MENU_ELEMENT_SPACING, y+1, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED);
+				DrawAvPMenuGfx(AVPMENUGFX_SLIDER, x, y+4, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED);
+			}
+			RenderText(hudPositionText, MENU_CENTREX+MENU_ELEMENT_SPACING+220, y, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED);
+			break;
+		}case AVPMENU_ELEMENT_ZOOM_SENSITIVITY:
+		{
+			char zoomSensitivityText[16];
+			int x = MENU_CENTREX+MENU_ELEMENT_SPACING+3;
+			x += (201*(*elementPtr->c.SliderValuePtr))/elementPtr->b.MaxSliderValue;
+			sprintf(zoomSensitivityText,"%.1f",(float)(*elementPtr->c.SliderValuePtr)/10.0f);
+			RenderText(GetTextString(elementPtr->a.TextDescription),MENU_CENTREX-MENU_ELEMENT_SPACING,y,elementPtr->Brightness,AVPMENUFORMAT_RIGHTJUSTIFIED);
+			if(AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS)
+			{
+				D3D_DrawSliderBar(MENU_CENTREX+MENU_ELEMENT_SPACING,y+1,elementPtr->Brightness);
+				D3D_DrawSlider(x,y+4,elementPtr->Brightness);
+			}
+			else
+			{
+				DrawAvPMenuGfx(AVPMENUGFX_SLIDERBAR,MENU_CENTREX+MENU_ELEMENT_SPACING,y+1,elementPtr->Brightness,AVPMENUFORMAT_LEFTJUSTIFIED);
+				DrawAvPMenuGfx(AVPMENUGFX_SLIDER,x,y+4,elementPtr->Brightness,AVPMENUFORMAT_LEFTJUSTIFIED);
+			}
+			RenderText(zoomSensitivityText,MENU_CENTREX+MENU_ELEMENT_SPACING+220,y,elementPtr->Brightness,AVPMENUFORMAT_LEFTJUSTIFIED);
+			break;
+		}		case AVPMENU_ELEMENT_SLIDER:
 		{
 			int x = MENU_CENTREX+MENU_ELEMENT_SPACING+3;
+			char sliderCounter[16];
 			x+=(201*(*elementPtr->c.SliderValuePtr))/elementPtr->b.MaxSliderValue;
 			RenderText(GetTextString(elementPtr->a.TextDescription),MENU_CENTREX-MENU_ELEMENT_SPACING,y,elementPtr->Brightness,AVPMENUFORMAT_RIGHTJUSTIFIED);
 			if(AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS)
@@ -3669,11 +5388,57 @@ static void RenderMenuElement(AVPMENU_ELEMENT *elementPtr, int e, int y)
 				DrawAvPMenuGfx(AVPMENUGFX_SLIDERBAR,MENU_CENTREX+MENU_ELEMENT_SPACING,y+1,elementPtr->Brightness,AVPMENUFORMAT_LEFTJUSTIFIED);
 				DrawAvPMenuGfx(AVPMENUGFX_SLIDER,x,y+4,elementPtr->Brightness,AVPMENUFORMAT_LEFTJUSTIFIED);
 			}
+			if (VanillaSliderUsesLiveCounter(elementPtr->a.TextDescription))
+			{
+				FormatVanillaSliderCounter(elementPtr, sliderCounter, sizeof(sliderCounter));
+				RenderText(sliderCounter,MENU_CENTREX+MENU_ELEMENT_SPACING+220,y,elementPtr->Brightness,AVPMENUFORMAT_LEFTJUSTIFIED);
+			}
 
 
 			break;
 		}
-		case AVPMENU_ELEMENT_VIDEOMODE:
+		case AVPMENU_ELEMENT_VIDEO_RENDERER:
+		case AVPMENU_ELEMENT_VIDEO_ASPECT:
+case AVPMENU_ELEMENT_VIDEO_RESOLUTION:
+case AVPMENU_ELEMENT_VIDEO_REFRESH:
+case AVPMENU_ELEMENT_VIDEO_SCREENMODE:
+case AVPMENU_ELEMENT_VIDEO_VSYNC:
+case AVPMENU_ELEMENT_VIDEO_FPSCAP:
+{
+    char *videoValue;
+    switch (elementPtr->ElementID)
+    {
+        case AVPMENU_ELEMENT_VIDEO_RENDERER: videoValue = GetVideoRendererDescription(); break;
+        case AVPMENU_ELEMENT_VIDEO_ASPECT: videoValue = GetVideoAspectDescription(); break;
+        case AVPMENU_ELEMENT_VIDEO_RESOLUTION: videoValue = GetVideoResolutionDescription(); break;
+        case AVPMENU_ELEMENT_VIDEO_REFRESH: videoValue = GetVideoRefreshDescription(); break;
+        case AVPMENU_ELEMENT_VIDEO_VSYNC: videoValue = GetVideoVSyncDescription(); break;
+        case AVPMENU_ELEMENT_VIDEO_FPSCAP: videoValue = GetVideoFPSCapDescription(); break;
+        default: videoValue = GetVideoScreenModeDescription(); break;
+    }
+    RenderText(GetTextString(elementPtr->a.TextDescription), MENU_CENTREX-MENU_ELEMENT_SPACING, y, elementPtr->Brightness, AVPMENUFORMAT_RIGHTJUSTIFIED);
+    if (elementPtr->ElementID == AVPMENU_ELEMENT_VIDEO_FPSCAP && AvPMenus.UserEnteringNumber && e == AvPMenus.CurrentlySelectedElement)
+    {
+        const int valueX = MENU_CENTREX + MENU_ELEMENT_SPACING;
+        int b = GetSin(CloakingPhase & 4095);
+
+        if (AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS)
+        {
+            RenderText(videoValue, valueX, y, elementPtr->Brightness / 2, AVPMENUFORMAT_LEFTJUSTIFIED);
+            int renderedValueX = InGameMenuTextUsesNativeAnchors ? valueX : ScaleInGameMenuTextX(valueX);
+            int valueWidth = MUL_FIXED(MenuTextLength(videoValue), D3D_GetActiveConsoleTextScaleFixed());
+            /* Hardware_RenderSmallMenuText returns its start x, not its end x. */
+            Hardware_RenderSmallMenuText("I", renderedValueX + valueWidth + 3, y, MUL_FIXED(b, b), AVPMENUFORMAT_LEFTJUSTIFIED);
+        }
+        else
+        {
+            int cursorX = RenderText(videoValue, valueX, y, elementPtr->Brightness / 2, AVPMENUFORMAT_LEFTJUSTIFIED);
+            RenderText("I", cursorX + 3, y, MUL_FIXED(b, b), AVPMENUFORMAT_LEFTJUSTIFIED);
+        }
+    }
+    else RenderText(videoValue, MENU_CENTREX+MENU_ELEMENT_SPACING, y, elementPtr->Brightness, AVPMENUFORMAT_LEFTJUSTIFIED);
+    break;
+}case AVPMENU_ELEMENT_VIDEOMODE:
 		{
 /*			RenderText
 			(
@@ -3703,11 +5468,12 @@ static void RenderMenuElement(AVPMENU_ELEMENT *elementPtr, int e, int y)
 		}
 		case AVPMENU_ELEMENT_KEYCONFIG:
 		{
-			unsigned char *primaryKey = ((unsigned char*)&PlayerInputPrimaryConfig)+e-2;
-			unsigned char *secondaryKey = ((unsigned char*)&PlayerInputSecondaryConfig)+e-2;
+			unsigned char *primaryKey = KeyConfigBindingPointer(1,e);
+			unsigned char *secondaryKey = KeyConfigBindingPointer(0,e);
 			if (e==AvPMenus.CurrentlySelectedElement)
 			{
 				int x,g;
+				int highlightScale = D3D_GetActiveConsoleTextScaleFixed();
 				if (KeyConfigSelectionColumn)
 				{
 					x = MENU_RIGHTXEDGE;
@@ -3727,7 +5493,7 @@ static void RenderMenuElement(AVPMENU_ELEMENT *elementPtr, int e, int y)
 
 				if(AvPMenus.MenusState == MENUSSTATE_INGAMEMENUS)
 				{
-					Hardware_RenderHighlightRectangle(x-100,y-4,x+4,y+19,0,g,0);
+					Hardware_RenderHighlightRectangle(x-MUL_FIXED(100,highlightScale),y-MUL_FIXED(4,highlightScale),x+MUL_FIXED(4,highlightScale),y+MUL_FIXED(19,highlightScale),0,g,0);
 				}
 				else
 				{
@@ -3767,7 +5533,7 @@ static void RenderMenuElement(AVPMENU_ELEMENT *elementPtr, int e, int y)
 			}
 			else
 			{
-				if (MultipleAssignments[0][e-2])
+				if (MultipleAssignments[0][KeyConfigVisibleBindingIndex(e)])
 				{
 					RenderText_Coloured
 					(
@@ -3792,7 +5558,7 @@ static void RenderMenuElement(AVPMENU_ELEMENT *elementPtr, int e, int y)
 						AVPMENUFORMAT_RIGHTJUSTIFIED
 					);
 				}
-				if (MultipleAssignments[1][e-2])
+				if (MultipleAssignments[1][KeyConfigVisibleBindingIndex(e)])
 				{
 					RenderText_Coloured
 					(
@@ -3819,9 +5585,12 @@ static void RenderMenuElement(AVPMENU_ELEMENT *elementPtr, int e, int y)
 				}
 			}
 
+            enum TEXTSTRING_ID bindingLabel=elementPtr->a.TextDescription;
+            if(bindingLabel==TEXTSTRING_MARINE_KEY_WALK || bindingLabel==TEXTSTRING_PREDATOR_KEY_WALK || bindingLabel==TEXTSTRING_ALIEN_KEY_WALK)
+                bindingLabel=AlwaysRun_Temp ? TEXTSTRING_WALK_ACTION_NEW : TEXTSTRING_RUN_ACTION_NEW;
 			RenderText
 			(
-				GetTextString(elementPtr->a.TextDescription),
+				GetTextString(bindingLabel),
 				MENU_LEFTXEDGE,
 				y,
 				elementPtr->Brightness,
@@ -3835,10 +5604,20 @@ static void RenderMenuElement(AVPMENU_ELEMENT *elementPtr, int e, int y)
 
 static int HeightOfMenuElement(AVPMENU_ELEMENT *elementPtr)
 {
+ /* Both rows draw at y+12; one font height plus 5 leaves a five-pixel gap. */
+ if(elementPtr->ElementID==AVPMENU_ELEMENT_TEXTSLIDER && elementPtr->c.SliderValuePtr==&RetainPlayerState)return HUD_FONT_HEIGHT+5;
+ if(elementPtr->ElementID==AVPMENU_ELEMENT_TEXTSLIDER && elementPtr->c.SliderValuePtr==&OptimizedAmmo)return 40;
+	if (!MenuElementIsVisible(elementPtr)) return 0;
 	int h = MENU_ELEMENT_SPACING;
 
 	switch(elementPtr->ElementID)
 	{
+        case AVPMENU_ELEMENT_SHAKE_PARAM: {
+            char lines[64][512];int scale=AvPMenus.MenusState==MENUSSTATE_INGAMEMENUS?D3D_GetConsoleTextScaleFixed():ONE_FIXED;
+            return ShakeParamLabel(elementPtr->c.Value,lines)*17+(22*ONE_FIXED+scale-1)/scale;
+        }
+        case AVPMENU_ELEMENT_MOTION_PARAM: {char lines[64][512];return MotionParamLabel(elementPtr->c.Value,lines)*17+22;}
+        case AVPMENU_ELEMENT_DEV_WEAPON_Z: return HUD_FONT_HEIGHT*2+10;
 		default:
 		{
 			if (AvPMenus.FontToUse==AVPMENU_FONT_BIG)
@@ -3903,6 +5682,7 @@ static int HeightOfMenuElement(AVPMENU_ELEMENT *elementPtr)
 static char *GetDescriptionOfKey(unsigned char key)
 {
 	static char KeyDescBuffer[2]="\0\0";
+	static char MouseButton5Description[]="MOUSE5";
 	char *textPtr;
 	
 	switch (key)
@@ -3966,6 +5746,9 @@ static char *GetDescriptionOfKey(unsigned char key)
 			break;
 		case KEY_MOUSEBUTTON4:
 			textPtr = GetTextString(TEXTSTRING_KEYS_MOUSEBUTTON4);
+			break;
+		case KEY_MOUSEBUTTON5:
+			textPtr = MouseButton5Description;
 			break;
 		case KEY_MOUSEWHEELUP:
 			textPtr = GetTextString(TEXTSTRING_KEYS_MOUSEWHEELUP);
@@ -4285,74 +6068,42 @@ static char *GetDescriptionOfKey(unsigned char key)
 	return textPtr;
 }
 
+/* Advance by the episode just played, never by the profile's unlock frontier.
+ * A replay at an easier difficulty cannot lower the stored completion record. */
 static int OkayToPlayNextEpisode(void)
 {
-	switch(AvP.PlayerType)
-	{
-		default:
-			GLOBALASSERT(0);
-		case I_Marine:
-		{
-			if (UserProfilePtr->LevelCompleted[AvP.PlayerType][MarineEpisodeToPlay] < AvP.Difficulty+1)
-			{
-				UserProfilePtr->LevelCompleted[AvP.PlayerType][MarineEpisodeToPlay]=AvP.Difficulty+1;
-			}
-			SaveUserProfile(UserProfilePtr);
-			SetupNewMenu(AVPMENU_MARINELEVELS);
-			return 1;
-			#if 0
-			if (MarineEpisodeToPlay<MAX_NO_OF_BASIC_MARINE_EPISODES-1)
-			{
-				MarineEpisodeToPlay++;
-				SetLevelToLoadForMarine(MarineEpisodeToPlay);
-				return 1;
-			}
-			#endif
-			break;
-		}
-		case I_Predator:
-		{
-			if (UserProfilePtr->LevelCompleted[AvP.PlayerType][PredatorEpisodeToPlay] < AvP.Difficulty+1)
-			{
-				UserProfilePtr->LevelCompleted[AvP.PlayerType][PredatorEpisodeToPlay]=AvP.Difficulty+1;
-			}
-			SaveUserProfile(UserProfilePtr);
-			SetupNewMenu(AVPMENU_PREDATORLEVELS);
-			return 1;
-			#if 0
-			if (PredatorEpisodeToPlay<MAX_NO_OF_BASIC_PREDATOR_EPISODES-1)
-			{
-				PredatorEpisodeToPlay++;
-				SetLevelToLoadForPredator(PredatorEpisodeToPlay);
-				return 1;
-			}
-			#endif
-			break;
-		}
-		case I_Alien:
-		{
-			if (UserProfilePtr->LevelCompleted[AvP.PlayerType][AlienEpisodeToPlay] < AvP.Difficulty+1)
-			{
-				UserProfilePtr->LevelCompleted[AvP.PlayerType][AlienEpisodeToPlay]=AvP.Difficulty+1;
-			}
-			SaveUserProfile(UserProfilePtr);
-			SetupNewMenu(AVPMENU_ALIENLEVELS);
-			return 1;
-			#if 0
-			if (AlienEpisodeToPlay<MAX_NO_OF_BASIC_ALIEN_EPISODES-1)
-			{
-				AlienEpisodeToPlay++;
-				SetLevelToLoadForAlien(AlienEpisodeToPlay);
-				return 1;
-			}
-			#endif
-			break;
-		}
-	}       
-	return 0;
-	
+ int *episode, basicCount, totalCount;
+ enum AVPMENU_ID levelMenu;
+ void (*setLevel)(int);
+ switch(AvP.PlayerType){
+ case I_Marine: episode=&MarineEpisodeToPlay;basicCount=MAX_NO_OF_BASIC_MARINE_EPISODES;
+  totalCount=MAX_NO_OF_MARINE_EPISODES;levelMenu=AVPMENU_MARINELEVELS;setLevel=SetLevelToLoadForMarine;break;
+ case I_Predator: episode=&PredatorEpisodeToPlay;basicCount=MAX_NO_OF_BASIC_PREDATOR_EPISODES;
+  totalCount=MAX_NO_OF_PREDATOR_EPISODES;levelMenu=AVPMENU_PREDATORLEVELS;setLevel=SetLevelToLoadForPredator;break;
+ case I_Alien: episode=&AlienEpisodeToPlay;basicCount=MAX_NO_OF_BASIC_ALIEN_EPISODES;
+  totalCount=MAX_NO_OF_ALIEN_EPISODES;levelMenu=AVPMENU_ALIENLEVELS;setLevel=SetLevelToLoadForAlien;break;
+ default: SetupNewMenu(AVPMENU_MAIN);return 0;
+ }
+ if(*episode<0||*episode>=totalCount){SetupNewMenu(AVPMENU_MAIN);return 0;}
+ if(UserProfilePtr && !DebuggingCommandsActive){
+  if(UserProfilePtr->LevelCompleted[AvP.PlayerType][*episode]<AcidCompletion())
+   UserProfilePtr->LevelCompleted[AvP.PlayerType][*episode]=AcidCompletion();
+  SaveUserProfile(UserProfilePtr);
+ }
+ /* Bonus maps are standalone; the campaign finale keeps its existing outro. */
+ if(RetainPlayerState!=CAMPAIGN_OFF && *episode<basicCount-1){
+  ++*episode;RememberEpisode(AvP.PlayerType,*episode);setLevel(*episode);
+  /* Automatic continuation bypasses the briefing menu: prepare the next
+   * episode text explicitly for loading and the post-load fade. */
+  SetBriefingTextForEpisode(*episode, AvP.PlayerType);
+  CampaignArmNextLevel();
+  LoadGameRequest=SAVELOAD_REQUEST_NONE;
+  AvPMenus.MenusState=MENUSSTATE_STARTGAME;
+  return 1;
+ }
+ SetupNewMenu(levelMenu);
+ return 0;
 }
-
 
 
 int NumberOfAvailableLevels(I_PLAYER_TYPE playerID)
@@ -4417,6 +6168,8 @@ int NumberOfAvailableLevels(I_PLAYER_TYPE playerID)
 				i = maximumLevel;
 				break;
 			} 
+			case AVP_DIFFICULTY_LEVEL_MOLECULAR_ACID:
+			case AVP_DIFFICULTY_LEVEL_IMPOSSIBLE:
 			case AVP_DIFFICULTY_LEVEL_HARD:
 			{
 				MaximumSelectableLevel = maximumLevel;
@@ -4465,8 +6218,35 @@ int LevelMostLikelyToPlay(I_PLAYER_TYPE playerID)
 
 int MaxDifficultyLevelAllowed(I_PLAYER_TYPE playerID, int level)
 {
-	if (level == 0) return 3;
-	else return UserProfilePtr->LevelCompleted[playerID][level-1];
+ int total,basic,available;
+ switch(playerID){
+ case I_Marine:total=MAX_NO_OF_MARINE_EPISODES;basic=MAX_NO_OF_BASIC_MARINE_EPISODES;break;
+ case I_Predator:total=MAX_NO_OF_PREDATOR_EPISODES;basic=MAX_NO_OF_BASIC_PREDATOR_EPISODES;break;
+ case I_Alien:total=MAX_NO_OF_ALIEN_EPISODES;basic=MAX_NO_OF_BASIC_ALIEN_EPISODES;break;
+ default:return 3;
+ }
+ if(!UserProfilePtr || level<0 || level>=total)return 3;
+ /* Completion records keep the highest difficulty reached per episode.
+  * Director's Cut or better unlocks Molecular acid; Realistic unlocks
+  * Impossible. Existing completion records satisfy the same rules. */
+ if(UserProfilePtr->LevelCompleted[playerID][level]>=AVP_DIFFICULTY_LEVEL_HARD)return 5;
+ if(UserProfilePtr->LevelCompleted[playerID][level]>=AVP_DIFFICULTY_LEVEL_MEDIUM)return 4;
+ /* Bonus missions inherit advanced difficulties earned in this species.
+  * Their own record alone could hide Molecular acid on an unlocked bonus. */
+ if(level>=basic){
+  int completed; available=3;
+  for(completed=0;completed<total;completed++){
+   int record=UserProfilePtr->LevelCompleted[playerID][completed];
+   if(record>=AVP_DIFFICULTY_LEVEL_HARD)return 5;
+   if(record>=AVP_DIFFICULTY_LEVEL_MEDIUM)available=4;
+  }
+  return available;
+ }
+ if(level==0)return 3;
+ available=UserProfilePtr->LevelCompleted[playerID][level-1];
+ if(available<1)available=1;
+ if(available>3)available=3;
+ return available;
 }
 void DisplayVideoModeUnavailableScreen(void)
 {
@@ -4507,7 +6287,7 @@ void CheckForCredits(void)
 	{
 		char message[100];
 		sprintf(message,"Unable to access credits.txt\n");
-		MessageBox(NULL,message,"AvP Error",MB_OK+MB_SYSTEMMODAL);
+		MessageBox(NULL,message,TYRARGO_PROJECT_NAME " - Error",MB_OK+MB_SYSTEMMODAL);
 		exit(0x111);
 		return;
 	}
@@ -4796,158 +6576,16 @@ static void InitMainMenusBackdrop(void)
 
 
 
+static int ExpandedMainMenu(void){return 1;}
+extern void ConfigureFrontendCanvas(int expanded);
+extern int DrawSettingsMenuBackdrop(int biomech);
 extern void DrawMainMenusBackdrop(void)
 {
-	#if 1
-	if (!PlayMenuBackgroundBink())
-	{
-		DrawAvPMenuGfx(AVPMENUGFX_BACKDROP,0,0,ONE_FIXED+1,AVPMENUFORMAT_LEFTJUSTIFIED);
-	}
-	else
-	{
-		extern unsigned char *ScreenBuffer;
-		unsigned int *screenPtr = (unsigned int*)ScreenBuffer;
-		int i;	  
-
-		i = ScreenDescriptorBlock.SDB_Width * 60 /2;
-		do
-		{
-			*screenPtr++=0; 
-		}
-		while(--i);
-
-		screenPtr+=ScreenDescriptorBlock.SDB_Width * 360/2;
-
-		i = ScreenDescriptorBlock.SDB_Width * 60 /2;
-		do
-		{
-			*screenPtr++=0; 
-		}
-		while(--i);
-	}
-
-
-
-	#else
-	extern DDPIXELFORMAT DisplayPixelFormat;
-	extern unsigned char *ScreenBuffer;
-	extern long BackBufferPitch;
-//      LockSurfaceAndGetBufferPointer();
-	{
-		unsigned int *screenPtr;
-		int i;	  
-		int blue = (DisplayPixelFormat.dwBBitMask/4) & DisplayPixelFormat.dwBBitMask;				      
-		
-		blue = blue | (blue<<16);
-		screenPtr = (unsigned int *)ScreenBuffer;
-		i = ScreenDescriptorBlock.SDB_Width * 60 /2;
-		do
-		{
-			*screenPtr++=0; 
-		}
-		while(--i);
-		#if 1
-		#if 1
-		i = ScreenDescriptorBlock.SDB_Width * 360/2;
-		do
-		{
-			*screenPtr=0;   
-			screenPtr++;
-		}
-		while(--i);
-		#else
-		{
-		unsigned short *s=(unsigned short*)screenPtr;
-		i = ScreenDescriptorBlock.SDB_Width * 360;
-		do
-		{
-			unsigned short a;
-			a =  MUL_FIXED(((*s)&DisplayPixelFormat.dwRBitMask),50000) & DisplayPixelFormat.dwRBitMask;
-			a |= MUL_FIXED(((*s)&DisplayPixelFormat.dwGBitMask),50000) & DisplayPixelFormat.dwGBitMask;
-			a |= MUL_FIXED(((*s)&DisplayPixelFormat.dwBBitMask),50000) & DisplayPixelFormat.dwBBitMask;
-			*s++=a;
-		}
-		while(--i);
-		}
-		#endif
-		#else
-
-		#if 0
-		if (AvPMenus.CurrentMenu == AVPMENU_MARINELEVELS)
-		{
-			DrawAvPMenuGfx(AVPMENUGFX_MARINE_EPISODE1+MarineEpisodeToPlay,0,60,ONE_FIXED+1,AVPMENUFORMAT_LEFTJUSTIFIED);
-		}
-		else if (AvPMenus.CurrentMenu == AVPMENU_PREDATORLEVELS)
-		{
-			DrawAvPMenuGfx(AVPMENUGFX_PREDATOR_EPISODE1+PredatorEpisodeToPlay,0,60,ONE_FIXED+1,AVPMENUFORMAT_LEFTJUSTIFIED);
-		}
-		else if (AvPMenus.CurrentMenu == AVPMENU_ALIENLEVELS)
-		{
-			DrawAvPMenuGfx(AVPMENUGFX_ALIEN_EPISODE1+AlienEpisodeToPlay,0,60,ONE_FIXED+1,AVPMENUFORMAT_LEFTJUSTIFIED);
-		}
-		else
-		#endif
-		{
-			DrawAvPMenuGfx(AVPMENUGFX_BACKDROP,0,0,ONE_FIXED+1,AVPMENUFORMAT_LEFTJUSTIFIED);
-		}
-		screenPtr+=ScreenDescriptorBlock.SDB_Width * 360/2;
-		#endif
-		i = ScreenDescriptorBlock.SDB_Width * 60 /2;
-		do
-		{
-			*screenPtr++=0; 
-		}
-		while(--i);
-
-	}
-	#if 0
-	{
-		int i;
-
-		for(i=0; i<NUMBER_OF_STARS; i++)
-		{
-			int x,y;
-
-			x = Star[i].X;
-			y = Star[i].Y;
-			if ( (x<ONE_FIXED || x>638*ONE_FIXED)
-			   ||(y<61*ONE_FIXED || y>418*ONE_FIXED))
-			{
-				Star[i].X = (FastRandom()&65535)*640;
-				Star[i].Y = ((FastRandom()&65535)*360)+60;
-				Star[i].Chasing = (FastRandom()&127);
-				Star[i].Fleeing = (FastRandom()&127);
-			}
-			else
-			{
-				int s = Star[i].Chasing;
-				int f = Star[i].Fleeing;
-				DrawStar(x,y);									      
-//			      Star[i].X -= MUL_FIXED(Star[i].X - 320*ONE_FIXED,RealFrameTime*4);
- //			     Star[i].Y -= MUL_FIXED(Star[i].Y - 240*ONE_FIXED,RealFrameTime*4);
-
-				if ((Star[i].X/131072 == Star[f].X/131072)
-				  &&(Star[i].Y/131072 == Star[f].Y/131072))
-				{
-					Star[i].X = (FastRandom()&65535)*640;
-					Star[i].Y = ((FastRandom()&65535)*360)+60;
-				}
-				else
-				{
-					Star[i].X -= MUL_FIXED(Star[i].X - Star[s].X,RealFrameTime*4);
-					Star[i].Y -= MUL_FIXED(Star[i].Y - Star[s].Y,RealFrameTime*4);
-					Star[i].X += MUL_FIXED(Star[i].X - Star[f].X,RealFrameTime);
-					Star[i].Y += MUL_FIXED(Star[i].Y - Star[f].Y,RealFrameTime);
-				}
-
-				
-			}		
-		}
-
-	}
-	#endif
-	//UnlockSurface();
-	#endif
+ ConfigureFrontendCanvas(ExpandedMainMenu());
+ PlayMenuBackgroundBink(); /* Keep the established background ambience. */
+ if(AvPMenus.CurrentMenu!=AVPMENU_MAINMENUAVOPTIONS && FMVBackend_DrawMenuBackground())return;
+ if(DrawSettingsMenuBackdrop(AvPMenus.CurrentMenu==AVPMENU_MAINMENUAVOPTIONS))return;
+ DrawAvPMenuGfx(AVPMENUGFX_BACKDROP,0,0,ONE_FIXED+1,AVPMENUFORMAT_LEFTJUSTIFIED);
 }
 
 int WhiteOfBrightness(int brightness)
@@ -5340,6 +6978,8 @@ void RenderBriefingText(int centreY, int brightness)
 {
 	int lengthOfLongestLine=-1;
 	int x,y,i;
+	const int hardwareBriefing = (AvPMenus.MenusState != MENUSSTATE_MAINMENUS);
+	const int TextScaleFixed = hardwareBriefing ? D3D_GetConsoleTextScaleFixed() : ONE_FIXED;
 
 	for(i=0; i<5; i++)
 	{
@@ -5347,10 +6987,7 @@ void RenderBriefingText(int centreY, int brightness)
 		{
 			char *ptr = BriefingTextString[i];
 
-			while(*ptr)
-			{
-				length+=AAFontWidths[(unsigned char)(*ptr++)];
-			}
+			length = MUL_FIXED(AvPTextStringWidth(ptr, AAFontWidths), TextScaleFixed);
 		}
 		
 		if (lengthOfLongestLine < length)
@@ -5360,10 +6997,11 @@ void RenderBriefingText(int centreY, int brightness)
 	}
 
 	x = (ScreenDescriptorBlock.SDB_Width-lengthOfLongestLine)/2;
-	y = centreY - 3*HUD_FONT_HEIGHT;
+	y = centreY - MUL_FIXED(3*HUD_FONT_HEIGHT, TextScaleFixed);
+	if (hardwareBriefing) D3D_SetBriefingTextRenderActive(1);
 	for(i=0; i<5; i++)
 	{
-		if (AvPMenus.MenusState != MENUSSTATE_MAINMENUS)
+		if (hardwareBriefing)
 		{
 			Hardware_RenderSmallMenuText(BriefingTextString[i], x, y, brightness, AVPMENUFORMAT_LEFTJUSTIFIED/*,MENU_CENTREY-60-100,MENU_CENTREY-60+180*/);
 		}
@@ -5371,42 +7009,51 @@ void RenderBriefingText(int centreY, int brightness)
 		{
 			RenderSmallMenuText(BriefingTextString[i], x, y, brightness, AVPMENUFORMAT_LEFTJUSTIFIED);
 		}
-		if (i) y+=HUD_FONT_HEIGHT;
-		else y+=HUD_FONT_HEIGHT*2;
+		if (i) y += MUL_FIXED(HUD_FONT_HEIGHT, TextScaleFixed);
+		else y += MUL_FIXED(HUD_FONT_HEIGHT*2, TextScaleFixed);
 	}
+	if (hardwareBriefing) D3D_SetBriefingTextRenderActive(0);
 }
 
 
 void CheckForKeysWithMultipleAssignments(void)
 {
-	unsigned char *configPtr[2];
 	int column,row;
-
-	configPtr[0] = (unsigned char*)&PlayerInputPrimaryConfig;
-	configPtr[1] = (unsigned char*)&PlayerInputSecondaryConfig;
+	int rowCount=KeyConfigActionRowCount()+KeyConfigWeaponRowCount()+KeyConfigGlobalCommandRowCount();
 
 	for (column=0; column<=1; column++)
 	{
-		for (row=0; row<32; row++)
+		for (row=0; row<MAX_KEYCONFIG_BINDINGS; row++) MultipleAssignments[column][row]=0;
+	}
+
+	for (column=0; column<=1; column++)
+	{
+		for (row=0; row<rowCount; row++)
 		{
 			int innerColumn,innerRow;
-
-			MultipleAssignments[column][row] = 0;
-
+			int menuElementIndex=KeyConfigMenuElementIndexForBinding(row);
+			unsigned char key=*KeyConfigBindingPointer(column==0,menuElementIndex);
+			if (key==KEY_VOID) continue;
 			for (innerColumn=0; innerColumn<=1; innerColumn++)
-			for (innerRow=0; innerRow<32; innerRow++)
+			for (innerRow=0; innerRow<rowCount; innerRow++)
 			{
-				if (innerRow==row) continue;
-				// && innerColumn==column) continue;
-				if ( (configPtr[column])[row]==(configPtr[innerColumn])[innerRow] )
+				int innerMenuElementIndex=KeyConfigMenuElementIndexForBinding(innerRow);
+				if (innerColumn==column && innerRow==row) continue;
+				if (key==*KeyConfigBindingPointer(innerColumn==0,innerMenuElementIndex))
 				{
-					MultipleAssignments[column][row] = 1;
+                    if (AvPMenus.CurrentMenu==AVPMENU_PREDATORKEYCONFIG && SmartZoomBindingRowPublished)
+                    {
+                        int action=AvPMenus.MenuElements[menuElementIndex].a.TextDescription-TEXTSTRING_PREDATOR_KEY_FORWARD;
+                        int other=AvPMenus.MenuElements[innerMenuElementIndex].a.TextDescription-TEXTSTRING_PREDATOR_KEY_FORWARD;
+                        if (((action==21 || action==22) && (other==16 || other==17 || other==19 || other==20)) ||
+                            ((other==21 || other==22) && (action==16 || action==17 || action==19 || action==20))) continue;
+                    }
+					MultipleAssignments[column][row]=1;
 				}
 			}
 		}
 	}
 }
-
 void HandleCheatModeFeatures(void)
 {
 	switch(CheatMode_Active)
@@ -5414,7 +7061,7 @@ void HandleCheatModeFeatures(void)
 		case CHEATMODE_WARPSPEED:
 		{
 			TimeScale = 2*ONE_FIXED;
-			AvP.Difficulty = 0;
+			AcidSetTier(0);AvP.Difficulty = 0;
 			break;
 		}
 		case CHEATMODE_LANDOFTHEGIANTS:
@@ -5424,7 +7071,7 @@ void HandleCheatModeFeatures(void)
 		}
 		case CHEATMODE_IMPOSSIBLEMISSION:
 		{
-			AvP.Difficulty = 3;
+			AcidSetTier(0);AvP.Difficulty = 3;
 			break;
 		}
 		case CHEATMODE_UNDERWATER:
@@ -5501,6 +7148,7 @@ extern int AlienEpisodeToPlay;
 extern int MarineEpisodeToPlay;
 extern int PredatorEpisodeToPlay;
 
+
 void SaveLevelHeader()
 {
 	LEVEL_SAVE_BLOCK* block = (LEVEL_SAVE_BLOCK*) GetPointerForSaveBlock(sizeof(LEVEL_SAVE_BLOCK));
@@ -5510,7 +7158,8 @@ void SaveLevelHeader()
 	block->header.size = sizeof(*block);
 
 	//fill in the main block
-	strncpy(block->AvP_Save_String,"AVPSAVE0",8);
+	strncpy(block->AvP_Save_String,AcidActive()?"AVPSAVE1":"AVPSAVE0",8);
+    block->AcidTier=AcidActive()?MolecularAcidTier:0;block->Reserved=0;
 
 	block->Species = AvP.PlayerType;
 
@@ -5587,13 +7236,15 @@ static void GetHeaderInfoForSaveSlot(SAVE_SLOT_HEADER* save_slot, const GameDire
 	//a few checks
 	if(block.header.type != SaveBlock_MainHeader ||
 	   block.header.size != sizeof(block) ||
-	   strncmp(block.AvP_Save_String,"AVPSAVE0",8))
+	   (strncmp(block.AvP_Save_String,"AVPSAVE0",8) && strncmp(block.AvP_Save_String,"AVPSAVE1",8)))
 	{
 		//no good.
 		return;
 	}	
 
-	//appears to be a reasonable file
+	if(block.Difficulty>I_Impossible)return;
+    if(!strncmp(block.AvP_Save_String,"AVPSAVE1",8) && (block.AcidTier<1||block.AcidTier>3||block.Difficulty!=I_Hard))return;
+    //appears to be a reasonable file
 	save_slot->SlotUsed = TRUE;
 
 	//copy stuff from the block
@@ -5604,42 +7255,51 @@ static void GetHeaderInfoForSaveSlot(SAVE_SLOT_HEADER* save_slot, const GameDire
 	save_slot->ElapsedTime_Minutes = block.ElapsedTime_Minutes;
 	save_slot->ElapsedTime_Seconds = (block.ElapsedTime_Seconds >> 16);
 	save_slot->Difficulty = block.Difficulty;
+    save_slot->AcidTier=!strncmp(block.AvP_Save_String,"AVPSAVE1",8)?block.AcidTier:0;
 	save_slot->SavesLeft = block.NumberOfSavesLeft;
 }
 
 void ScanSaveSlots(void)
 {
-	unsigned char pattern[100], *ptr;
-	int i;
+	unsigned char pattern[100];
 	void *gd;
 	GameDirectoryFile *gdf;
-	
-	sprintf(pattern, "%s_?.sav", UserProfilePtr->Name);
+
+	memset(SaveGameSlot, 0, sizeof(SaveGameSlot));
+	sprintf(pattern, "%s_*.sav", UserProfilePtr->FullName);
 	gd = OpenGameDirectory(USER_PROFILES_PATH, pattern, FILETYPE_CONFIG);
 	if (gd == NULL)
 		return;
 
-	while ((gdf = ScanGameDirectory(gd)) != NULL) {
-		if ((gdf->attr & FILEATTR_DIRECTORY) != 0)
-			continue;
-		if ((gdf->attr & FILEATTR_READABLE) == 0)
-			continue;
+	while ((gdf = ScanGameDirectory(gd)) != NULL)
+	{
+		const char *name;
+		const char *slotText;
+		int slotNumber = 0;
 
-		ptr = strrchr(gdf->filename, '.');
-		if (ptr == NULL)
+		if ((gdf->attr & FILEATTR_DIRECTORY) != 0 || (gdf->attr & FILEATTR_READABLE) == 0)
 			continue;
-		ptr--;
-
-		i = *ptr - '1';
-		if (i >= 0 && (i < NUMBER_OF_SAVE_SLOTS)) {
-			GetHeaderInfoForSaveSlot(&SaveGameSlot[i], gdf);
-		}		
+		name = gdf->filename;
+		if (strncmp(name, UserProfilePtr->FullName, strlen(UserProfilePtr->FullName)) != 0)
+			continue;
+		slotText = name + strlen(UserProfilePtr->FullName);
+		if (*slotText++ != '_' || *slotText < '1' || *slotText > '9')
+			continue;
+		while (*slotText >= '0' && *slotText <= '9')
+		{
+			slotNumber = slotNumber * 10 + (*slotText - '0');
+			slotText++;
+		}
+		if (strcmp(slotText, ".sav") != 0)
+			continue;
+		if (slotNumber >= 1 && slotNumber <= NUMBER_OF_SAVE_SLOTS)
+			GetHeaderInfoForSaveSlot(&SaveGameSlot[slotNumber - 1], gdf);
 	}
 }
 
 extern void GetFilenameForSaveSlot(int i, unsigned char *filenamePtr)
 {
-	sprintf(filenamePtr,"%s%s_%d.sav",USER_PROFILES_PATH,UserProfilePtr->Name,i+1);
+	sprintf(filenamePtr,"%s%s_%d.sav",USER_PROFILES_PATH,UserProfilePtr->FullName,i+1);
 }
 
 static void CheckForLoadGame()
@@ -5651,23 +7311,27 @@ static void CheckForLoadGame()
 		{
 			AvP.PlayerType = save_slot->Species;
 			AvP.Difficulty = save_slot->Difficulty;
+            AcidSetTier(save_slot->AcidTier);
 
 			switch(AvP.PlayerType)
 			{
 				case I_Marine :
 					MarineEpisodeToPlay = save_slot->Episode;
-					SetLevelToLoadForMarine(MarineEpisodeToPlay);
+					RememberEpisode(I_Marine,MarineEpisodeToPlay);
+                SetLevelToLoadForMarine(MarineEpisodeToPlay);
 					break;
 
 				case I_Alien :
 					AlienEpisodeToPlay = save_slot->Episode;
-					SetLevelToLoadForAlien(AlienEpisodeToPlay);
+					RememberEpisode(I_Alien,AlienEpisodeToPlay);
+                SetLevelToLoadForAlien(AlienEpisodeToPlay);
 				
 					break;
 	
 				case I_Predator :
 					PredatorEpisodeToPlay = save_slot->Episode;
-					SetLevelToLoadForPredator(PredatorEpisodeToPlay);
+					RememberEpisode(I_Predator,PredatorEpisodeToPlay);
+                SetLevelToLoadForPredator(PredatorEpisodeToPlay);
 					break;
 		
 			}
@@ -5711,3 +7375,6 @@ static void PasteFromClipboard(char* Text,int MaxTextLength)
 	}
 #endif	
 }
+
+
+

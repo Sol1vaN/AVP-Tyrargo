@@ -2718,3 +2718,20 @@ void QuatToMat(QUAT *q,MATRIXCH *m)
 	m->mat33=ONE_FIXED-q_2xx-q_2yy;
 
 }
+
+void PreserveRenderRandomState(int restore)
+{
+ static int32_t saved[DEG_3],savedSeeded[SEEDED_DEG_3];
+ static int front,rear,sfront,srear;int i;
+ if(!restore){
+  for(i=0;i<DEG_3;i++)saved[i]=table[i];
+  for(i=0;i<SEEDED_DEG_3;i++)savedSeeded[i]=seeded_table[i];
+  front=(int)(front_ptr-table);rear=(int)(rear_ptr-table);
+  sfront=(int)(seeded_front_ptr-seeded_table);srear=(int)(seeded_rear_ptr-seeded_table);
+ }else{
+  for(i=0;i<DEG_3;i++)table[i]=saved[i];
+  for(i=0;i<SEEDED_DEG_3;i++)seeded_table[i]=savedSeeded[i];
+  front_ptr=table+front;rear_ptr=table+rear;
+  seeded_front_ptr=seeded_table+sfront;seeded_rear_ptr=seeded_table+srear;
+ }
+}

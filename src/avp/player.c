@@ -1,3 +1,8 @@
+#include "event_latency.h"
+#include "molecular_acid.h"
+#include "campaign_state.h"
+#include "hud_motion.h"
+#include "camera_motion.h"
 /* KJL 16:23:20 10/25/96 - I'm moved all the weapon stuff to the newly created weapon.c,
 so player.c is looking a bit bare at the moment. */
 #include "3dc.h"
@@ -5,6 +10,7 @@ so player.c is looking a bit bare at the moment. */
 #include "inline.h"
 
 #include "stratdef.h"
+#include "npc_support.h"
 #include "gamedef.h"
 #include "bh_types.h"
 #include "inventry.h"
@@ -245,7 +251,8 @@ void InitPlayer(STRATEGYBLOCK* sbPtr, int sb_type)
 		NpcData=GetThisNpcData(PlayerType);
 		LOCALASSERT(NpcData);
 		sbPtr->SBDamageBlock.Health=NpcData->StartingStats.Health<<ONE_FIXED_SHIFT;
-		sbPtr->SBDamageBlock.Armour=NpcData->StartingStats.Armour<<ONE_FIXED_SHIFT;
+		sbPtr->SBDamageBlock.Armour=AcidStartingArmour(AvP.PlayerType,NpcData->StartingStats.Armour);
+        AcidResetPickups();
 		sbPtr->SBDamageBlock.SB_H_flags=NpcData->StartingStats.SB_H_flags;
 		sbPtr->SBDamageBlock.IsOnFire=0;
 
@@ -360,6 +367,7 @@ void InitPlayer(STRATEGYBLOCK* sbPtr, int sb_type)
 
 	//restore the number of saves allowed
 	ResetNumberOfSaves();
+	CampaignRestorePlayer(sbPtr);
 
 	//choosing a start position now occurs later on
 //	if(AvP.Network!=I_No_Network) TeleportNetPlayerToAStartingPosition(sbPtr, 1);
@@ -443,7 +451,7 @@ void MaintainPlayer(void)
     
     if (playerStatusPtr->IsAlive)
 	{
-	    MaintainPlayersInventory();
+	    { EVENT_TICK span=EventLatencyBegin(); MaintainPlayersInventory(); EventLatencyEnd(span,"player inventory dispatch",0,0,0,0,0); }
 	}
 
 	if (ShowAdj) {
@@ -567,7 +575,8 @@ void MaintainPlayer(void)
 	if (Player->ObStrategyBlock->SBDamageBlock.IsOnFire) {
 
 		myNetworkKillerId=myIgniterId;
-		CauseDamageToObject(Player->ObStrategyBlock,&firedamage,NormalFrameTime,NULL);
+		{NPC_DAMAGE_SOURCE previous=NPCSupportPushBurnSource(Player->ObStrategyBlock);
+        CauseDamageToObject(Player->ObStrategyBlock,&firedamage,NormalFrameTime,NULL);NPCSupportPopSource(previous);}
 		myNetworkKillerId=AVPDPNetID;
 
 		if (playerStatusPtr->soundHandle3!=SOUND_NOACTIVEINDEX) {
@@ -637,7 +646,8 @@ void MaintainPlayer(void)
 		}
 	}
 	
-	if (playerStatusPtr->IsMovingInWater)
+	MarineMotionWater(playerStatusPtr->IsMovingInWater);
+	if (playerStatusPtr->IsMovingInWater && !MarineMotionOwnsWaterSteps())
 	{
 		#if 0
 		if (playerStatusPtr->soundHandle4==SOUND_NOACTIVEINDEX) {
@@ -799,6 +809,9 @@ void PlayerIsDamaged(STRATEGYBLOCK *sbPtr, DAMAGE_PROFILE *damage, int multiplie
 	deltaArmour=playerStatusPtr->Armour-sbPtr->SBDamageBlock.Armour;
 
 	CurrentGameStats_DamageTaken(deltaHealth,deltaArmour);
+	/* Presentation notification only; preserve damage, camera and gameplay RNG. */
+	if (playerStatusPtr->IsAlive)
+		MarineHUDMotionDamage(((deltaHealth>0?(double)deltaHealth:0)+(deltaArmour>0?(double)deltaArmour:0))/65536.0);
 	
 	/* Patrick 4/8/97--------------------------------------------------
 	A little hack-et to make the predator tougher in multiplayer games
@@ -1139,6 +1152,19 @@ static void PlayerIsDead(DAMAGE_PROFILE* damage,int multiplier,VECTORCH* incomin
 		sbPtr->DynPtr->UseStandardGravity=1;
 	}
 
+    /* Campaign deaths have a real body for post-kill alien behaviour too.
+     * An unavailable loaded hierarchy is harmless: aliens simply patrol. */
+    if(AvP.Network==I_No_Network && AvP.PlayerType!=I_Alien){
+        playerStatusPtr->MyCorpse=MakeNewCorpse();
+        if(playerStatusPtr->MyCorpse){
+            DAMAGE_PROFILE noDamage={0};
+            DAMAGE_PROFILE *fatalDamage=damage?damage:&noDamage;
+            int deathId=AvP.PlayerType==I_Marine?
+                Deduce_PlayerMarineDeathSequence(playerStatusPtr->MyCorpse,fatalDamage,multiplier,incoming):
+                Deduce_PlayerPredatorDeathSequence(playerStatusPtr->MyCorpse,fatalDamage,multiplier,incoming);
+            ApplyCorpseDeathAnim(playerStatusPtr->MyCorpse,deathId);
+        }
+    }
 	/* network support... */
 	if(AvP.Network!=I_No_Network) 
 	{
@@ -1332,6 +1358,7 @@ void ActivateSelfDestructSequence (int seconds)
 }
 
 void DeInitialisePlayer(void) {
+	ReleasePlayerWeaponGraphics();
 	/* I thought it would be logical to put it here... */
 	
   	int slot = MAX_NO_OF_WEAPON_SLOTS;
@@ -1372,7 +1399,7 @@ void InitPlayerCloakingSystem(void)
 	playerStatusPtr->cloakPositionGivenAway = 0;
 	playerStatusPtr->CloakingEffectiveness = 0;
 
-	playerStatusPtr->FieldCharge = PLAYERCLOAK_MAXENERGY;
+	playerStatusPtr->FieldCharge = AcidResourceCapacity(PLAYERCLOAK_MAXENERGY);
 	playerStatusPtr->cloakPositionGivenAwayTimer = 0;
 	playerStatusPtr->PlasmaCasterCharge=0;
 
@@ -1518,14 +1545,14 @@ static void DoPlayerCloakingSystem(void)
 			playerStatusPtr->FieldCharge += MUL_FIXED(NormalFrameTime,TrickleCharge);
 		}
 
-		if(playerStatusPtr->FieldCharge > PLAYERCLOAK_MAXENERGY) {
-			playerStatusPtr->FieldCharge = PLAYERCLOAK_MAXENERGY;
+		if(playerStatusPtr->FieldCharge > AcidResourceCapacity(PLAYERCLOAK_MAXENERGY)) {
+			playerStatusPtr->FieldCharge = AcidResourceCapacity(PLAYERCLOAK_MAXENERGY);
 		}
 
 	}
 	else
 	{
-		if(playerStatusPtr->FieldCharge < PLAYERCLOAK_MAXENERGY)
+		if(playerStatusPtr->FieldCharge < AcidResourceCapacity(PLAYERCLOAK_MAXENERGY))
 		{
 
 			/* TrickleCharge Difficulty Variation! */
@@ -1535,13 +1562,13 @@ static void DoPlayerCloakingSystem(void)
 				playerStatusPtr->FieldCharge += MUL_FIXED(NormalFrameTime,TrickleCharge);
 			}
 
-			if(playerStatusPtr->FieldCharge > PLAYERCLOAK_MAXENERGY) {
-				playerStatusPtr->FieldCharge = PLAYERCLOAK_MAXENERGY;
+			if(playerStatusPtr->FieldCharge > AcidResourceCapacity(PLAYERCLOAK_MAXENERGY)) {
+				playerStatusPtr->FieldCharge = AcidResourceCapacity(PLAYERCLOAK_MAXENERGY);
 			}
 			
 			#if 0
 			/* Infinite field charge? */
-			playerStatusPtr->FieldCharge = PLAYERCLOAK_MAXENERGY;
+			playerStatusPtr->FieldCharge = AcidResourceCapacity(PLAYERCLOAK_MAXENERGY);
 			#endif
 		}	
 	}
@@ -1626,7 +1653,7 @@ void GimmeCharge(void) {
 
 	if(AvP.PlayerType!=I_Predator) return;
 
-	playerStatusPtr->FieldCharge = PLAYERCLOAK_MAXENERGY;
+	playerStatusPtr->FieldCharge = AcidResourceCapacity(PLAYERCLOAK_MAXENERGY);
 
 	GimmeChargeCalls++;
 
@@ -1868,12 +1895,14 @@ void ShowAdjacencies(void) {
 **---------------------------*/
 
 
+#include "inventory_wire.h"
+
 typedef struct player_save_block
 {
 	SAVE_BLOCK_STRATEGY_HEADER header;
 
 //behaviour block things
-	PLAYER_WEAPON_DATA	WeaponSlot[MAX_NO_OF_WEAPON_SLOTS];
+	LEGACY_PLAYER_WEAPON_DATA	WeaponSlot[MAX_NO_OF_WEAPON_SLOTS];
 
 	enum WEAPON_SLOT	SelectedWeaponSlot;
 	enum WEAPON_SLOT	SwapToWeaponSlot;
@@ -1932,7 +1961,7 @@ typedef struct player_save_block
 //and  globals
 	enum VISION_MODE_ID CurrentVisionMode;
 	SMARTGUN_MODES SmartgunMode;
-	GRENADE_LAUNCHER_DATA GrenadeLauncherData;
+	LEGACY_GRENADE_LAUNCHER_DATA GrenadeLauncherData;
 	
 
 //strategy block stuff
@@ -2009,8 +2038,8 @@ void SaveStrategy_Player(STRATEGYBLOCK* sbPtr)
 		block->WeaponSlot[i].StateTimeOutCounter = playerStatusPtr->WeaponSlot[i].StateTimeOutCounter; 		
 		block->WeaponSlot[i].PrimaryRoundsRemaining = playerStatusPtr->WeaponSlot[i].PrimaryRoundsRemaining; 		
 		block->WeaponSlot[i].SecondaryRoundsRemaining = playerStatusPtr->WeaponSlot[i].SecondaryRoundsRemaining; 		
-		block->WeaponSlot[i].PrimaryMagazinesRemaining = playerStatusPtr->WeaponSlot[i].PrimaryMagazinesRemaining;	
-		block->WeaponSlot[i].SecondaryMagazinesRemaining = playerStatusPtr->WeaponSlot[i].SecondaryMagazinesRemaining; 		
+		block->WeaponSlot[i].PrimaryMagazinesRemaining = playerStatusPtr->WeaponSlot[i].PrimaryMagazinesRemaining>255?255:playerStatusPtr->WeaponSlot[i].PrimaryMagazinesRemaining;	
+		block->WeaponSlot[i].SecondaryMagazinesRemaining = playerStatusPtr->WeaponSlot[i].SecondaryMagazinesRemaining>255?255:playerStatusPtr->WeaponSlot[i].SecondaryMagazinesRemaining; 		
 		block->WeaponSlot[i].PositionOffset = playerStatusPtr->WeaponSlot[i].PositionOffset;  		
 		block->WeaponSlot[i].DirectionOffset = playerStatusPtr->WeaponSlot[i].DirectionOffset; 		
 		block->WeaponSlot[i].Possessed = playerStatusPtr->WeaponSlot[i].Possessed; 		
@@ -2024,7 +2053,7 @@ void SaveStrategy_Player(STRATEGYBLOCK* sbPtr)
 	//global
 	block->CurrentVisionMode = CurrentVisionMode;
 	block->SmartgunMode = SmartgunMode;
-	block->GrenadeLauncherData = GrenadeLauncherData;
+	InventorySaveGrenades(&block->GrenadeLauncherData,&GrenadeLauncherData);
 
 	//strategy block stuff
 
@@ -2129,7 +2158,7 @@ void LoadStrategy_Player(SAVE_BLOCK_STRATEGY_HEADER* header)
 	//global
 	CurrentVisionMode = block->CurrentVisionMode;
 	SmartgunMode = block->SmartgunMode;
-	GrenadeLauncherData = block->GrenadeLauncherData;
+	InventoryLoadGrenades(&GrenadeLauncherData,&block->GrenadeLauncherData);
 	
 	//strategy block stuff
 	*sbPtr->DynPtr = block->dynamics;

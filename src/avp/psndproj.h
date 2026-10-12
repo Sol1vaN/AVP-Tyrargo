@@ -352,7 +352,8 @@ typedef enum soundindex
   SID_UNUSED_239,
 
 	SID_ENDOF_LOADSLOTS=800,
-    
+	SID_SMART_JETPACK_TOGGLE_ON,
+	SID_SMART_JETPACK_TOGGLE_OFF,
 	SID_MAXIMUM, /* SPECIAL: used to trap out of bounds values */ 		
 	SID_NOSOUND	 /* SPECIAL: used to specify a null sound */ 		
 }SOUNDINDEX;
@@ -384,6 +385,7 @@ extern void LoadSounds(char *soundDirectory);
 
 //loads wav file locally or from network or from fast file as appropriate
 extern int FindAndLoadWavFile(int soundNum,char* wavFileName);
+extern int PlaySmartJetpackToggleSound(int enabled);
 
 /* Patrick 10/6/97 -------------------------------------------------------------
   Enumeration of CDDA tracks 

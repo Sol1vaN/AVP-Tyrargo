@@ -273,6 +273,8 @@ enum KEY_ID
 	KEY_DIACRITIC_UMLAUT,
 
 
+	/* Keep the historical key IDs stable: player profiles serialize these bytes. */
+	KEY_MOUSEBUTTON5=254,
 	KEY_VOID=255, // used to indicate a blank spot in the key config
 	MAX_NUMBER_OF_INPUT_KEYS,
 
@@ -555,6 +557,7 @@ BOOL ExitWindowsSystem(void);
 BOOL InitialiseWindowsSystem(HANDLE hInstance, int nCmdShow, int WinInitMode);
 int  ReadJoystick(void); 
 int  CheckForJoystick(void);
+int  RestartOpenGLVideoContextIfNeeded(void);
 BOOL SpawnRasterThread();
 BOOL WaitForRasterThread();
 

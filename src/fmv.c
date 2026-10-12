@@ -1,27 +1,23 @@
-/* KJL 15:25:20 8/16/97
- *
- * smacker.c - functions to handle FMV playback
- *
- */
+#include "menu_preview.h"
+/* Native FMV path: Bink cutscenes and Smacker in-world panels. */
 #include "3dc.h"
 #include "module.h"
 #include "inline.h"
 #include "stratdef.h"
 #include "gamedef.h"
 #include "fmv.h"
+#include "fmv_backend.h"
 #include "avp_menus.h"
 #include "avp_userprofile.h"
-#include "oglfunc.h" // move this into opengl.c
+#include "oglfunc.h"
+#include <string.h>
 
 #define UseLocalAssert 1
 #include "ourasert.h"
 
 int VolumeOfNearestVideoScreen;
 int PanningOfNearestVideoScreen;
-
-extern char *ScreenBuffer;
 extern int GotAnyKey;
-extern void DirectReadKeyboard(void);
 extern IMAGEHEADER ImageHeaderArray[];
 #if MaxImageGroups>1
 extern int NumImagesArray[];
@@ -29,342 +25,297 @@ extern int NumImagesArray[];
 extern int NumImages;
 #endif
 
-void PlayFMV(char *filenamePtr);
-
-void FindLightingValueFromFMV(unsigned short *bufferPtr);
-void FindLightingValuesFromTriggeredFMV(unsigned char *bufferPtr, FMVTEXTURE *ftPtr);
-
 int SmackerSoundVolume=ONE_FIXED/512;
 int MoviesAreActive;
 int IntroOutroMoviesAreActive=1;
-
+int FMVFilterMode=1;
 int FmvColourRed;
 int FmvColourGreen;
 int FmvColourBlue;
 
 void ReleaseFMVTexture(FMVTEXTURE *ftPtr);
-
-
-/* KJL 12:45:23 10/08/98 - FMVTEXTURE stuff */
+void SetupFMVTexture(FMVTEXTURE *ftPtr);
+void UpdateFMVTexture(FMVTEXTURE *ftPtr);
 #define MAX_NO_FMVTEXTURES 10
 FMVTEXTURE FMVTexture[MAX_NO_FMVTEXTURES];
 int NumberOfFMVTextures;
+/* Panel textures must remain independent of world/HUD texture quality. */
+int FMV_IsPanelTexture(const void *texture)
+{
+ if(!texture)return 0;
+ for(int i=0;i<NumberOfFMVTextures;i++)
+  if(FMVTexture[i].ImagePtr && FMVTexture[i].ImagePtr->D3DTexture==texture)return 1;
+ return 0;
+}
+/* Default: Probe 092's animated RGB-noise composition. */
+int MonitorNoSignalEffectMode=MONITOR_NO_SIGNAL_RGB_NOISE;
 
 void ScanImagesForFMVs(void)
 {
-	
-	extern void SetupFMVTexture(FMVTEXTURE *ftPtr);
-	int i;
+	if (MoviesAreActive) FMVBackend_PrewarmPanels();	int i;
 	IMAGEHEADER *ihPtr;
 	NumberOfFMVTextures=0;
-
-	#if MaxImageGroups>1
-	for (j=0; j<MaxImageGroups; j++)
+#if MaxImageGroups>1
+	for (int j=0; j<MaxImageGroups; j++)
 	{
-		if (NumImagesArray[j])
-		{
-			ihPtr = &ImageHeaderArray[j*MaxImages];
-			for (i = 0; i<NumImagesArray[j]; i++, ihPtr++)
-			{
-	#else
+		if (!NumImagesArray[j]) continue;
+		ihPtr = &ImageHeaderArray[j*MaxImages];
+		for (i=0; i<NumImagesArray[j]; i++, ihPtr++)
+#else
+	if (NumImages)
 	{
-		if(NumImages)
+		ihPtr = &ImageHeaderArray[0];
+		for (i=0; i<NumImages; i++, ihPtr++)
+#endif
 		{
-			ihPtr = &ImageHeaderArray[0];
-			for (i = 0; i<NumImages; i++, ihPtr++)
+			if (strstr(ihPtr->ImageName,"FMVs"))
 			{
-	#endif
-				char *strPtr;
-				if((strPtr = strstr(ihPtr->ImageName,"FMVs")))
-				{
-					char filename[30];
-					{
-						char *filenamePtr = filename;
-						do
-						{
-							*filenamePtr++ = *strPtr;
-						}
-						while(*strPtr++!='.');
-
-						*filenamePtr++='s';
-						*filenamePtr++='m';
-						*filenamePtr++='k';
-						*filenamePtr=0;
-					}
-					
-					//if (smackHandle)
-					//{
-					//	FMVTexture[NumberOfFMVTextures].IsTriggeredPlotFMV = 0;
-					//}
-					//else
-					{
-						FMVTexture[NumberOfFMVTextures].IsTriggeredPlotFMV = 1;
-					}
-
-					{
-						//FMVTexture[NumberOfFMVTextures].SmackHandle = smackHandle;
-						FMVTexture[NumberOfFMVTextures].ImagePtr = ihPtr;
-						FMVTexture[NumberOfFMVTextures].StaticImageDrawn=0;
-						SetupFMVTexture(&FMVTexture[NumberOfFMVTextures]);
-						NumberOfFMVTextures++;
-						
-						if (NumberOfFMVTextures == MAX_NO_FMVTEXTURES)
-						{
-							break;
-						}
-					}
-				}
-			}		
+				FMVTEXTURE *texture = &FMVTexture[NumberOfFMVTextures];
+				memset(texture,0,sizeof(*texture));
+				texture->IsTriggeredPlotFMV=1;
+				texture->ImagePtr=ihPtr;
+				SetupFMVTexture(texture);
+				if (++NumberOfFMVTextures == MAX_NO_FMVTEXTURES) return;
+			}
 		}
+#if MaxImageGroups>1
 	}
-
-
+#else
+	}
+#endif
 }
 
 void UpdateAllFMVTextures(void)
-{	
-	extern void UpdateFMVTexture(FMVTEXTURE *ftPtr);
-	int i = NumberOfFMVTextures;
-
-	while(i--)
-	{
-		UpdateFMVTexture(&FMVTexture[i]);
-	}
-
+{
+	for (int i=0; i<NumberOfFMVTextures; ++i) UpdateFMVTexture(&FMVTexture[i]);
 }
 
 void ReleaseAllFMVTextures(void)
-{	
-	extern void UpdateFMVTexture(FMVTEXTURE *ftPtr);
-	int i = NumberOfFMVTextures;
-
-	while(i--)
-	{
-		ReleaseFMVTexture(&FMVTexture[i]);
-	}
-
+{
+	for (int i=0; i<NumberOfFMVTextures; ++i) ReleaseFMVTexture(&FMVTexture[i]);
+	NumberOfFMVTextures=0;
 }
-
 
 int NextFMVTextureFrame(FMVTEXTURE *ftPtr, void *bufferPtr)
 {
-	int w = 128;
-	
+	unsigned char palette[256*3];
+	int frameStatus=0;
+
+	/* A completed movie must not leave its terminal logo frozen on the panel.
+	   Closing it here restores native static/no-signal and prevents a completed
+	   panel from being stored as an active FMV in a save-game. */
+	if (ftPtr->PanelFinishPending)
+	{
+		FMVBackend_ClosePanel(ftPtr);
+		ftPtr->MessageNumber=0;
+		ftPtr->StaticImageDrawn=0;
+		ftPtr->PanelFinishPending=0;
+	}
+
+	if (MoviesAreActive && ftPtr->DecoderHandle)
+	{
+		frameStatus=FMVBackend_CopyPanelFrame(ftPtr,(unsigned char*)bufferPtr,palette);
+	}
+	if (frameStatus)
+	{
+		for (int i=0; i<256; ++i)
+		{
+			ftPtr->SrcPalette[i].peRed=palette[i*3+0];
+			ftPtr->SrcPalette[i].peGreen=palette[i*3+1];
+			ftPtr->SrcPalette[i].peBlue=palette[i*3+2];
+		}
+		/* Present the actual last video image once, then switch to static on the
+		   next texture update. */
+		if (frameStatus==2) ftPtr->PanelFinishPending=1;
+		return 1;
+	}
 	if (!ftPtr->StaticImageDrawn)
 	{
-		int i = w*96/4;
-		unsigned int seed = FastRandom();
-		int *ptr = (int*)bufferPtr;
-		do
-		{
-			seed = ((seed*1664525)+1013904223);
-			*ptr++ = seed;
-		}
-		while(--i);
+		/* Preserve the animated no-signal source used by Probe 090. The CRT
+		   RGB mask is applied later, after this animated signal is composed. */
+		int i=128*96/4;
+		unsigned int seed=FastRandom();
+		int *ptr=(int*)bufferPtr;
+		do { seed=(seed*1664525)+1013904223; *ptr++=(int)seed; } while(--i);
 		ftPtr->StaticImageDrawn=1;
 	}
-	FindLightingValuesFromTriggeredFMV((unsigned char*)bufferPtr,ftPtr);
 	return 1;
-
 }
 
 void UpdateFMVTexturePalette(FMVTEXTURE *ftPtr)
 {
-	//unsigned char *c;
-	int i;
-	//
-	//if (MoviesAreActive && ftPtr->SmackHandle)
-	//{
-	//}
-	//else
+	if (MoviesAreActive && ftPtr->DecoderHandle) return;
+	unsigned int seed=FastRandom();
+	for (int i=0; i<256; ++i)
 	{
-	  	{
-			unsigned int seed = FastRandom();
-			for(i=0;i<256;i++)
-			{   
-				int l = (seed&(seed>>24)&(seed>>16));
-				seed = ((seed*1664525)+1013904223);
-				ftPtr->SrcPalette[i].peRed=l;
-				ftPtr->SrcPalette[i].peGreen=l;
-		   		ftPtr->SrcPalette[i].peBlue=l;
-		 	}	
-		}
+		int l=(seed&(seed>>24)&(seed>>16));
+		seed=(seed*1664525)+1013904223;
+		ftPtr->SrcPalette[i].peRed=l;
+		ftPtr->SrcPalette[i].peGreen=l;
+		ftPtr->SrcPalette[i].peBlue=l;
 	}
 }
 
-extern void StartTriggerPlotFMV(int number)
+void StartTriggerPlotFMV(int number)
 {
-	(void) number;
-	
-	//int i = NumberOfFMVTextures;
-	//char buffer[25];
-	//
-	//if (CheatMode_Active != CHEATMODE_NONACTIVE) return;
-	//
-	//sprintf(buffer,"FMVs//message%d.smk",number);
-	//{
-	//	FILE* file=fopen(buffer,"rb");
-	//	if(!file)
-	//	{
-	//		return;
-	//	}
-	//	fclose(file);
-	//}
-	//while(i--)
-	//{
-	//	if (FMVTexture[i].IsTriggeredPlotFMV)
-	//	{
-	//		FMVTexture[i].MessageNumber = number;
-	//	}
-	//}
+	if (!MoviesAreActive || CheatMode_Active!=CHEATMODE_NONACTIVE) return;
+	/* Close the previous shared message completely before a retrigger. */
+	for (int i=0; i<NumberOfFMVTextures; ++i)
+		if (FMVTexture[i].IsTriggeredPlotFMV) FMVBackend_ClosePanel(&FMVTexture[i]);
+	for (int i=0; i<NumberOfFMVTextures; ++i)
+	{
+		if (FMVTexture[i].IsTriggeredPlotFMV) FMVBackend_OpenPanel(&FMVTexture[i],number);
+	}
 }
 
-extern void StartFMVAtFrame(int number, int frame)
+void StartFMVAtFrame(int number, int frame)
 {
+	/* The legacy save record has no completed/active flag nor a usable frame
+	   position. Replaying it always restarts a finished panel after load, so
+	   panel playback is now driven exclusively by the map trigger state. */
+	(void)number;
+	(void)frame;
 }
 
-extern void GetFMVInformation(int *messageNumberPtr, int *frameNumberPtr)
+void GetFMVInformation(int *messageNumberPtr, int *frameNumberPtr)
 {
-	//int i = NumberOfFMVTextures;
-	//
-	//while(i--)
-	//{
-	//	if (FMVTexture[i].IsTriggeredPlotFMV)
-	//	{
-	//		if(FMVTexture[i].SmackHandle)
-	//		{
-	//			*messageNumberPtr = FMVTexture[i].MessageNumber;
-	//			*frameNumberPtr = 0;
-	//			return;
-	//		}
-	//	}
-	//}
-
-	*messageNumberPtr = 0;
-	*frameNumberPtr = 0;
+	for (int i=0; i<NumberOfFMVTextures; ++i)
+	{
+		if (FMVTexture[i].DecoderHandle)
+		{
+			*messageNumberPtr=FMVTexture[i].MessageNumber;
+			*frameNumberPtr=0;
+			return;
+		}
+	}
+	*messageNumberPtr=0;
+	*frameNumberPtr=0;
 }
 
-
-extern void InitialiseTriggeredFMVs(void)
+void InitialiseTriggeredFMVs(void)
 {
-	//int i = NumberOfFMVTextures;
-	//while(i--)
-	//{
-	//	if (FMVTexture[i].IsTriggeredPlotFMV)
-	//	{
-	//		if(FMVTexture[i].SmackHandle)
-	//		{
-	//			FMVTexture[i].MessageNumber = 0;
-	//		}
-	//
-	//		FMVTexture[i].SmackHandle = 0;
-	//	}
-	//}
+	for (int i=0; i<NumberOfFMVTextures; ++i)
+	{
+		FMVBackend_ClosePanel(&FMVTexture[i]);
+		FMVTexture[i].MessageNumber=0;
+		FMVTexture[i].StaticImageDrawn=0;
+		FMVTexture[i].PanelFinishPending=0;
+	}
 }
 
 void FindLightingValuesFromTriggeredFMV(unsigned char *bufferPtr, FMVTEXTURE *ftPtr)
 {
-	unsigned int totalRed=0;
-	unsigned int totalBlue=0;
-	unsigned int totalGreen=0;
-	
-	int pixels = 128*96;//64*48;//256*192;
+	unsigned int totalRed=0,totalBlue=0,totalGreen=0;
+	int pixels=128*96;
 	do
 	{
-		unsigned char source = (*bufferPtr++);
-		totalBlue += ftPtr->SrcPalette[source].peBlue;
-		totalGreen += ftPtr->SrcPalette[source].peGreen;
-		totalRed += ftPtr->SrcPalette[source].peRed; 
-	}
-	while(--pixels);
-
-	FmvColourRed = totalRed/48*16;
-	FmvColourGreen = totalGreen/48*16;
-	FmvColourBlue = totalBlue/48*16;
-
+		unsigned char source=*bufferPtr++;
+		totalBlue+=ftPtr->SrcPalette[source].peBlue;
+		totalGreen+=ftPtr->SrcPalette[source].peGreen;
+		totalRed+=ftPtr->SrcPalette[source].peRed;
+	} while(--pixels);
+	FmvColourRed=totalRed/48*16;
+	FmvColourGreen=totalGreen/48*16;
+	FmvColourBlue=totalBlue/48*16;
 }
 
 void SetupFMVTexture(FMVTEXTURE *ftPtr)
 {
-	if (ftPtr->PalettedBuf == NULL)
-	{
-		ftPtr->PalettedBuf = (unsigned char*) calloc(1, 128*128+128*128*4);
-	}
-	
-	if (ftPtr->RGBBuf == NULL)
-	{
-		if (ftPtr->PalettedBuf == NULL)
-		{
-			return;
-		}
-		
-		ftPtr->RGBBuf = &ftPtr->PalettedBuf[128*128];
-	}
+ if(ftPtr->ImagePtr && ftPtr->ImagePtr->D3DTexture){
+  ftPtr->ImagePtr->D3DTexture->qualityGeneration=0;
+  ftPtr->ImagePtr->D3DTexture->filter=-1;
+ }
+	if (!ftPtr->PalettedBuf) ftPtr->PalettedBuf=(unsigned char*)calloc(1,128*128+128*128*3);
+	if (ftPtr->PalettedBuf) ftPtr->RGBBuf=&ftPtr->PalettedBuf[128*128];
+}
+
+/*
+ * Probe 093: explicit, safe reconstruction of the pre-061 CRT panel path.
+ * The old path populated RGBA samples, then uploaded that memory as RGB. The
+ * resulting 4:3 stream phase produced the characteristic vertical RGB mask.
+ * Recreate only the visual phase here, using the animated no-signal source;
+ * do not reuse a mismatched buffer stride or apply it to decoded movie frames.
+ */
+static unsigned char FMVLegacyCRTStreamByte(FMVTEXTURE *ftPtr, unsigned int streamOffset)
+{
+	unsigned int sourcePixel=streamOffset>>2;
+	if ((streamOffset&3)==3) return 255;
+	return ftPtr->SrcPalette[ftPtr->PalettedBuf[sourcePixel]].peRed;
 }
 
 void UpdateFMVTexture(FMVTEXTURE *ftPtr)
 {
+
 	unsigned char *srcPtr;
 	unsigned char *dstPtr;
-	
-	int pixels = 128*96;//64*48;//256*192;
-	
-	// get the next frame into the paletted buffer
-	if (!NextFMVTextureFrame(ftPtr, &ftPtr->PalettedBuf[0]))
+	int staticSignal;
+	if (!ftPtr->PalettedBuf || !ftPtr->ImagePtr || !ftPtr->ImagePtr->D3DTexture) return;
+    if(RenderPausedPreview){
+        if(MoviesAreActive && ftPtr->DecoderHandle)return;
+    } else {
+        if (!NextFMVTextureFrame(ftPtr,ftPtr->PalettedBuf)) return;
+        UpdateFMVTexturePalette(ftPtr);
+        FindLightingValuesFromTriggeredFMV(ftPtr->PalettedBuf,ftPtr);
+    }
+	srcPtr=ftPtr->PalettedBuf;
+	dstPtr=ftPtr->RGBBuf;
+	staticSignal=!(MoviesAreActive && ftPtr->DecoderHandle);
+	for (int y=0; y<96; ++y)
 	{
-		return;
+		for (int x=0; x<128; ++x)
+		{
+			if (staticSignal)
+			{
+				if (MonitorNoSignalEffectMode==MONITOR_NO_SIGNAL_RGB_NOISE)
+				{
+					/* Probe 092: animated random signal colorized as RGB noise. */
+					unsigned char source=*srcPtr++;
+					int luminance=ftPtr->SrcPalette[source].peRed;
+					int dim=luminance/4;
+					switch (x%3)
+					{
+						case 0: *dstPtr++=(unsigned char)luminance; *dstPtr++=(unsigned char)dim; *dstPtr++=(unsigned char)dim; break;
+						case 1: *dstPtr++=(unsigned char)dim; *dstPtr++=(unsigned char)luminance; *dstPtr++=(unsigned char)dim; break;
+						default: *dstPtr++=(unsigned char)dim; *dstPtr++=(unsigned char)dim; *dstPtr++=(unsigned char)luminance; break;
+					}
+				}
+				else
+				{
+					/* Probe 093: explicit 4:3 legacy CRT stream phase. */
+					unsigned int packedOffset=((unsigned int)y*128u+(unsigned int)x)*3u;
+					*dstPtr++=FMVLegacyCRTStreamByte(ftPtr,packedOffset+0u);
+					*dstPtr++=FMVLegacyCRTStreamByte(ftPtr,packedOffset+1u);
+					*dstPtr++=FMVLegacyCRTStreamByte(ftPtr,packedOffset+2u);
+				}
+			}
+			else
+			{
+				unsigned char source=*srcPtr++;
+				*dstPtr++=ftPtr->SrcPalette[source].peRed;
+				*dstPtr++=ftPtr->SrcPalette[source].peGreen;
+				*dstPtr++=ftPtr->SrcPalette[source].peBlue;
+			}
+		}
 	}
-	
-	// update the texture palette
-	UpdateFMVTexturePalette(ftPtr);
-	
-	srcPtr = &ftPtr->PalettedBuf[0];
-	dstPtr = &ftPtr->RGBBuf[0];
-	
-	// not using paletted textures, so convert to rgb manually
-	do
-	{
-		unsigned char source = (*srcPtr++);
-		dstPtr[0] = ftPtr->SrcPalette[source].peRed;
-		dstPtr[1] = ftPtr->SrcPalette[source].peGreen;
-		dstPtr[2] = ftPtr->SrcPalette[source].peBlue;
-		dstPtr[3] = 255;
-		
-		dstPtr += 4;
-	} while(--pixels);
-	
-//#warning move this into opengl.c
-	// update the opengl texture
-	pglBindTexture(GL_TEXTURE_2D, ftPtr->ImagePtr->D3DTexture->id);
-	
-	pglTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 128, 96, GL_RGB, GL_UNSIGNED_BYTE, &ftPtr->RGBBuf[0]);
+    /* The 128x96 picture lives in a 128x128 texture. Repeat the last picture
+       row into padding and clamp the outer edge: bilinear cannot wrap stale
+       green/no-signal texels into the first scanline. */
+    for(int y=96;y<128;++y)memcpy(ftPtr->RGBBuf+y*128*3,ftPtr->RGBBuf+95*128*3,128*3);
+	pglBindTexture(GL_TEXTURE_2D,ftPtr->ImagePtr->D3DTexture->id);
+    /* Maps repeat U across adjacent monitors; clamping S smears the last column.
+       Keep vertical clamp + padded rows, which prevent the green top seam. */
+    pglTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_REPEAT);
+    pglTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
+	pglTexSubImage2D(GL_TEXTURE_2D,0,0,0,128,128,GL_RGB,GL_UNSIGNED_BYTE,ftPtr->RGBBuf);
+	if(!RenderPausedPreview)FMVBackend_CommitPanelAudio(ftPtr);
 }
-
 void ReleaseFMVTexture(FMVTEXTURE *ftPtr)
 {
-	ftPtr->MessageNumber = 0;
-
-	//if (FMVTexture[i].SrcTexture)
-	//{
-	//	ReleaseD3DTexture(FMVTexture[i].SrcTexture);
-	//	FMVTexture[i].SrcTexture=0;
-	//}
-	//if (FMVTexture[i].SrcSurface)
-	//{
-	//	ReleaseDDSurface(FMVTexture[i].SrcSurface);
-	//	FMVTexture[i].SrcSurface=0;
-	//}
-	//if (FMVTexture[i].DestTexture)
-	//{	
-	//	ReleaseD3DTexture(FMVTexture[i].DestTexture);
-	//	FMVTexture[i].DestTexture = 0;
-	//}
-
-	if (ftPtr->PalettedBuf != NULL)
-	{
-		free(ftPtr->PalettedBuf);
-		ftPtr->PalettedBuf = NULL;
-	}
-	
-	ftPtr->RGBBuf = NULL;
+	FMVBackend_ClosePanel(ftPtr);
+	ftPtr->MessageNumber=0;
+	if (ftPtr->PalettedBuf) free(ftPtr->PalettedBuf);
+	ftPtr->PalettedBuf=0;
+	ftPtr->RGBBuf=0;
+	ftPtr->StaticImageDrawn=0;
+	ftPtr->PanelFinishPending=0;
 }

@@ -34,6 +34,9 @@
 	class SCString : public RefCountObject
 	{
 	public:
+		/* Presentation metadata; propagated to every wrapped notification line. */
+		bool ScreenshotNotification = false;
+        unsigned int NotificationRGB = 0xc0c0c0;
 		ProjChar* pProjCh(void) const;
 
 		SCString

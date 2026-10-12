@@ -23,6 +23,12 @@
 
     #if UseGadgets
 		#include "indexfnt.hpp"
+		extern "C"
+{
+#include "d3d_hud.h"
+#include "avp_menus.h"
+
+};
 
         #if SupportTeletypeSound
             #include "psnd.h"
@@ -149,7 +155,7 @@ void TeletypeGadget :: Render
     #endif
 
     GLOBALASSERT( p666 );
-    int Int_CursorXOffset = p666 -> CursorXOffset();
+    int Int_CursorXOffset = D3D_ScaleConsoleTextDimension(p666 -> CursorXOffset());
 
 	IndexedFont* pLetterFont = IndexedFont :: GetFont( I_Font_TeletypeLettering );
 	GLOBALASSERT( pLetterFont );
@@ -260,7 +266,7 @@ void TeletypeGadget :: DirectRenderCursor
 
 	GLOBALASSERT( p666 );
 
-    int Int_CursorXOffset = p666 -> CursorXOffset();
+    int Int_CursorXOffset = D3D_ScaleConsoleTextDimension(p666 -> CursorXOffset());
 
 	struct r2pos R2Pos_Cursor = R2Pos;
 	R2Pos_Cursor . x += Int_CursorXOffset;
@@ -323,10 +329,13 @@ TeletypeDaemon :: TeletypeDaemon
 
     #if SupportTeletypeSound
     // Try to start looping teletype sound:
+    /* Menus pause the writing daemon: use a finite notification sample. */
+    char soundFormat[]="el";
+    if(AvP_MenuIsActive())soundFormat[1]=0;
     Sound_Play
     (
         SID_TELETEXT,
-        "el",
+        soundFormat,
         &SoundHandle
     );
         // SOUND_NOACTIVEINDEX used as error value
@@ -416,14 +425,15 @@ void TeletypeCursor :: Render
 {
 	#if 1
 		#define TELETYPE_CURSOR_WIDTH (10)
+	int ConsoleTextScaleFixed = D3D_GetConsoleTextScaleFixed();
 	IndexedFont* pLetterFont = IndexedFont :: GetFont( I_Font_TeletypeLettering );
 	GLOBALASSERT( pLetterFont );	
 
 	r2rect R2Rect_Area = r2rect
 	(
 		R2Pos,
-		TELETYPE_CURSOR_WIDTH,
-		pLetterFont -> GetHeight()
+		MUL_FIXED(TELETYPE_CURSOR_WIDTH, ConsoleTextScaleFixed),
+		MUL_FIXED(pLetterFont -> GetHeight(), ConsoleTextScaleFixed)
 	);
 
 	R2Rect_Clip . Clip

@@ -22,7 +22,11 @@ typedef struct DIRECTDRAWSURFACE
 	int hasAlpha;
 	int hasChroma;
 
+	unsigned int transparentPixels;
+	unsigned int opaquePixels;
 	int filter;
+
+	unsigned int qualityGeneration;
 } DIRECTDRAWSURFACE;
 
 typedef DIRECTDRAWSURFACE * LPDIRECTDRAWSURFACE;

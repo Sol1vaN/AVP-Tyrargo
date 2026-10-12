@@ -9,6 +9,8 @@
 #include "avpview.h"
 #include "ourasert.h"
 #include "pldghost.h"
+#include <string.h>
+#include <stdint.h>
 
 #if SupportModules
 
@@ -27,6 +29,40 @@ void FindVisibleModules(VMODULE *vptr,int flag);
 /**** Statics ****/
 
 static MODULE **Global_ModuleArrayPtr;
+
+/* A loaded sector can be hidden by the 1999 PVS even inside an otherwise
+   visible room. Broaden drawing only; do not alter AI activation, allocation,
+   portal instructions, or the infinite projection's precision. */
+int ModuleIsVisibleForRendering(int index)
+{
+    MODULE *module;
+    const int64_t radius=200000; /* 200 metres from the closest sector bound. */
+    int64_t distance2=0;
+    int64_t low[3],high[3],camera[3];
+    int axis;
+    if (!ModuleCurrVisArray || index<0 || index>=ModuleArraySize) return 0;
+    if (ModuleCurrVisArray[index]==2) return 1; /* Never shorten original visibility. */
+    if (ModuleCurrVisArray[index]!=1 || !Global_ModuleArrayPtr || !Global_VDB_Ptr) return 0;
+    module=Global_ModuleArrayPtr[index];
+    if (!module || !module->m_dptr) return 0; /* Render already resident geometry only. */
+    low[0]=(int64_t)module->m_world.vx+module->m_minx;
+    low[1]=(int64_t)module->m_world.vy+module->m_miny;
+    low[2]=(int64_t)module->m_world.vz+module->m_minz;
+    high[0]=(int64_t)module->m_world.vx+module->m_maxx;
+    high[1]=(int64_t)module->m_world.vy+module->m_maxy;
+    high[2]=(int64_t)module->m_world.vz+module->m_maxz;
+    camera[0]=Global_VDB_Ptr->VDB_World.vx;
+    camera[1]=Global_VDB_Ptr->VDB_World.vy;
+    camera[2]=Global_VDB_Ptr->VDB_World.vz;
+    for(axis=0;axis<3;axis++)
+    {
+        int64_t delta=camera[axis]<low[axis]?low[axis]-camera[axis]:
+                      camera[axis]>high[axis]?camera[axis]-high[axis]:0;
+        if(delta>radius)return 0;
+        distance2+=delta*delta;
+    }
+    return distance2<=radius*radius;
+}
 
 void AllNewModuleHandler(void)
 {
@@ -482,7 +518,7 @@ void AllocateModuleObject(MODULE *mptr)
 		MapPostProcessing(dptr);
 
 
-		ModuleObjectJustAllocated(mptr);				/* Project Function */
+		ModuleObjectJustAllocated(mptr);
 
 		/* Bug Fix */
 

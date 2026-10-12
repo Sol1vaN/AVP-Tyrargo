@@ -249,6 +249,13 @@ typedef struct section_data {
 	int oneovertweeninglength;	
 	unsigned int Tweening:1;
 
+ /* Render-only precision, reconstructed after load; save/network blocks stay unchanged. */
+ double RenderOffset[3], RenderQuat[4], RenderLocalMatrix[9];
+ double RenderWorldOffset[3], RenderWorldMatrix[9];
+ double RenderDeltaOffset[3], RenderDeltaQuat[4];
+ double RenderStoredOffset[3], RenderStoredQuat[4];
+ double RenderTargetOffset[3], RenderTargetQuat[4];
+ int RenderPoseValid, RenderTweenValid;
 } SECTION_DATA;
 
 

@@ -8,9 +8,12 @@
 typedef struct 
 {
 	/* base coords */
-	int X;
-	int Y;
-	int Z;
+	double X;
+	double Y;
+	double Z;
+
+	/* Only consumed while rendering the camera-space weapon mesh. */
+	double ViewX, ViewY, ViewZ;
 
 	/* texels and intensity */
 	int U;
@@ -102,9 +105,11 @@ extern void RenderDecal(DECAL *decalPtr);
 extern void RenderParticle(PARTICLE *particlePtr);
 void RenderInsideAlienTongue(int offset);
 void RenderPredatorTargetingSegment(int theta, int scale, int drawInRed);
-void RenderPredatorPlasmaCasterCharge(int value, VECTORCH *worldOffsetPtr, MATRIXCH *orientationPtr);
+struct section_data;
+void RenderPredatorPlasmaCasterCharge(int value, struct section_data *section);
 void CreateStarArray(void);
 void OutputTranslucentPolyList(void);
+void RenderParticlesForTranslucentPolyList(void);
 void RenderLightFlare(VECTORCH *positionPtr, unsigned int colour);
 extern void RenderFlechetteParticle(PARTICLE *particlePtr);
 void RenderExplosionSurface(VOLUMETRIC_EXPLOSION *explosionPtr);

@@ -49,17 +49,17 @@ extern void GimmeCharge(void);
 extern void QuickLoad(void)
 {
 	//set the load request
-	LoadGameRequest = 0; //(that's slot 0 - not false)
+	LoadGameRequest = QUICK_SAVE_SLOT; //exclusive quick-load slot
 }
 extern void QuickSave(void)
 {
 	//set the save request
-	SaveGameRequest = 0; //(that's slot 0 - not false)
+	RequestQuickSave();
 }
 
 void ConsoleCommandLoad(int slot)
 {
-	if(slot>=1 && slot<=NUMBER_OF_SAVE_SLOTS)
+	if(slot>=1 && slot<=NUMBER_OF_MANUAL_SAVE_SLOTS)
 	{
 		LoadGameRequest = slot-1;
 	}
@@ -67,7 +67,7 @@ void ConsoleCommandLoad(int slot)
 
 void ConsoleCommandSave(int slot)
 {
-	if(slot>=1 && slot<=NUMBER_OF_SAVE_SLOTS)
+	if(slot>=1 && slot<=NUMBER_OF_MANUAL_SAVE_SLOTS)
 	{
 		SaveGameRequest = slot-1;
 	}
@@ -83,7 +83,7 @@ extern void ChangeNetGameType_Coop();
 extern void ChangeNetGameType_LastManStanding();
 extern void ChangeNetGameType_PredatorTag();
 extern void ShowNearestPlayersName(void);
-extern void ScreenShot(void);
+extern void RequestScreenShot(void);
 extern void CastAlienBot(void);
 extern void CastMarineBot(int weapon);
 extern void CastPredoBot(int weapon);
@@ -96,6 +96,7 @@ extern int ShowMultiplayerScoreTimer;
 static void ShowFPS(void)
 {
 	ShowDebuggingText.FPS = ~ShowDebuggingText.FPS;
+	ToggleFPSCounterFromConsole();
 }
 #if CONSOLE_DEBUGGING_COMMANDS_ACTIVATED
 static void ShowEnvironment(void)
@@ -752,7 +753,7 @@ void CreateGameSpecificConsoleCommands(void)
 	(
 		"SCREENSHOT",
 		"",
-		ScreenShot
+		RequestScreenShot
 	);
 	
 	ConsoleCommand::Make

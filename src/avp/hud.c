@@ -1,3 +1,7 @@
+#include "molecular_acid.h"
+#include "event_latency.h"
+#include "hud_motion.h"
+#include "menu_preview.h"
 /*KJL****************************************************************************************
 *                                         	hud.c                                           *
 ****************************************************************************************KJL*/
@@ -10,6 +14,8 @@
 	to copy Weapon data into the HUD
 */
 #include "3dc.h"
+#include "projection.h"
+#include "viewmodel.h"
 #include "module.h"
 #include "inline.h"
 
@@ -51,6 +57,7 @@
 #include "avp_userprofile.h"
 #include "hud.h"
 #include "chnkload.h"
+#include "player_fov.h"
 
 extern int ScanDrawMode;
 
@@ -172,6 +179,110 @@ static void UpdatePredatorStatusValues(void);
 static void HandlePredatorWeapon(void);
 
 static void HandleAlienWeapon(void);
+
+/*
+ * First-person meshes are fed to the CPU renderer immediately.  Give only
+ * this draw its own lens, then restore the world VDB before HUD/crosshair
+ * code runs.  No vertex pose, camera or world frustum state is retained.
+ */
+static void RenderWeaponViewmodel(DISPLAYBLOCK *dbPtr)
+{
+	VIEWDESCRIPTORBLOCK *vdb = Global_VDB_Ptr;
+	int savedProjX;
+	int savedProjY;
+	AVP_PROJECTION_STATE savedProjection;
+	int viewWidth;
+
+	if (!vdb)
+	{
+		RenderThisDisplayblock(dbPtr);
+		return;
+	}
+
+	viewWidth = vdb->VDB_ClipRight - vdb->VDB_ClipLeft;
+	if (viewWidth <= 0)
+	{
+		RenderThisDisplayblock(dbPtr);
+		return;
+	}
+
+	savedProjection=AvpProjection;
+	savedProjX = vdb->VDB_ProjX;
+	savedProjY = vdb->VDB_ProjY;
+	AvpSetProjection(vdb,WeaponFOVProjectionForViewSize(viewWidth,vdb->VDB_ClipDown-vdb->VDB_ClipUp));
+	ViewmodelBegin(dbPtr);
+	RenderThisDisplayblock(dbPtr);
+	/* Wrist attachments share the mesh pose and lens until this draw ends. */
+	if (dbPtr == &PlayersWeapon && AvP.PlayerType == I_Predator) DrawWristDisplay();
+	ViewmodelEnd();
+	vdb->VDB_ProjX = savedProjX;
+	vdb->VDB_ProjY = savedProjY;
+	AvpProjection=savedProjection;
+}
+/* Read-only menu sample: original atlas, scale and stroke algorithm, no aim
+ * or target-lock updates and no notification sounds. */
+void RenderMenuCrosshairPreview(int x,int y,int thickness)
+{
+ if(AvP.PlayerType==I_Marine){
+  int saved=MarineCrosshairThicknessMode;
+  MarineCrosshairThicknessMode=thickness;
+  BLTGunSightToScreen(x,y,GUNSIGHT_CROSSHAIR);
+  MarineCrosshairThicknessMode=saved;
+ }else if(AvP.PlayerType==I_Predator){
+  extern int HUDFontsImageNumber;
+  int scale=HUD_GetCrosshairScaleFixed();HUDImageDesc imageDesc;
+  imageDesc.ImageNumber=HUDFontsImageNumber;
+  imageDesc.TopLeftX=x-MUL_FIXED(scale,17)/2;imageDesc.TopLeftY=y-MUL_FIXED(scale,15)/2;
+  imageDesc.TopLeftU=1;imageDesc.TopLeftV=51;imageDesc.Width=17;imageDesc.Height=15;
+  imageDesc.Scale=scale;imageDesc.Translucency=255;
+  imageDesc.Red=imageDesc.Green=imageDesc.Blue=255;
+  Draw_HUDImage(&imageDesc);
+ }
+}
+void RenderPausedWeaponPreview(void)
+{
+ PlatformSpecificEnteringHUD();HandleParticleSystem();
+ PLAYER_STATUS *status=(PLAYER_STATUS*)Player->ObStrategyBlock->SBdataptr;
+ if(!status || !status->IsAlive || Observer)return;
+ HUD_RefreshLayout();
+ PLAYER_WEAPON_DATA *weapon=&status->WeaponSlot[status->SelectedWeaponSlot];
+ PlatformSpecificEnteringHUD();SecondFlushD3DZBuffer();
+ if(TemplateWeapon[weapon->WeaponIDNumber].WeaponShapeName){
+  if(AvP.PlayerType==I_Alien)SetFrustrumType(FRUSTRUM_TYPE_NORMAL);
+  RenderWeaponViewmodel(&PlayersWeapon);
+  if(AvP.PlayerType==I_Alien)SetFrustrumType(FRUSTRUM_TYPE_WIDE);
+ }
+ CheckWireFrameMode(0);
+ if(!AvP_MenuPreviewHideCrosshair()){
+  if(AvP.PlayerType==I_Marine)DrawMarineSights();
+  else if(AvP.PlayerType==I_Predator)DrawPredatorSights();
+ }
+ HUD_AnchorBegin();
+ if(AvP.PlayerType==I_Marine){
+  if(CurrentVisionMode==VISION_MODE_NORMAL){
+   HUD_SetScaleAnchor(HUD_SCALE_ANCHOR_BOTTOM_LEFT);
+   DoMotionTracker();
+   HUD_SetScaleAnchor(HUD_SCALE_ANCHOR_AUTO);
+  }
+  DisplayHealthAndArmour();DisplayMarinesAmmo();
+ } else if(AvP.PlayerType==I_Predator)DisplayPredatorHealthAndEnergy();
+ else DisplayHealthAndArmour();
+ HUD_AnchorEnd();
+ RenderFPSCounter();
+}
+
+static void RenderWeaponMuzzle(enum MUZZLE_FLASH_ID id)
+{
+ VIEWDESCRIPTORBLOCK *vdb=Global_VDB_Ptr;
+ AVP_PROJECTION_STATE saved=AvpProjection;
+ int px=vdb->VDB_ProjX,py=vdb->VDB_ProjY;
+ VECTORCH local={0,0,0},forward={0,0,65536};
+ AvpSetProjection(vdb,WeaponFOVProjectionForViewSize(vdb->VDB_ClipRight-vdb->VDB_ClipLeft,vdb->VDB_ClipDown-vdb->VDB_ClipUp));
+ ViewmodelBeginMuzzle();
+ if(ViewmodelMuzzleActive)DrawMuzzleFlash(&local,&forward,id);
+ ViewmodelEnd();
+ AvpProjection=saved;vdb->VDB_ProjX=px;vdb->VDB_ProjY=py;
+}
 #if DO_ALIEN_OVERLAY
 static void UpdateAlienStatusValues(void);
 #endif
@@ -296,15 +407,16 @@ void MaintainHUD(void)
 	GLOBALASSERT(playerStatusPtr);
 
 //	RenderSmokeTest();
-	PlatformSpecificEnteringHUD();
+	{ EVENT_TICK stamp=EventLatencyBegin(); PlatformSpecificEnteringHUD(); EventLatencyEnd(stamp,"HUD enter render state",0,0,0,0,0); }
+	{ EVENT_TICK stamp=EventLatencyBegin(); HUD_RefreshLayout(); EventLatencyEnd(stamp,"HUD layout",0,0,0,0,0); }
 	
 	if (ScanDrawMode != ScanDrawDirectDraw)
 	{
-		HandleParticleSystem();
+		{ EVENT_TICK stamp=EventLatencyBegin(); HandleParticleSystem(); EventLatencyEnd(stamp,"HUD particles and world overlays",0,0,0,0,0); }
 	}
-	RenderGrapplingHook();
+	{ EVENT_TICK stamp=EventLatencyBegin(); RenderGrapplingHook(); EventLatencyEnd(stamp,"HUD grappling hook",0,0,0,0,0); }
 	
-	SecondFlushD3DZBuffer();
+	{ EVENT_TICK stamp=EventLatencyBegin(); SecondFlushD3DZBuffer(); EventLatencyEnd(stamp,"HUD depth clear",0,0,0,0,0); }
 
 	//DrawFontTest();
 	if (Observer)
@@ -313,7 +425,7 @@ void MaintainHUD(void)
 		{
 			case I_Marine:
 			{
-		  		HandleMarineOVision();
+		  		{ EVENT_TICK stamp=EventLatencyBegin(); HandleMarineOVision(); EventLatencyEnd(stamp,"HUD marine vision",0,0,0,0,0); }
 				break;
 			}
 	       	case I_Predator:
@@ -331,7 +443,7 @@ void MaintainHUD(void)
 		}
 		CheckWireFrameMode(0);
 		#if 1||!PREDATOR_DEMO
-		GADGET_Render();
+		{ EVENT_TICK stamp=EventLatencyBegin(); GADGET_Render(); EventLatencyEnd(stamp,"HUD console gadgets",0,0,0,0,0); }
 		#endif
 		return;
 	}
@@ -355,18 +467,25 @@ void MaintainHUD(void)
 		{
 			case I_Marine:
 			{
-				HandleMarineWeapon();
-
-	  	 	 	if (CurrentVisionMode==VISION_MODE_NORMAL) DoMotionTracker();
+				{ EVENT_TICK stamp=EventLatencyBegin(); HandleMarineWeapon(); EventLatencyEnd(stamp,"HUD marine weapon",0,0,0,0,0); }
+                { EVENT_TICK stamp=EventLatencyBegin(); MarineHUDMotionUpdate(); EventLatencyEnd(stamp,"HUD procedural motion",0,0,0,0,0); }
+				/* Crosshair is an aiming element, not HUD chrome: leave it unscaled. */
+				{ EVENT_TICK stamp=EventLatencyBegin(); DrawMarineSights(); EventLatencyEnd(stamp,"HUD marine sights",0,0,0,0,0); }
+				HUD_AnchorBegin();
+	  	 	 	if (CurrentVisionMode==VISION_MODE_NORMAL) {
+	  	 	 		HUD_SetScaleAnchor(HUD_SCALE_ANCHOR_BOTTOM_LEFT);
+	  	 	 		{ EVENT_TICK stamp=EventLatencyBegin(); DoMotionTracker(); EventLatencyEnd(stamp,"HUD motion tracker",0,0,0,0,0); }
+	  	 	 		HUD_SetScaleAnchor(HUD_SCALE_ANCHOR_AUTO);
+	  	 	 	}
 
 				CheckWireFrameMode(0);
 				//flash health if invulnerable
 				if((playerStatusPtr->invulnerabilityTimer/12000 %2)==0)
 				{
-					DisplayHealthAndArmour();
+					{ EVENT_TICK stamp=EventLatencyBegin(); DisplayHealthAndArmour(); EventLatencyEnd(stamp,"HUD health armour",0,0,0,0,0); }
 				}
-				DisplayMarinesAmmo();
-		  		DrawMarineSights();
+				{ EVENT_TICK stamp=EventLatencyBegin(); DisplayMarinesAmmo(); EventLatencyEnd(stamp,"HUD marine ammunition",0,0,0,0,0); }
+				HUD_AnchorEnd();
 				
 				/* Paranoia check. */
 		  		if(predHUDSoundHandle != SOUND_NOACTIVEINDEX) {
@@ -376,21 +495,22 @@ void MaintainHUD(void)
 			}
 	       	case I_Predator:
 			{
-				HandlePredatorWeapon();
+				{ EVENT_TICK stamp=EventLatencyBegin(); HandlePredatorWeapon(); EventLatencyEnd(stamp,"HUD predator weapon",0,0,0,0,0); }
 				CheckWireFrameMode(0);
 				//DrawPredatorEnergyBar();						
-	  			//DisplayHealthAndArmour();
-			   	DrawWristDisplay();
+	  			//{ EVENT_TICK stamp=EventLatencyBegin(); DisplayHealthAndArmour(); EventLatencyEnd(stamp,"HUD health armour",0,0,0,0,0); }
   				
   				HandlePredOVision();
 				if (DrawScanlineOverlay) DrawScanlinesOverlay(ScanlineLevel);
+				DrawPredatorSights();
 
-			   	DrawPredatorSights();
+			   	HUD_AnchorBegin();
 				//flash health if invulnerable
 				if((playerStatusPtr->invulnerabilityTimer/12000 %2)==0)
 				{
 	  				DisplayPredatorHealthAndEnergy();
 				}
+				HUD_AnchorEnd();
 				
 				break;
 			}
@@ -405,23 +525,21 @@ void MaintainHUD(void)
 						AlienTongueOffset = 0;
 				}				
 				SetFrustrumType(FRUSTRUM_TYPE_NORMAL);
-				Global_VDB_Ptr->VDB_ProjX = (Global_VDB_Ptr->VDB_ClipRight - Global_VDB_Ptr->VDB_ClipLeft)/2;
-				Global_VDB_Ptr->VDB_ProjY = (Global_VDB_Ptr->VDB_ClipDown - Global_VDB_Ptr->VDB_ClipUp)/2;
 	
-				HandleAlienWeapon();
+				{ EVENT_TICK stamp=EventLatencyBegin(); HandleAlienWeapon(); EventLatencyEnd(stamp,"HUD alien weapon",0,0,0,0,0); }
 				HandleAlienOVision();
 
 				SetFrustrumType(FRUSTRUM_TYPE_WIDE);
-				Global_VDB_Ptr->VDB_ProjX = (Global_VDB_Ptr->VDB_ClipRight - Global_VDB_Ptr->VDB_ClipLeft)/4;
-				Global_VDB_Ptr->VDB_ProjY = (Global_VDB_Ptr->VDB_ClipDown - Global_VDB_Ptr->VDB_ClipUp)/4;
 							
 				CheckWireFrameMode(0);
 
+				HUD_AnchorBegin();
 				//flash health if invulnerable
 				if((playerStatusPtr->invulnerabilityTimer/12000 %2)==0)
 				{
-					DisplayHealthAndArmour();
+					{ EVENT_TICK stamp=EventLatencyBegin(); DisplayHealthAndArmour(); EventLatencyEnd(stamp,"HUD health armour",0,0,0,0,0); }
 				}
+				HUD_AnchorEnd();
 				/* Paranoia check. */
 		  		if(predHUDSoundHandle != SOUND_NOACTIVEINDEX) {
 		       		Sound_Stop(predHUDSoundHandle);
@@ -465,14 +583,14 @@ void MaintainHUD(void)
 		HeadUpDisplayZOffset = 0;
 
 		#if 1||!PREDATOR_DEMO
-		GADGET_Render();
+		{ EVENT_TICK stamp=EventLatencyBegin(); GADGET_Render(); EventLatencyEnd(stamp,"HUD console gadgets",0,0,0,0,0); }
 		#endif
 		
 		switch(AvP.PlayerType)
 		{
 			case I_Marine:
 			{
-		  		HandleMarineOVision();
+		  		{ EVENT_TICK stamp=EventLatencyBegin(); HandleMarineOVision(); EventLatencyEnd(stamp,"HUD marine vision",0,0,0,0,0); }
 				break;
 			}
 	       	case I_Predator:
@@ -502,7 +620,7 @@ void MaintainHUD(void)
 	// burn baby burn?
 	if (Player->ObStrategyBlock->SBDamageBlock.IsOnFire)
 	{
-		D3D_PlayerOnFireOverlay();
+		{ EVENT_TICK stamp=EventLatencyBegin(); D3D_PlayerOnFireOverlay(); EventLatencyEnd(stamp,"HUD player fire overlay",0,0,0,0,0); }
 	}
 	else
 	{
@@ -514,7 +632,7 @@ void MaintainHUD(void)
 		
 		if (intensity)
 		{
-			D3D_PlayerDamagedOverlay(intensity);
+			{ EVENT_TICK stamp=EventLatencyBegin(); D3D_PlayerDamagedOverlay(intensity); EventLatencyEnd(stamp,"HUD player damage overlay",0,0,0,0,0); }
 		}
 
 		PlayerDamagedOverlayIntensity -= NormalFrameTime<<5;
@@ -566,6 +684,9 @@ void MaintainHUD(void)
 	{
 		DoMultiplayerSpecificHud();
 	}
+
+	/* Final HUD pass: independent from the disabled release debug-text block. */
+	{ EVENT_TICK stamp=EventLatencyBegin(); RenderFPSCounter(); EventLatencyEnd(stamp,"HUD FPS text",0,0,0,0,0); }
 }	
 
 void DoCompletedLevelStatisticsScreen(void)
@@ -582,7 +703,14 @@ void DoCompletedLevelStatisticsScreen(void)
 	}
 	D3D_FadeDownScreen(0,0);
 	DoStatisticsScreen(1);
-	RenderStringCentred(GetTextString(TEXTSTRING_COMPLETEDLEVEL_PRESSAKEY),ScreenDescriptorBlock.SDB_Width/2,ScreenDescriptorBlock.SDB_Height-20,0xffffffff);
+	{
+		int scale = D3D_GetConsoleTextScaleFixed();
+		int targetY = ScreenDescriptorBlock.SDB_Height - MUL_FIXED(20, scale);
+		int sourceY = 20 + (int)(((long long)(targetY - 20) * ONE_FIXED) / scale);
+		D3D_SetStatisticsTextRenderActive(1);
+		RenderStringCentred(GetTextString(TEXTSTRING_COMPLETEDLEVEL_PRESSAKEY),ScreenDescriptorBlock.SDB_Width/2,sourceY,0xffffffff);
+		D3D_SetStatisticsTextRenderActive(0);
+	}
 }
 
 
@@ -597,6 +725,7 @@ static void DoMotionTracker(void)
 	/* draw static motion tracker background, and the moving scanline */
 	BLTMotionTrackerToHUD(MTScanLineSize);
   	
+    if(!RenderPausedPreview){
 	if(distanceNotLocked) /* if MT hasn't found any contacts this scan */
 	{
 		int nearestDistance=DoMotionTrackerBlips();
@@ -645,6 +774,7 @@ static void DoMotionTracker(void)
 	}
 	else DoMotionTrackerBlips();
 	
+    }
 	/* evaluate the distance digits */
 	{
     	int value=distance/10;
@@ -660,6 +790,7 @@ static void DoMotionTracker(void)
       	ValueOfHUDDigit[MARINE_HUD_MOTIONTRACKER_THOUSANDS]=value%10;
 	}
    
+    if(!RenderPausedPreview){
 	if (MTDelayBetweenScans)
 	{
 		MTDelayBetweenScans-=NormalFrameTime;
@@ -698,6 +829,7 @@ static void DoMotionTracker(void)
 		}
 	}
 	
+    }
 	/* draw blips to HUD */
 	{
 		DYNAMICSBLOCK *playerDynPtr = Player->ObStrategyBlock->DynPtr;
@@ -733,7 +865,7 @@ static void DoMotionTracker(void)
         
 		/* now fade or kill blips */
 		i = NoOfMTBlips;
-		while(i--) /* scan through all blips, starting with the last in the list */
+		while(!RenderPausedPreview && i--) /* keep frozen blips intact in preview */
 		{
 			/* decrease blip's brightness */
 			MotionTrackerBlips[i].Brightness-=MUL_FIXED(MOTIONTRACKER_SPEED/3,NormalFrameTime);
@@ -971,6 +1103,7 @@ static void DisplayMarinesAmmo(void)
 	secondaryRounds=weaponPtr->SecondaryRoundsRemaining>>16;
     if ( (weaponPtr->SecondaryRoundsRemaining&0xffff) ) secondaryRounds+=1;
 
+    if(!RenderPausedPreview){
 	if (primaryRounds>HUD_PrimaryRounds)
 	{
 		HUD_PrimaryRounds += NormalFrameTime/512;
@@ -988,6 +1121,7 @@ static void DisplayMarinesAmmo(void)
 		HUD_SecondaryRounds = secondaryRounds;
 	}
 
+    }
     
 	{
 		enum AMMO_ID ammo;
@@ -1062,7 +1196,7 @@ static void HandleMarineWeapon(void)
 
 	/* if there is no shape name then return */
 	if (twPtr->WeaponShapeName == NULL) return;
-	RenderThisDisplayblock(&PlayersWeapon);
+	RenderWeaponViewmodel(&PlayersWeapon);
 
 	if ((twPtr->MuzzleFlashShapeName != NULL)
 	  &&(!twPtr->PrimaryIsMeleeWeapon)
@@ -1091,15 +1225,15 @@ static void HandleMarineWeapon(void)
 				
 				if (weaponPtr->WeaponIDNumber==WEAPON_SMARTGUN)
 				{
-					DrawMuzzleFlash(&PlayersWeaponMuzzleFlash.ObWorld,&direction,MUZZLE_FLASH_SMARTGUN);
+					RenderWeaponMuzzle(MUZZLE_FLASH_SMARTGUN);
 				}
 				else if (weaponPtr->WeaponIDNumber==WEAPON_FRISBEE_LAUNCHER)
 				{
-					DrawMuzzleFlash(&PlayersWeaponMuzzleFlash.ObWorld,&direction,MUZZLE_FLASH_SKEETER);
+					RenderWeaponMuzzle(MUZZLE_FLASH_SKEETER);
 				}
 				else
 				{
-					DrawMuzzleFlash(&PlayersWeaponMuzzleFlash.ObWorld,&direction,MUZZLE_FLASH_AMORPHOUS);
+					RenderWeaponMuzzle(MUZZLE_FLASH_AMORPHOUS);
 					#if 0
 					{
 						int i = 5;
@@ -1121,7 +1255,7 @@ static void HandleMarineWeapon(void)
 				}
 			}
 			onThisFrame=!onThisFrame;
-		//	RenderThisDisplayblock(&PlayersWeaponMuzzleFlash);
+		//	RenderWeaponViewmodel(&PlayersWeaponMuzzleFlash);
 		}
 		
 	}
@@ -1340,10 +1474,17 @@ static void UpdatePredatorStatusValues(void)
 void DisplayPredatorHealthAndEnergy(void)
 {
 	PLAYER_WEAPON_DATA *weaponPtr = &(PlayerStatusPtr->WeaponSlot[PlayerStatusPtr->SelectedWeaponSlot]);
+	enum HUD_SCALE_ANCHOR savedScaleAnchor = HUD_GetScaleAnchor();
 	int value;
 	int i;
-	int scale = DIV_FIXED(ScreenDescriptorBlock.SDB_Width,640);
+	int scale = DIV_FIXED(HUD_GetLayoutHeight(),480);
 	int size = MUL_FIXED(51,scale);
+    int anchorMode=HUD_GetEffectiveAnchorMode();
+    int userScale=HUD_GetUserScaleFixed();
+    /* Screen-space margins remain stable when the user scales the HUD. */
+    int gap2=(int)(((int64_t)2*ONE_FIXED+userScale-1)/userScale);
+    int gap3=(int)(((int64_t)3*ONE_FIXED+userScale-1)/userScale);
+    int gap5=(int)(((int64_t)5*ONE_FIXED+userScale-1)/userScale);
 	{
 		NPC_DATA *NpcData;
 		switch (AvP.Difficulty) {
@@ -1364,11 +1505,14 @@ void DisplayPredatorHealthAndEnergy(void)
 		LOCALASSERT(NpcData);
 		value=MUL_FIXED(PlayerStatusPtr->Health/NpcData->StartingStats.Health,59);
 	}
+	/* Scale each complete column from one origin; AUTO splits its cells
+	 * between the top and centre of the HUD canvas. */
+	HUD_SetScaleAnchor(HUD_SCALE_ANCHOR_TOP_LEFT);
 	for (i=0; i<6; i++)
 	{
 		HUDCharDesc charDesc;
-		charDesc.X = 0;			
-		charDesc.Y = i*size;
+		charDesc.X = anchorMode==HUD_ANCHOR_16_9 ? gap5 : (anchorMode==HUD_ANCHOR_4_3 ? gap2 : 0);			
+		charDesc.Y = i*size+((anchorMode==HUD_ANCHOR_16_9 || anchorMode==HUD_ANCHOR_4_3) ? gap3 : 0);
 
 		charDesc.Red = 255;
 		charDesc.Green = 0;
@@ -1384,12 +1528,15 @@ void DisplayPredatorHealthAndEnergy(void)
 
 		D3D_DrawHUDPredatorDigit(&charDesc,scale);
 	}
-	value= MUL_FIXED(DIV_FIXED(PlayerStatusPtr->FieldCharge,PLAYERCLOAK_MAXENERGY),59);
+	HUD_SetScaleAnchor(HUD_SCALE_ANCHOR_TOP_RIGHT);
+	value= MUL_FIXED(DIV_FIXED(PlayerStatusPtr->FieldCharge,AcidResourceCapacity(PLAYERCLOAK_MAXENERGY)),59);
 	for (i=0; i<6; i++)
 	{
 		HUDCharDesc charDesc;
-		charDesc.X = ScreenDescriptorBlock.SDB_Width-size;			
-		charDesc.Y = i*size;
+		charDesc.X = HUD_GetLayoutWidth()-size;
+        if(anchorMode==HUD_ANCHOR_16_9 || anchorMode==HUD_ANCHOR_4_3)
+            charDesc.X+=gap2;			
+		charDesc.Y = i*size+((anchorMode==HUD_ANCHOR_16_9 || anchorMode==HUD_ANCHOR_4_3) ? gap3 : 0);
 
 		charDesc.Red = 0;
 		charDesc.Green = 255;
@@ -1407,12 +1554,13 @@ void DisplayPredatorHealthAndEnergy(void)
 	}
 	if (weaponPtr->WeaponIDNumber == WEAPON_PRED_RIFLE)
 	{
+		HUD_SetScaleAnchor(HUD_SCALE_ANCHOR_BOTTOM_LEFT);
 		value = weaponPtr->PrimaryRoundsRemaining>>16;
 		for (i=0; i<4; i++)
 		{
 			HUDCharDesc charDesc;
-			charDesc.X = i*size/2;			
-			charDesc.Y = ScreenDescriptorBlock.SDB_Height-size/2;
+			charDesc.X = i*size/2+gap5;			
+			charDesc.Y = HUD_GetLayoutHeight()-size/2-gap5;
 
 			charDesc.Red = 0;
 			charDesc.Green = 0;
@@ -1430,6 +1578,7 @@ void DisplayPredatorHealthAndEnergy(void)
 		}
 	}
 
+	HUD_SetScaleAnchor(savedScaleAnchor);
 }
 #if 0
 static void DoPredatorThreatDisplay(void)
@@ -1592,11 +1741,11 @@ static void HandlePredatorWeapon(void)
 		if ((twPtr->MuzzleFlashShapeName != NULL)
 		  &&(!twPtr->PrimaryIsMeleeWeapon)
 		  &&(weaponPtr->CurrentState == WEAPONSTATE_FIRING_PRIMARY) )
-			RenderThisDisplayblock(&PlayersWeaponMuzzleFlash);
+			RenderWeaponViewmodel(&PlayersWeaponMuzzleFlash);
 		
 		/* draw 3d weapon */
 		if (twPtr->WeaponShapeName != NULL)
-			RenderThisDisplayblock(&PlayersWeapon);
+			RenderWeaponViewmodel(&PlayersWeapon);
 		
 	}
 	if (twPtr->PrimaryIsMeleeWeapon)
@@ -1637,6 +1786,7 @@ static void DrawPredatorSights(void)
 	PLAYER_STATUS *playerStatusPtr = (PLAYER_STATUS *) (Player->ObStrategyBlock->SBdataptr);
 	PLAYER_WEAPON_DATA *weaponPtr = &(playerStatusPtr->WeaponSlot[playerStatusPtr->SelectedWeaponSlot]);
  
+    if(!RenderPausedPreview){
 	/* Enforce quiet unless we've got the plasmacaster. */
 	if (weaponPtr->WeaponIDNumber!=WEAPON_PRED_SHOULDERCANNON) {
   		if(predHUDSoundHandle != SOUND_NOACTIVEINDEX) {
@@ -1668,17 +1818,20 @@ static void DrawPredatorSights(void)
 		}
 	}
 
+    }
     if (TemplateWeapon[weaponPtr->WeaponIDNumber].IsSmartTarget)
     {
 		/* ChrisF 19/2/99 Changed this to prevent 'instant' re-targetting. */
 		if ((SmartTarget_Object==NULL)||(SmartTarget_Object!=Old_SmartTarget_Object))
 		{
+            if(!RenderPausedPreview){
 			PredSight_LockOnTime = PREDATOR_LOCK_ON_TIME;
 			PredSight_Angle = 0;
 			/* Think about sound... */
 			if (SmartTarget_Object) {
 				Sound_Play(SID_PREDATOR_PLASMACASTER_REDTRIANGLES,"h");
 			}
+            }
 		}
 		else
 		{				 
@@ -1727,16 +1880,19 @@ static void DrawPredatorSights(void)
 	}
 	{
 		extern int HUDFontsImageNumber;
-	  	HUDImageDesc imageDesc;
+		HUDImageDesc imageDesc;
+		int crosshairScale = HUD_GetCrosshairScaleFixed();
+		int crosshairWidth = MUL_FIXED(crosshairScale,17);
+		int crosshairHeight = MUL_FIXED(crosshairScale,15);
 	  	
 		imageDesc.ImageNumber = HUDFontsImageNumber;
-		imageDesc.TopLeftX = (ScreenDescriptorBlock.SDB_Width-16)/2;
-		imageDesc.TopLeftY = (ScreenDescriptorBlock.SDB_Height-14)/2;
+		imageDesc.TopLeftX = (ScreenDescriptorBlock.SDB_Width-crosshairWidth)/2;
+		imageDesc.TopLeftY = (ScreenDescriptorBlock.SDB_Height-crosshairHeight)/2;
 		imageDesc.TopLeftU = 1;
 		imageDesc.TopLeftV = 51;
 		imageDesc.Height = 15;
 		imageDesc.Width = 17;
-		imageDesc.Scale = ONE_FIXED;
+		imageDesc.Scale = crosshairScale;
 		imageDesc.Translucency = 255;
 		imageDesc.Red = 255;
 		imageDesc.Green = 255;
@@ -1747,68 +1903,12 @@ static void DrawPredatorSights(void)
 }
 void DrawWristDisplay(void)
 {
-	extern HMODELCONTROLLER PlayersWeaponHModelController;
-	SECTION_DATA *sectionPtr;
-
- 	char *sectionName[]= {"Dum bar display","Dum 1 display","Dum 2 display","Dum 3 display","Dum 4 display"};
-
- 	sectionPtr=GetThisSectionData(PlayersWeaponHModelController.section_data,sectionName[0]);
-	if (!sectionPtr) return;
-	
-	RenderPredatorPlasmaCasterCharge(PlayerStatusPtr->PlasmaCasterCharge, &sectionPtr->World_Offset, &sectionPtr->SecMat);
-	#if 0
-   	for (int i=0; i<5; i++)
-   	{
-   		DECAL CurrentDecal;	
-		extern MODULE *playerPherModule;
-		int z= 0,halfWidth=50,halfHeight=50;
-
-
- 		sectionPtr=GetThisSectionData(PlayersWeaponHModelController.section_data,sectionName[i]);
-		if (!sectionPtr) return;
-	
-		CurrentDecal.DecalID = DECAL_PREDATOR_BLOOD;
-
- 		CurrentDecal.Vertices[0].vx = -halfWidth;
-		CurrentDecal.Vertices[0].vz = -halfHeight;
-		CurrentDecal.Vertices[0].vy = z;
-		RotateVector(&(CurrentDecal.Vertices[0]),&sectionPtr->SecMat);
-		CurrentDecal.Vertices[0].vx += sectionPtr->World_Offset.vx;
-		CurrentDecal.Vertices[0].vy += sectionPtr->World_Offset.vy;
-		CurrentDecal.Vertices[0].vz += sectionPtr->World_Offset.vz;
-
-
-		CurrentDecal.Vertices[1].vx = halfWidth;
-		CurrentDecal.Vertices[1].vz = -halfHeight;
-		CurrentDecal.Vertices[1].vy = z;
-		RotateVector(&(CurrentDecal.Vertices[1]),&sectionPtr->SecMat);
-		CurrentDecal.Vertices[1].vx += sectionPtr->World_Offset.vx;
-		CurrentDecal.Vertices[1].vy += sectionPtr->World_Offset.vy;
-		CurrentDecal.Vertices[1].vz += sectionPtr->World_Offset.vz;
-
-		CurrentDecal.Vertices[2].vx = halfWidth;
-		CurrentDecal.Vertices[2].vz = halfHeight;
-		CurrentDecal.Vertices[2].vy = z;
-		RotateVector(&(CurrentDecal.Vertices[2]),&sectionPtr->SecMat);
-		CurrentDecal.Vertices[2].vx += sectionPtr->World_Offset.vx;
-		CurrentDecal.Vertices[2].vy += sectionPtr->World_Offset.vy;
-		CurrentDecal.Vertices[2].vz += sectionPtr->World_Offset.vz;
-
-		CurrentDecal.Vertices[3].vx = -halfWidth;
-		CurrentDecal.Vertices[3].vz = halfHeight;
-		CurrentDecal.Vertices[3].vy = z;
-		RotateVector(&(CurrentDecal.Vertices[3]),&sectionPtr->SecMat);
-		CurrentDecal.Vertices[3].vx += sectionPtr->World_Offset.vx;
-		CurrentDecal.Vertices[3].vy += sectionPtr->World_Offset.vy;
-		CurrentDecal.Vertices[3].vz += sectionPtr->World_Offset.vz;
-
-		CurrentDecal.ModuleIndex = playerPherModule->m_index;
-
-		CurrentDecal.UOffset = 0;
-		
-		RenderDecal(&CurrentDecal);
-	}
-	#endif
+ extern HMODELCONTROLLER PlayersWeaponHModelController;
+ SECTION_DATA *sectionPtr;
+ if (!ViewmodelDrawActive || !PlayerStatusPtr || !PlayersWeaponHModelController.section_data) return;
+ sectionPtr=GetThisSectionData(PlayersWeaponHModelController.section_data,"Dum bar display");
+ if (!sectionPtr) return;
+ RenderPredatorPlasmaCasterCharge(PlayerStatusPtr->PlasmaCasterCharge,sectionPtr);
 }
 void RotateVertex(VECTOR2D *vertexPtr, int theta)
 {
@@ -1857,12 +1957,12 @@ static void HandleAlienWeapon(void)
 		if ((twPtr->MuzzleFlashShapeName != NULL)
 		  &&(!twPtr->PrimaryIsMeleeWeapon)
 		  &&(weaponPtr->CurrentState == WEAPONSTATE_FIRING_PRIMARY) )
-			RenderThisDisplayblock(&PlayersWeaponMuzzleFlash);
+			RenderWeaponViewmodel(&PlayersWeaponMuzzleFlash);
 		
 		/* draw 3d weapon */
 		/* if there is no shape name then return */
 		if (twPtr->WeaponShapeName == NULL) return;
-			RenderThisDisplayblock(&PlayersWeapon);
+			RenderWeaponViewmodel(&PlayersWeapon);
 		
 	}
 	//if ((twPtr->PrimaryIsMeleeWeapon)&&
@@ -2027,6 +2127,8 @@ int Fast2dMagnitude(int dx, int dy)
 /*KJL*************************
 * On screen messaging system *
 *************************KJL*/
+
+extern void NewScreenModeMessage(unsigned char *messagePtr) { GADGET_NewScreenModeMessage(messagePtr); }
 
 extern void NewOnScreenMessage(unsigned char *messagePtr)
 {

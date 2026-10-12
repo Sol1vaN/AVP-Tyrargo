@@ -6,6 +6,26 @@
 
 #include "oglfunc.h"
 
+PFNGLACTIVETEXTUREPROC pglActiveTexture;
+PFNGLATTACHSHADERPROC pglAttachShader;
+PFNGLCOMPILESHADERPROC pglCompileShader;
+PFNGLCREATESHADERPROC pglCreateShader;
+PFNGLCREATEPROGRAMPROC pglCreateProgram;
+PFNGLDELETEPROGRAMPROC pglDeleteProgram;
+PFNGLDELETESHADERPROC pglDeleteShader;
+PFNGLGETPROGRAMINFOLOGPROC pglGetProgramInfoLog;
+PFNGLGETPROGRAMIVPROC pglGetProgramiv;
+PFNGLGETSHADERINFOLOGPROC pglGetShaderInfoLog;
+PFNGLGETSHADERIVPROC pglGetShaderiv;
+PFNGLGETUNIFORMLOCATIONPROC pglGetUniformLocation;
+PFNGLLINKPROGRAMPROC pglLinkProgram;
+PFNGLSHADERSOURCEPROC pglShaderSource;
+PFNGLUNIFORM1FPROC pglUniform1f;
+PFNGLUNIFORM1IPROC pglUniform1i;
+PFNGLUNIFORM2FPROC pglUniform2f;
+PFNGLUSEPROGRAMPROC pglUseProgram;
+PFNGLCLIENTACTIVETEXTUREPROC pglClientActiveTexture;
+
 PFNGLALPHAFUNCPROC		pglAlphaFunc;
 PFNGLBINDTEXTUREPROC		pglBindTexture;
 PFNGLBLENDFUNCPROC		pglBlendFunc;
@@ -13,6 +33,7 @@ PFNGLCLEARPROC			pglClear;
 PFNGLCLEARCOLORPROC		pglClearColor;
 PFNGLCOLOR4FPROC		pglColor4f;
 PFNGLCOLORPOINTERPROC		pglColorPointer;
+PFNGLCOPYTEXSUBIMAGE2DPROC pglCopyTexSubImage2D;
 PFNGLCULLFACEPROC		pglCullFace;
 PFNGLDELETETEXTURESPROC		pglDeleteTextures;
 PFNGLDEPTHFUNCPROC		pglDepthFunc;
@@ -31,8 +52,16 @@ PFNGLGETINTEGERVPROC		pglGetIntegerv;
 PFNGLGETSTRINGPROC		pglGetString;
 PFNGLGETTEXPARAMETERFVPROC	pglGetTexParameterfv;
 PFNGLHINTPROC			pglHint;
+PFNGLLOADIDENTITYPROC		pglLoadIdentity;
+PFNGLMATRIXMODEPROC		pglMatrixMode;
 PFNGLPIXELSTOREIPROC		pglPixelStorei;
+PFNGLPOPMATRIXPROC		pglPopMatrix;
+PFNGLPOPATTRIBPROC		pglPopAttrib;
+PFNGLPOPCLIENTATTRIBPROC	pglPopClientAttrib;
 PFNGLPOLYGONOFFSETPROC		pglPolygonOffset;
+PFNGLPUSHMATRIXPROC		pglPushMatrix;
+PFNGLPUSHATTRIBPROC		pglPushAttrib;
+PFNGLPUSHCLIENTATTRIBPROC	pglPushClientAttrib;
 PFNGLREADPIXELSPROC		pglReadPixels;
 PFNGLSHADEMODELPROC		pglShadeModel;
 PFNGLTEXCOORDPOINTERPROC	pglTexCoordPointer;
@@ -51,6 +80,60 @@ int ogl_have_texture_filter_anisotropic;
 
 int ogl_use_multisample_filter_hint;
 int ogl_use_texture_filter_anisotropic;
+
+
+/* Optional GPU resolve. The implicit CopyTexSubImage2D resolve can discard
+ * coverage at 8x on some drivers. An explicit same-size blit retains it.
+ * FBO names belong to the GL context and are freed when that context dies. */
+#if !defined(USE_OPENGL_ES)
+static GLuint ResolveFramebuffer;
+static int ResolveFunctionsLoaded;
+static PFNGLGENFRAMEBUFFERSPROC ResolveGen;
+static PFNGLBINDFRAMEBUFFERPROC ResolveBind;
+static PFNGLFRAMEBUFFERTEXTURE2DPROC ResolveAttach;
+static PFNGLCHECKFRAMEBUFFERSTATUSPROC ResolveStatus;
+static PFNGLBLITFRAMEBUFFERPROC ResolveBlit;
+#endif
+void CopyResolvedFramebufferToTexture(GLuint texture, GLsizei width, GLsizei height)
+{
+#if !defined(USE_OPENGL_ES)
+ GLint samples=0,savedDraw=0;
+ pglGetIntegerv(GL_SAMPLES,&samples);
+ if(samples>0){
+  if(!ResolveFunctionsLoaded){
+   const char *version=(const char*)pglGetString(GL_VERSION);
+   ResolveFunctionsLoaded=1;
+   if((version && atoi(version)>=3) || SDL_GL_ExtensionSupported("GL_ARB_framebuffer_object")){
+    ResolveGen=(PFNGLGENFRAMEBUFFERSPROC)SDL_GL_GetProcAddress("glGenFramebuffers");
+    ResolveBind=(PFNGLBINDFRAMEBUFFERPROC)SDL_GL_GetProcAddress("glBindFramebuffer");
+    ResolveAttach=(PFNGLFRAMEBUFFERTEXTURE2DPROC)SDL_GL_GetProcAddress("glFramebufferTexture2D");
+    ResolveStatus=(PFNGLCHECKFRAMEBUFFERSTATUSPROC)SDL_GL_GetProcAddress("glCheckFramebufferStatus");
+    ResolveBlit=(PFNGLBLITFRAMEBUFFERPROC)SDL_GL_GetProcAddress("glBlitFramebuffer");
+   }
+  }
+  if(ResolveGen && ResolveBind && ResolveAttach && ResolveStatus && ResolveBlit){
+   if(!ResolveFramebuffer)ResolveGen(1,&ResolveFramebuffer);
+   if(ResolveFramebuffer){
+    int complete;
+    pglGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&savedDraw);
+    ResolveBind(GL_DRAW_FRAMEBUFFER,ResolveFramebuffer);
+    ResolveAttach(GL_DRAW_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,texture,0);
+    complete=ResolveStatus(GL_DRAW_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE;
+    if(complete){
+     pglPushAttrib(GL_SCISSOR_BIT);pglDisable(GL_SCISSOR_TEST);
+     ResolveBlit(0,0,width,height,0,0,width,height,GL_COLOR_BUFFER_BIT,GL_NEAREST);
+     pglPopAttrib();
+    }
+    ResolveAttach(GL_DRAW_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,0,0);
+    ResolveBind(GL_DRAW_FRAMEBUFFER,(GLuint)savedDraw);
+    if(complete)return;
+   }
+  }
+ }
+#endif
+ /* Non-MSAA and older contexts keep the compatible copy path. */
+ pglCopyTexSubImage2D(GL_TEXTURE_2D,0,0,0,0,0,width,height);
+}
 
 static void dummyfunc()
 {
@@ -96,11 +179,34 @@ static int check_token(const char *string, const char *token)
 
 void load_ogl_functions(int mode)
 {
+#if !defined(USE_OPENGL_ES)
+ ResolveFramebuffer=0;ResolveFunctionsLoaded=0;
+ ResolveGen=NULL;ResolveBind=NULL;ResolveAttach=NULL;ResolveStatus=NULL;ResolveBlit=NULL;
+#endif
 	const char* ogl_missing_func;
 	const char* ext;
 
 	ogl_missing_func = NULL;
 	
+	LoadOGLProc(PFNGLACTIVETEXTUREPROC, glActiveTexture);
+	LoadOGLProc(PFNGLATTACHSHADERPROC, glAttachShader);
+	LoadOGLProc(PFNGLCOMPILESHADERPROC, glCompileShader);
+	LoadOGLProc(PFNGLCREATESHADERPROC, glCreateShader);
+	LoadOGLProc(PFNGLCREATEPROGRAMPROC, glCreateProgram);
+	LoadOGLProc(PFNGLDELETEPROGRAMPROC, glDeleteProgram);
+	LoadOGLProc(PFNGLDELETESHADERPROC, glDeleteShader);
+	LoadOGLProc(PFNGLGETPROGRAMINFOLOGPROC, glGetProgramInfoLog);
+	LoadOGLProc(PFNGLGETPROGRAMIVPROC, glGetProgramiv);
+	LoadOGLProc(PFNGLGETSHADERINFOLOGPROC, glGetShaderInfoLog);
+	LoadOGLProc(PFNGLGETSHADERIVPROC, glGetShaderiv);
+	LoadOGLProc(PFNGLGETUNIFORMLOCATIONPROC, glGetUniformLocation);
+	LoadOGLProc(PFNGLLINKPROGRAMPROC, glLinkProgram);
+	LoadOGLProc(PFNGLSHADERSOURCEPROC, glShaderSource);
+	LoadOGLProc(PFNGLUNIFORM1FPROC, glUniform1f);
+	LoadOGLProc(PFNGLUNIFORM1IPROC, glUniform1i);
+	LoadOGLProc(PFNGLUNIFORM2FPROC, glUniform2f);
+	LoadOGLProc(PFNGLUSEPROGRAMPROC, glUseProgram);
+	LoadOGLProc(PFNGLCLIENTACTIVETEXTUREPROC, glClientActiveTexture);
 	LoadOGLProc(PFNGLALPHAFUNCPROC, glAlphaFunc);
 	LoadOGLProc(PFNGLBINDTEXTUREPROC, glBindTexture);
 	LoadOGLProc(PFNGLBLENDFUNCPROC, glBlendFunc);
@@ -108,6 +214,7 @@ void load_ogl_functions(int mode)
 	LoadOGLProc(PFNGLCLEARCOLORPROC, glClearColor);
 	LoadOGLProc(PFNGLCOLOR4FPROC, glColor4f);
 	LoadOGLProc(PFNGLCOLORPOINTERPROC, glColorPointer);
+	LoadOGLProc(PFNGLCOPYTEXSUBIMAGE2DPROC, glCopyTexSubImage2D);
 	LoadOGLProc(PFNGLCULLFACEPROC, glCullFace);
 	LoadOGLProc(PFNGLDELETETEXTURESPROC, glDeleteTextures);
 	LoadOGLProc(PFNGLDEPTHFUNCPROC, glDepthFunc);
@@ -126,8 +233,16 @@ void load_ogl_functions(int mode)
 	LoadOGLProc(PFNGLGETSTRINGPROC, glGetString);
 	LoadOGLProc(PFNGLGETTEXPARAMETERFVPROC, glGetTexParameterfv);
 	LoadOGLProc(PFNGLHINTPROC, glHint);
+	LoadOGLProc(PFNGLLOADIDENTITYPROC, glLoadIdentity);
+	LoadOGLProc(PFNGLMATRIXMODEPROC, glMatrixMode);
 	LoadOGLProc(PFNGLPIXELSTOREIPROC, glPixelStorei);
+	LoadOGLProc(PFNGLPOPMATRIXPROC, glPopMatrix);
+	LoadOGLProc(PFNGLPOPATTRIBPROC, glPopAttrib);
+	LoadOGLProc(PFNGLPOPCLIENTATTRIBPROC, glPopClientAttrib);
 	LoadOGLProc(PFNGLPOLYGONOFFSETPROC, glPolygonOffset);
+	LoadOGLProc(PFNGLPUSHMATRIXPROC, glPushMatrix);
+	LoadOGLProc(PFNGLPUSHATTRIBPROC, glPushAttrib);
+	LoadOGLProc(PFNGLPUSHCLIENTATTRIBPROC, glPushClientAttrib);
 	LoadOGLProc(PFNGLREADPIXELSPROC, glReadPixels);
 	LoadOGLProc(PFNGLSHADEMODELPROC, glShadeModel);
 	LoadOGLProc(PFNGLTEXCOORDPOINTERPROC, glTexCoordPointer);

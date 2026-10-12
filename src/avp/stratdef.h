@@ -230,6 +230,14 @@ typedef struct strategyblock
 	short SBIsValid;								                                     		
 	#endif
 	char* name;
+    /* Runtime metadata; native strategy save structs remain unchanged. */
+    char combatOwner[SB_NAME_LENGTH];
+    char combatBurnOwner[SB_NAME_LENGTH];
+    int combatKillReported;
+    int supportKillsPending;
+    int supportFollow;
+    int acidPopulationState,acidPopulationTimer;
+    int supportSentryTimer;
 
 } STRATEGYBLOCK;
 
@@ -264,8 +272,8 @@ extern void GivePlayerCloakAway(void);
 // for lift and airlock code
 
 extern void InitPreservedSBs();
-extern void PreserveStBlocksInModule();
-extern BOOL SBNeededForNextEnv();
+extern void PreserveStBlocksInModule(MODULE* containing_mod);
+extern BOOL SBNeededForNextEnv(STRATEGYBLOCK* sbptr);                    
 extern void	AddPreservedSBsToActiveList();
 extern void TeleportPreservedSBsToNewEnvModule(MODULE* old_pos_module, MODULE* new_pos, int orient_diff);
 

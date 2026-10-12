@@ -8,6 +8,7 @@
 #undef No // sigh
 #include <windows.h>
 #include <tchar.h>
+#include <mmsystem.h>
 #include <mbstring.h>
 #include <inttypes.h>
 
@@ -38,6 +39,34 @@ std; or for the C files, so they don't conflict with the C++ definitions.
 // not sure where this was originally defined.
 #define RGBA_MAKE(r, g, b, a)   ((((a) << 24) | ((r) << 16) | ((g) << 8) | (b)))
 
+#elif defined(_WIN32)
+
+#undef Yes
+#undef No
+#include <windows.h>
+#include <tchar.h>
+#include <mmsystem.h>
+#include <mbstring.h>
+#include <inttypes.h>
+
+#define max_no_const(a,b) ((a)>(b)?(a):(b))
+#define min_no_const(a,b) ((a)<(b)?(a):(b))
+
+#define Yes 1
+#define No 0
+
+#include "files.h"
+
+#if !defined(PATH_MAX)
+#define PATH_MAX MAX_PATH
+#endif
+
+#define PACKED_PUSH
+#define PACKED_POP
+#define PACKED __attribute__((packed))
+
+#define RGBA_MAKE(r, g, b, a)   ((((a) << 24) | ((r) << 16) | ((g) << 8) | (b)))
+
 #else
 
 #include <stdio.h>
@@ -64,6 +93,8 @@ std; or for the C files, so they don't conflict with the C++ definitions.
 
 #define max_no_const(a,b) ((a)>(b)?(a):(b))
 #define min_no_const(a,b) ((a)<(b)?(a):(b))
+
+#if !defined(_WIN32) || !defined(_WINDOWS_)
 
 #define __cdecl
 
@@ -129,7 +160,9 @@ typedef struct PALETTEENTRY
 } PALETTEENTRY;
 
 #if !defined(__INTEL_COMPILER)
-typedef int64_t __int64;
+#if !defined(__MINGW32__)
+	typedef int64_t __int64;
+#endif
 #else
 typedef __int64 int64_t;
 typedef unsigned __int64 uint64_t;
@@ -200,6 +233,8 @@ typedef struct JOYCAPS
 {
 	int wCaps;
 } JOYCAPS;
+
+#endif /* portable compatibility definitions */
 
 #ifdef __cplusplus
 };

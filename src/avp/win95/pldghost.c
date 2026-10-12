@@ -1169,7 +1169,7 @@ void MakeGhostNear(STRATEGYBLOCK *sbPtr)
 {
 	extern MODULEMAPBLOCK AlienDefaultMap;
 	NETGHOSTDATABLOCK *ghostData = (NETGHOSTDATABLOCK *)sbPtr->SBdataptr;
-	MODULE tempModule;
+	MODULE tempModule = {0};
 	DISPLAYBLOCK *dPtr;
 	DYNAMICSBLOCK *dynPtr = sbPtr->DynPtr;
 	SFXBLOCK *sfxPtr=0;
@@ -4783,6 +4783,14 @@ STRATEGYBLOCK *MakeNewCorpse()
 	LOCALASSERT(playerStatusPtr);    	        
    	weaponPtr = &(playerStatusPtr->WeaponSlot[playerStatusPtr->SelectedWeaponSlot]);
 	weapon = (signed char)(weaponPtr->WeaponIDNumber);
+    if(AvP.Network==I_No_Network){
+        const char *library=AvP.PlayerType==I_Marine?"hnpcmarine":AvP.PlayerType==I_Predator?"hnpcpredator":"hnpcalien";
+        const char *hierarchy=AvP.PlayerType==I_Marine?"marine with pulse rifle":AvP.PlayerType==I_Predator?"pred with wristblade":"alien";
+        if(!GetNamedHierarchyFromLibrary(library,hierarchy))return NULL;
+        /* Guaranteed loaded fallback; no asset request on the death frame. */
+        weapon=AvP.PlayerType==I_Marine?WEAPON_PULSERIFLE:AvP.PlayerType==I_Predator?WEAPON_PRED_WRISTBLADE:weapon;
+    }
+
 
 	/* create a strategy block - same as for a ghost */	
 	sbPtr = CreateActiveStrategyBlock();
@@ -4838,6 +4846,7 @@ STRATEGYBLOCK *MakeNewCorpse()
 			RemoveBehaviourStrategy(sbPtr);
 			return NULL;
 		}		
+		memset(corpseData,0,sizeof(*corpseData));
 		sbPtr->SBdataptr = (void *)corpseData;
 		corpseData->SoundHandle  = SOUND_NOACTIVEINDEX;
 		corpseData->SoundHandle2 = SOUND_NOACTIVEINDEX;
@@ -4886,7 +4895,7 @@ STRATEGYBLOCK *MakeNewCorpse()
 			   	{
 
 			   		VECTORCH location=Player->ObStrategyBlock->DynPtr->Position;
-			   		STRATEGYBLOCK* weaponSbPtr = CreateMultiplayerWeaponPickup(&location,weapon,0);
+			   		STRATEGYBLOCK* weaponSbPtr = AvP.Network!=I_No_Network?CreateMultiplayerWeaponPickup(&location,weapon,0):NULL;
 					if(weaponSbPtr)
 					{
 						//hide the newly created weapon from this player , until the player respawns
@@ -4950,7 +4959,7 @@ STRATEGYBLOCK *MakeNewCorpse()
 				Create_HModel(&corpseData->HModelController,root_section);
 				{
 					extern DPID AVPDPNetID;
-					ChangeGhostMarineAccoutrementSet(&corpseData->HModelController,AVPDPNetID);
+					if(AvP.Network!=I_No_Network)ChangeGhostMarineAccoutrementSet(&corpseData->HModelController,AVPDPNetID);
 				}
 				//choose a default sequence , the proper death anim will be set later	
 				InitHModelSequence(&corpseData->HModelController,(int)HMSQT_MarineStand,(int)MSSS_Standard,ONE_FIXED);
@@ -5019,8 +5028,8 @@ STRATEGYBLOCK *MakeNewCorpse()
 	corpseData->HModelController.Looped=0;
 	ProveHModel_Far(&corpseData->HModelController,sbPtr);
 	MakeCorpseNear(sbPtr);
-	GLOBALASSERT(sbPtr->SBdptr);
-	sbPtr->SBdptr->ObFlags|=ObFlag_NotVis;
+	if(sbPtr->SBdptr && AvP.Network!=I_No_Network)sbPtr->SBdptr->ObFlags|=ObFlag_NotVis;
+    if(AvP.Network==I_No_Network)sbPtr->DynPtr->OnlyCollideWithEnvironment=1;
 	/* And the fire. */
 	
 	if (Player->ObStrategyBlock->SBDamageBlock.IsOnFire) {

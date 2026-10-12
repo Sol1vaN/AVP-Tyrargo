@@ -29,6 +29,9 @@ you should have seen the previous versions. */
 #include "avp_userprofile.h"
 #include "pfarlocs.h"
 #include "particle.h"
+#include <math.h>
+
+#include "npc_support.h"
 
 #define UseLocalAssert Yes
 #include "ourasert.h"
@@ -46,6 +49,49 @@ you should have seen the previous versions. */
 #else
 	#define LogInfo(args) (void)0
 #endif
+
+
+/* Keep missiles, debris and platform motion on their established response.
+ * The shared walking templates include players and near NPCs, including aliens. */
+static int ActorSlidingEnabled(const DYNAMICSBLOCK *dynPtr)
+{
+    return dynPtr->CanClimbStairs && !dynPtr->IsInanimate
+        && !dynPtr->IsStatic && !dynPtr->IsNetGhost
+        && !dynPtr->OnlyCollideWithObjects && !dynPtr->StopOnCollision;
+}
+
+/* Imported normals are fixed-point approximations, not exact unit vectors.
+ * Divide by their squared length rather than over-projecting by 66000/65536.
+ * Only inward motion is blocked; separating motion must remain available.
+ * Round once at the integer physics boundary, then remove any sub-unit inward
+ * remainder on the dominant normal axis to avoid hitting the same plane again. */
+extern int NormalFrameTime;
+static int NPCTravelDisplacement(STRATEGYBLOCK *sb,int axis,int velocity)
+{
+ NPC_MOTION_RUNTIME *r=NULL;
+ if(sb->I_SBtype==I_BehaviourMarine)r=&((MARINE_STATUS_BLOCK*)sb->SBdataptr)->precision;
+ else if(sb->I_SBtype==I_BehaviourPredator)r=&((PREDATOR_STATUS_BLOCK*)sb->SBdataptr)->precision;
+ return r?NPCTravel(r,axis,velocity,NormalFrameTime):MUL_FIXED(velocity,NormalFrameTime);
+}
+static void ClipActorVector(VECTORCH *vector, const VECTORCH *normal, double response)
+{
+    const double n[3] = {normal->vx, normal->vy, normal->vz};
+    const double length2 = n[0]*n[0] + n[1]*n[1] + n[2]*n[2];
+    double dot = n[0]*vector->vx + n[1]*vector->vy + n[2]*vector->vz;
+    int component[3], axis=0;
+    double scale;
+    if (length2==0.0 || dot>=0.0) return;
+    scale = response*dot/length2;
+    component[0] = (int)lround(vector->vx-n[0]*scale);
+    component[1] = (int)lround(vector->vy-n[1]*scale);
+    component[2] = (int)lround(vector->vz-n[2]*scale);
+    if (fabs(n[1])>fabs(n[axis])) axis=1;
+    if (fabs(n[2])>fabs(n[axis])) axis=2;
+    dot = n[0]*component[0] + n[1]*component[1] + n[2]*component[2];
+    if (dot<0.0)
+        component[axis] += (n[axis]>0.0 ? 1 : -1)*(int)ceil(-dot/fabs(n[axis]));
+    vector->vx=component[0]; vector->vy=component[1]; vector->vz=component[2];
+}
 
 extern MORPHDISPLAY MorphDisplay;
 extern VECTORCH MorphedPts[];
@@ -174,7 +220,7 @@ static signed int DistanceMovedBeforeNRBBHitsNegZPolygon(DYNAMICSBLOCK *dynPtr, 
 static signed int DistanceMovedBeforeNRBBHitsPosZPolygon(DYNAMICSBLOCK *dynPtr, struct ColPolyTag *polyPtr, int distanceToMove);
 static void TestForValidMovement(STRATEGYBLOCK *sbPtr);
 #endif
-static int MoveObject(STRATEGYBLOCK *sbPtr);
+static int MoveObject(STRATEGYBLOCK *sbPtr, int searchTolerance);
 static void TestForValidPlayerStandUp(STRATEGYBLOCK *sbPtr);
 static int SteppingUpIsValid(STRATEGYBLOCK *sbPtr);
 static void TestShapeWithStaticBoundingBox(DISPLAYBLOCK *objectPtr);
@@ -234,6 +280,7 @@ extern int NormalFrameTime;
 
 
 #define COLLISION_GRANULARITY 10 // 40
+#define MOVEMENT_SEARCH_TOLERANCE 16
 #define RELOCATION_GRANULARITY 5 // 30
 #define GRAVITY_DISPLACEMENT (COLLISION_GRANULARITY+1)
 #define MAXIMUM_NUMBER_OF_COLLISIONPOLYS 3000
@@ -241,9 +288,36 @@ extern int NormalFrameTime;
 
 
 static STRATEGYBLOCK *DynamicObjectsList[MAX_NO_OF_DYNAMICS_BLOCKS];
+static unsigned char ActorStepDownEligible[MAX_NO_OF_DYNAMICS_BLOCKS];
+static DYNAMICSBLOCK *DescendingFootprintBody;
+static unsigned char ActorCornerEligible[MAX_NO_OF_DYNAMICS_BLOCKS];
+static VECTORCH ActorCornerGravity[MAX_NO_OF_DYNAMICS_BLOCKS];
+static int CanFollowClimbingCorner(const DYNAMICSBLOCK *d);
+static void FollowClimbingCorner(STRATEGYBLOCK *s,const VECTORCH *previousGravity);
+static void FollowDescendingStep(STRATEGYBLOCK *sbPtr);
+static int CanFollowDescendingStep(const DYNAMICSBLOCK *d);
 static int NumberOfDynamicObjects = 1;
 
 static int AccelDueToGravity;
+
+static void AddClimbingContactProbe(DYNAMICSBLOCK *d)
+{
+    /* Do not cancel a jump or movement away from the current support. */
+    double dot=(double)d->Displacement.vx*d->GravityDirection.vx
+              +(double)d->Displacement.vy*d->GravityDirection.vy
+              +(double)d->Displacement.vz*d->GravityDirection.vz;
+    if (d->TimeNotInContactWithFloor != -1 &&
+        dot >= (d->ToppleForce == TOPPLE_FORCE_ALIEN ? -ONE_FIXED : 0.0))
+    {
+        /* A thin crawl skin does not feed tangential movement around corners.
+         * The tolerance above covers one millimetre of rounded tangent drift. */
+        int probe = d->ToppleForce == TOPPLE_FORCE_ALIEN ? 1 : GRAVITY_DISPLACEMENT;
+        d->Displacement.vx += (int)lround((double)d->GravityDirection.vx*probe/ONE_FIXED);
+        d->Displacement.vy += (int)lround((double)d->GravityDirection.vy*probe/ONE_FIXED);
+        d->Displacement.vz += (int)lround((double)d->GravityDirection.vz*probe/ONE_FIXED);
+    }
+}
+
 static int DistanceToStepUp;
 static VECTORCH DirectionOfTravel;
 
@@ -268,6 +342,54 @@ int PlayersMaxHeightWhilstNotInContactWithGround;
 *                                     F U N C T I O N S	                                    *
 ****************************************************************************************KJL*/
 
+/* Capture support BEFORE the previous collision reports are recycled. No
+ * persistent pointers or save-layout changes. Jumping/flying/wall-climbing
+ * players must detach; only the nearly flat top of an active lift qualifies. */
+static STRATEGYBLOCK *PlayerLiftSupport(void)
+{
+ if(!Player || !Player->ObStrategyBlock || !Player->ObStrategyBlock->DynPtr || !PlanarGravity)return NULL;
+ DYNAMICSBLOCK *d=Player->ObStrategyBlock->DynPtr;
+ if(!d->IsInContactWithFloor || !d->GravityOn || d->IsNetGhost || d->IsStatic
+  || d->DynamicsType!=DYN_TYPE_NRBB_COLLISIONS
+  || d->LinVelocity.vy+d->LinImpulse.vy<0)return NULL;
+ if(!d->UseStandardGravity && (d->GravityDirection.vy<NEARLYFLATFLOOR_THRESHOLD
+  || d->GravityDirection.vx || d->GravityDirection.vz))return NULL;
+ for(COLLISIONREPORT *c=d->CollisionReportPtr;c;c=c->NextCollisionReportPtr){
+  if(c->ObstacleNormal.vy>=-NEARLYFLATFLOOR_THRESHOLD || !c->ObstacleSBPtr)continue;
+  /* Behaviours may have removed a previous obstacle since the last step. */
+  for(int i=0;i<NumActiveStBlocks;i++){
+   STRATEGYBLOCK *support=ActiveStBlockList[i];
+   if(support!=c->ObstacleSBPtr)continue;
+   if(support->I_SBtype==I_BehaviourPlatform && support->SBdptr && support->DynPtr
+    && !support->DynPtr->IsStatic && support->DynPtr->OnlyCollideWithObjects
+    && !support->DynPtr->IsNetGhost)return support;
+   break;
+  }
+ }
+ return NULL;
+}
+static int AddDescendingLiftMotion(DYNAMICSBLOCK *player,STRATEGYBLOCK *support)
+{
+ if(!support)return 0;
+ DYNAMICSBLOCK *lift=support->DynPtr;
+ int dy=lift->Position.vy-lift->PrevPosition.vy;
+ if(dy<=0)return 0; /* Keep the existing upward push unchanged. */
+ /* Lifts are sorted before passengers. Use ACTUAL travel (zero if blocked),
+  * not intended speed. Feed the displacement through ordinary collision
+  * resolution, so stepping off and landing on intervening geometry work.
+  * Do not add it to fall velocity/impulse or synthesize floor contacts. */
+ if(player->Displacement.vy<0)return 0; /* A force applied this step lifted us. */
+ /* A previous ordinary MoveObject step can leave a gap of up to
+  * MOVEMENT_SEARCH_TOLERANCE. Cross that gap even if gravity rounds to
+  * zero, then resolve this passenger with one-unit contact precision.
+  * This is a collision probe, not extra fall speed or a forced floor flag. */
+ if(player->Displacement.vy<=MOVEMENT_SEARCH_TOLERANCE)
+  player->Displacement.vy=MOVEMENT_SEARCH_TOLERANCE+1;
+ player->Displacement.vy+=dy;
+ player->DistanceLeftToMove=Magnitude(&player->Displacement);
+ return 1;
+}
+
 /* Entry point to dynamics system - this function handles the movement of all objects */
 extern void ObjectDynamics(void)
 {
@@ -288,6 +410,7 @@ extern void ObjectDynamics(void)
 	{
 		PlanarGravity = 1;
 	}
+	STRATEGYBLOCK *playerSupport=PlayerLiftSupport();
 	/* clear previous frame's collision reports */
 	InitialiseCollisionReports();
 
@@ -313,15 +436,16 @@ extern void ObjectDynamics(void)
 	{
 		STRATEGYBLOCK *sbPtr = DynamicObjectsList[i];
 		DYNAMICSBLOCK *dynPtr = sbPtr->DynPtr;
+        DescendingFootprintBody = ActorStepDownEligible[i] && dynPtr->UseStandardGravity ? dynPtr : NULL;
 
 		GLOBALASSERT(dynPtr->Mass>0);
 		      	   
 		if (dynPtr->IsNetGhost || (dynPtr->IsPickupObject && !dynPtr->GravityOn))
 		{
 			#if 0
-			dynPtr->Position.vx += MUL_FIXED(dynPtr->LinVelocity.vx, NormalFrameTime);
+			dynPtr->Position.vx += NPCTravelDisplacement(sbPtr,0,dynPtr->LinVelocity.vx);
 		    dynPtr->Position.vy += MUL_FIXED(dynPtr->LinVelocity.vy, NormalFrameTime);
-		    dynPtr->Position.vz += MUL_FIXED(dynPtr->LinVelocity.vz, NormalFrameTime);
+		    dynPtr->Position.vz += NPCTravelDisplacement(sbPtr,1,dynPtr->LinVelocity.vz);
 			AlignObjectToStandardGravityDirection(dynPtr);
 			#endif
 			UpdateDisplayBlockData(sbPtr);
@@ -351,6 +475,8 @@ extern void ObjectDynamics(void)
 				break;
 			}
 		}
+		const int searchTolerance = (sbPtr->SBdptr==Player && AddDescendingLiftMotion(dynPtr,playerSupport))
+            ? 1 : MOVEMENT_SEARCH_TOLERANCE;
 		if ((sbPtr->SBdptr == Player) && dynPtr->RequestsToStandUp)
 			TestForValidPlayerStandUp(sbPtr); 
 #if 0
@@ -393,7 +519,7 @@ extern void ObjectDynamics(void)
 					FindObjectPolygonsInObjectsPath(sbPtr);
 				}
 			}
-			while(dynPtr->DistanceLeftToMove && !MoveObject(sbPtr));
+			while(dynPtr->DistanceLeftToMove && !MoveObject(sbPtr,searchTolerance));
 		}
 		else
 		{
@@ -427,7 +553,7 @@ extern void ObjectDynamics(void)
 				dynPtr->Displacement.vy,
 				dynPtr->Displacement.vz);
 
-				hitSomethingWhileMoving = MoveObject(sbPtr);
+				hitSomethingWhileMoving = MoveObject(sbPtr,searchTolerance);
 
 				if(hitSomethingWhileMoving||DistanceToStepUp)
 				{
@@ -458,6 +584,10 @@ extern void ObjectDynamics(void)
 			}
 		}
 			
+        if (ActorCornerEligible[i]) FollowClimbingCorner(sbPtr,&ActorCornerGravity[i]);
+        if (ActorStepDownEligible[i]) FollowDescendingStep(sbPtr);
+        DescendingFootprintBody=NULL;
+
 		/* friction */
 		#if 0
 		if (dynPtr->IsInContactWithFloor)
@@ -710,9 +840,9 @@ extern void ObjectDynamics(void)
 			/* skip to next report */
 			reportPtr = reportPtr->NextCollisionReportPtr;
 		}
-		PrintDebuggingText("€‚ƒ ©¸ä\n");
+		PrintDebuggingText("???? ???\n");
 		if(!Player->ObStrategyBlock->DynPtr->IsInContactWithFloor)
-			NewOnScreenMessage("€‚ƒ word ©¸ä word €‚ƒ word ¸ä word\n");
+			NewOnScreenMessage("???? word ??? word ???? word ?? word\n");
 	}
 	#endif
 	//NewTrailPoint(Player->ObStrategyBlock->DynPtr);
@@ -721,6 +851,9 @@ extern void ObjectDynamics(void)
 static void InitialiseDynamicObjectsList(void)
 {
 	STRATEGYBLOCK *unsortedDynamicObjectsList[MAX_NO_OF_DYNAMICS_BLOCKS];
+    unsigned char unsortedStepDown[MAX_NO_OF_DYNAMICS_BLOCKS];
+    unsigned char unsortedCorner[MAX_NO_OF_DYNAMICS_BLOCKS];
+    VECTORCH unsortedGravity[MAX_NO_OF_DYNAMICS_BLOCKS];
 	signed int valueOnWhichToSort[MAX_NO_OF_DYNAMICS_BLOCKS];
 	AccelDueToGravity = MUL_FIXED(GRAVITY_STRENGTH,NormalFrameTime);
 
@@ -755,17 +888,21 @@ static void InitialiseDynamicObjectsList(void)
 		   			ApplyGravity(dynPtr);
 
 					dynPtr->Position.vx += 
-						MUL_FIXED(dynPtr->LinVelocity.vx+dynPtr->LinImpulse.vx, NormalFrameTime);
+						NPCTravelDisplacement(sbPtr,0,dynPtr->LinVelocity.vx+dynPtr->LinImpulse.vx);
 				    dynPtr->Position.vy += 
 				    	MUL_FIXED(dynPtr->LinVelocity.vy+dynPtr->LinImpulse.vy, NormalFrameTime);
 				    dynPtr->Position.vz += 
-     			    	MUL_FIXED(dynPtr->LinVelocity.vz+dynPtr->LinImpulse.vz, NormalFrameTime);
+     			    	NPCTravelDisplacement(sbPtr,1,dynPtr->LinVelocity.vz+dynPtr->LinImpulse.vz);
 					UpdateDisplayBlockData(sbPtr);
 				}
 				/* is it just static? */
 				else /* have to consider it properly */
 				{
-					/* Apply gravity */
+					/* Preserve last support before resetting this frame's contacts. */
+                    unsortedStepDown[NumberOfDynamicObjects] = CanFollowDescendingStep(dynPtr);
+                    unsortedCorner[NumberOfDynamicObjects] = CanFollowClimbingCorner(dynPtr);
+                    unsortedGravity[NumberOfDynamicObjects] = dynPtr->GravityDirection;
+                    /* Apply gravity */
 		   	  		ApplyGravity(dynPtr);
 					AddEffectsOfForceGenerators(&dynPtr->Position,&dynPtr->LinImpulse,dynPtr->Mass);
 					/* create a bb that surrounds the object */
@@ -822,15 +959,15 @@ static void InitialiseDynamicObjectsList(void)
 
 						if (dynPtr->OnlyCollideWithObjects)
 						{
-							dynPtr->Displacement.vx += MUL_FIXED(dynPtr->LinVelocity.vx, NormalFrameTime);
+							dynPtr->Displacement.vx += NPCTravelDisplacement(sbPtr,0,dynPtr->LinVelocity.vx);
 						    dynPtr->Displacement.vy += MUL_FIXED(dynPtr->LinVelocity.vy, NormalFrameTime);
-						    dynPtr->Displacement.vz += MUL_FIXED(dynPtr->LinVelocity.vz, NormalFrameTime);
+						    dynPtr->Displacement.vz += NPCTravelDisplacement(sbPtr,1,dynPtr->LinVelocity.vz);
 						}    
 						else
 						{
-							dynPtr->Displacement.vx += MUL_FIXED(dynPtr->LinVelocity.vx+dynPtr->LinImpulse.vx, NormalFrameTime);
+							dynPtr->Displacement.vx += NPCTravelDisplacement(sbPtr,0,dynPtr->LinVelocity.vx+dynPtr->LinImpulse.vx);
 						    dynPtr->Displacement.vy += MUL_FIXED(dynPtr->LinVelocity.vy+dynPtr->LinImpulse.vy, NormalFrameTime);
-						    dynPtr->Displacement.vz += MUL_FIXED(dynPtr->LinVelocity.vz+dynPtr->LinImpulse.vz, NormalFrameTime);
+						    dynPtr->Displacement.vz += NPCTravelDisplacement(sbPtr,1,dynPtr->LinVelocity.vz+dynPtr->LinImpulse.vz);
 
 							/* If moving in direction of gravity, add a little bit to make sure you will make contact
 							with the ground if your close */
@@ -838,16 +975,30 @@ static void InitialiseDynamicObjectsList(void)
 							{
 								if (dynPtr->UseStandardGravity&&PlanarGravity)	/* ie. in direction of +ve Y-axis */
 								{
-									if (dynPtr->Displacement.vy > 0)
-										dynPtr->Displacement.vy += GRAVITY_DISPLACEMENT;
+									/* Zero rounded travel still needs a support probe.
+                                         * Otherwise high frame rates alternate grounded/air
+                                         * controls while sliding along a wall. */
+                                    /* A ground-contact probe must press into the support plane.
+                                     * A world-down probe slides its box along a ramp once per
+                                     * frame, independent of dt. Keep human terrain physics and
+                                     * actual gravity/impulses unchanged. */
+                                    VECTORCH probeNormal={0,0,0};
+                                    if(sbPtr->I_SBtype==I_BehaviourMarine &&
+                                       ((MARINE_STATUS_BLOCK*)sbPtr->SBdataptr)->squad.jumpTimer<=0)
+                                        for(COLLISIONREPORT*c=dynPtr->CollisionReportPtr;c;c=c->NextCollisionReportPtr)
+                                            if(c->ObstacleNormal.vy<-40000){probeNormal=c->ObstacleNormal;break;}
+                                    if(probeNormal.vy){
+                                        double length=sqrt((double)probeNormal.vx*probeNormal.vx+(double)probeNormal.vy*probeNormal.vy+(double)probeNormal.vz*probeNormal.vz);
+                                        dynPtr->Displacement.vx-=(int)lround(GRAVITY_DISPLACEMENT*probeNormal.vx/length);
+                                        dynPtr->Displacement.vy-=(int)lround(GRAVITY_DISPLACEMENT*probeNormal.vy/length);
+                                        dynPtr->Displacement.vz-=(int)lround(GRAVITY_DISPLACEMENT*probeNormal.vz/length);
+                                    }else if (dynPtr->Displacement.vy >= 0)
+                                        dynPtr->Displacement.vy += GRAVITY_DISPLACEMENT;
 								}
-								else 
-								{
-									if (DotProduct(&(dynPtr->Displacement),&(dynPtr->GravityDirection)) > 0)
-										dynPtr->Displacement.vx += MUL_FIXED(dynPtr->GravityDirection.vx, GRAVITY_DISPLACEMENT);
-									    dynPtr->Displacement.vy += MUL_FIXED(dynPtr->GravityDirection.vy, GRAVITY_DISPLACEMENT);
-									    dynPtr->Displacement.vz += MUL_FIXED(dynPtr->GravityDirection.vz, GRAVITY_DISPLACEMENT);
-								}
+								else
+                                {
+                                    AddClimbingContactProbe(dynPtr);
+                                }
 							}
 							
 							/* KJL 12:00:29 25/11/98 - resolve against last frames normals */
@@ -934,6 +1085,9 @@ static void InitialiseDynamicObjectsList(void)
 			}
 
 			DynamicObjectsList[--outer] = unsortedDynamicObjectsList[indexOfFastestObject];
+            ActorStepDownEligible[outer] = unsortedStepDown[indexOfFastestObject];
+            ActorCornerEligible[outer] = unsortedCorner[indexOfFastestObject];
+            ActorCornerGravity[outer] = unsortedGravity[indexOfFastestObject];
 			valueOnWhichToSort[indexOfFastestObject] = -1;
 		}
 	}
@@ -980,6 +1134,42 @@ static void UpdateDisplayBlockData(STRATEGYBLOCK *sbPtr)
 
 
 /* gravity code */
+/* During a climbing transition the visual body basis lags the support
+ * direction. Keep requested travel tangent to the current support instead
+ * of repeatedly driving away from the new face and catching the old one. */
+static void ProjectClimbingTravel(DYNAMICSBLOCK *d,const VECTORCH *inputNormal)
+{
+    /* Input was expressed in the slowly aligning body basis. Transport it
+     * onto the support basis without changing its magnitude. Projection alone
+     * either stalls near 90 degrees or amplifies a tiny tangent into a hop. */
+    VECTORCH *v=&d->LinVelocity, *g=&d->GravityDirection;
+    double y[3]={inputNormal->vx,inputNormal->vy,inputNormal->vz};
+    double n[3]={g->vx,g->vy,g->vz}, u[3]={v->vx,v->vy,v->vz};
+    double yl=sqrt(y[0]*y[0]+y[1]*y[1]+y[2]*y[2]);
+    double nl=sqrt(n[0]*n[0]+n[1]*n[1]+n[2]*n[2]), dot, axis[3], cross[3], twice[3];
+    int i;
+    if(d->TimeNotInContactWithFloor<=0 || yl==0 || nl==0) return;
+    for(i=0;i<3;i++){y[i]/=yl;n[i]/=nl;}
+    dot=y[0]*n[0]+y[1]*n[1]+y[2]*n[2];
+    /* Jump separation and a deliberately reversed/ballistic basis are not
+     * supported corner turns. Avoid the antiparallel singularity. */
+    if(dot<=-0.99) return;
+    axis[0]=y[1]*n[2]-y[2]*n[1];axis[1]=y[2]*n[0]-y[0]*n[2];axis[2]=y[0]*n[1]-y[1]*n[0];
+    cross[0]=axis[1]*u[2]-axis[2]*u[1];cross[1]=axis[2]*u[0]-axis[0]*u[2];cross[2]=axis[0]*u[1]-axis[1]*u[0];
+    twice[0]=axis[1]*cross[2]-axis[2]*cross[1];twice[1]=axis[2]*cross[0]-axis[0]*cross[2];twice[2]=axis[0]*cross[1]-axis[1]*cross[0];
+    for(i=0;i<3;i++)u[i]+=cross[i]+twice[i]/(1+dot);
+    dot=u[0]*n[0]+u[1]*n[1]+u[2]*n[2];
+    for(i=0;i<3;i++)((int *)v)[i]=(int)lround(u[i]-n[i]*dot);
+}
+
+
+/* Modules and fixed scenery can have a strategy block without dynamics.
+ * Only a genuinely moving body must be excluded from wall-crawl support. */
+static int ClimbableSupport(const STRATEGYBLOCK *s)
+{
+    return !s || !s->DynPtr || s->DynPtr->IsStatic || s->DynPtr->OnlyCollideWithObjects;
+}
+
 static void ApplyGravity(DYNAMICSBLOCK *dynPtr)
 {
 	if (dynPtr->GravityOn)
@@ -1020,18 +1210,39 @@ static void ApplyGravity(DYNAMICSBLOCK *dynPtr)
 				
 				if(dynPtr->TimeNotInContactWithFloor!=-1)
 				{
-					while (reportPtr) /* while there is a valid report */
-					{
-			//			if (reportPtr->ObstacleSBPtr == 0)
-						{
-							averageNormal.vx -= reportPtr->ObstacleNormal.vx;
-							averageNormal.vy -= reportPtr->ObstacleNormal.vy;
-							averageNormal.vz -= reportPtr->ObstacleNormal.vz;
-							normalsFound++;
-						}								 
-						/* skip to next report */
-						reportPtr = reportPtr->NextCollisionReportPtr;
-					}
+                    while (reportPtr)
+                    {
+                        COLLISIONREPORT *earlier;
+                        int duplicate = 0;
+                        STRATEGYBLOCK *obstacle = reportPtr->ObstacleSBPtr;
+                        /* A moving creature is not a climbable surface. Static
+                         * objects and platforms still supply valid support. */
+                        if (ClimbableSupport(obstacle))
+                        {
+                            /* A tessellated wall must have the same weight as
+                             * one face, regardless of polygon/contact count. */
+                            for (earlier = dynPtr->CollisionReportPtr;
+                                 earlier != reportPtr;
+                                 earlier = earlier->NextCollisionReportPtr)
+                            {
+                                STRATEGYBLOCK *prior = earlier->ObstacleSBPtr;
+                                if (ClimbableSupport(prior) &&
+                                    DotProduct(&earlier->ObstacleNormal, &reportPtr->ObstacleNormal) > 65000)
+                                {
+                                    duplicate = 1;
+                                    break;
+                                }
+                            }
+                            if (!duplicate)
+                            {
+                                averageNormal.vx -= reportPtr->ObstacleNormal.vx;
+                                averageNormal.vy -= reportPtr->ObstacleNormal.vy;
+                                averageNormal.vz -= reportPtr->ObstacleNormal.vz;
+                                normalsFound++;
+                            }
+                        }
+                        reportPtr = reportPtr->NextCollisionReportPtr;
+                    }
 				}
 				if (normalsFound)
 				{
@@ -1040,8 +1251,8 @@ static void ApplyGravity(DYNAMICSBLOCK *dynPtr)
 		 		  //averageNormal.vz /= normalsFound;
 					if (averageNormal.vx==0 && averageNormal.vy==0 && averageNormal.vz==0)
 					{
-						// down boy down
-						averageNormal.vy = ONE_FIXED;
+						/* Opposing contacts must not suddenly force world gravity. */
+                        averageNormal = dynPtr->GravityDirection;
 					}
 					else
 					{
@@ -1081,14 +1292,13 @@ static void ApplyGravity(DYNAMICSBLOCK *dynPtr)
 						{
 							/* code to enable going round 270 degree corners */
 							#if 1
-							Normalise(&dynPtr->LinVelocity);
-							dynPtr->GravityDirection.vx -= (dynPtr->LinVelocity.vx*3)/4;
-							dynPtr->GravityDirection.vy -= (dynPtr->LinVelocity.vy*3)/4;
-							dynPtr->GravityDirection.vz -= (dynPtr->LinVelocity.vz*3)/4;
+							VECTORCH travel = dynPtr->LinVelocity;
+                            Normalise(&travel);
+                            dynPtr->GravityDirection.vx -= (travel.vx*3)/4;
+                            dynPtr->GravityDirection.vy -= (travel.vy*3)/4;
+                            dynPtr->GravityDirection.vz -= (travel.vz*3)/4;
 							Normalise(&dynPtr->GravityDirection);				 
-							dynPtr->LinVelocity.vx = 0;
-							dynPtr->LinVelocity.vy = 0;
-							dynPtr->LinVelocity.vz = 0;
+                            /* Keep commanded travel across the edge. */
 							#endif
 						}
 					}
@@ -1099,7 +1309,12 @@ static void ApplyGravity(DYNAMICSBLOCK *dynPtr)
 					}
 
 				}
-				AlignObjectToGravityDirection(dynPtr);
+				{
+                    /* LinVelocity was requested before visual/body alignment. */
+                    VECTORCH inputNormal={dynPtr->OrientMat.mat21,dynPtr->OrientMat.mat22,dynPtr->OrientMat.mat23};
+                    AlignObjectToGravityDirection(dynPtr);
+                    ProjectClimbingTravel(dynPtr,&inputNormal);
+                }
 			}
 			AddScaledVectorToVector(dynPtr->GravityDirection,AccelDueToGravity,dynPtr->LinImpulse);
 		}
@@ -1274,7 +1489,7 @@ static void VectorHomingForSurfaceAlign(VECTORCH *currentPtr, VECTORCH *targetPt
 	{
 		int a1 = NormalFrameTime*4;
 		if (a1>ONE_FIXED) a1=ONE_FIXED;
-		else if (a1<1024) a1=1024; 
+		else if (a1<0) a1=0; 
 
 		currentPtr->vx = currentPtr->vx+MUL_FIXED(perpendicularPtr->vx-currentPtr->vx, a1);
 		currentPtr->vy = currentPtr->vy+MUL_FIXED(perpendicularPtr->vy-currentPtr->vy, a1);
@@ -1296,7 +1511,7 @@ static void VectorHomingForSurfaceAlign(VECTORCH *currentPtr, VECTORCH *targetPt
   		int a1 = MUL_FIXED(cos*8,NormalFrameTime);
 //		int a1 = NormalFrameTime*4;
 		if (a1>ONE_FIXED) a1=ONE_FIXED;
-		else if (a1<1024) a1=1024; 
+		else if (a1<0) a1=0; 
 		
 		currentPtr->vx = currentPtr->vx+MUL_FIXED(targetPtr->vx-currentPtr->vx, a1);
 		currentPtr->vy = currentPtr->vy+MUL_FIXED(targetPtr->vy-currentPtr->vy, a1);
@@ -1332,7 +1547,7 @@ static int InterferenceAt(int lambda, DYNAMICSBLOCK *dynPtr);
 
 /* Move an object. At this stage, we have a list of the polygons in the
 environment with which the object the may collide. */									   
-static int MoveObject(STRATEGYBLOCK *sbPtr)
+static int MoveObject(STRATEGYBLOCK *sbPtr, int searchTolerance)
 {
 	DYNAMICSBLOCK *dynPtr = sbPtr->DynPtr;
 
@@ -1340,6 +1555,8 @@ static int MoveObject(STRATEGYBLOCK *sbPtr)
 	int highestBoundary = ONE_FIXED;
 	int testValue = ONE_FIXED;
     int hitSomething = 0;
+    const int actorSliding = ActorSlidingEnabled(dynPtr);
+    if (actorSliding) searchTolerance = 1;
 
     DirectionOfTravel = dynPtr->Displacement;
     Normalise(&DirectionOfTravel);
@@ -1378,7 +1595,7 @@ static int MoveObject(STRATEGYBLOCK *sbPtr)
 				lowestBoundary = testValue;
 				testValue = (lowestBoundary+highestBoundary)/2;
 			}
-			if (MUL_FIXED(highestBoundary-lowestBoundary,dynPtr->DistanceLeftToMove)<=16)
+			if (MUL_FIXED(highestBoundary-lowestBoundary,dynPtr->DistanceLeftToMove)<=searchTolerance)
 			{
 				InterferenceAt(highestBoundary,dynPtr);
 				break;
@@ -1531,6 +1748,9 @@ static int MoveObject(STRATEGYBLOCK *sbPtr)
 		}
 		/* test for a 'step' in front of object */
     	if ( (dynPtr->CanClimbStairs)
+        /* World-Y step assistance would lift a descending wall-climber
+         * back onto the ledge it is trying to wrap around. */
+          && (dynPtr->UseStandardGravity || dynPtr->GravityDirection.vy > NEARLYFLATFLOOR_THRESHOLD)
 		/* check to see that polygon is vertical */
 		  &&(polygonPtr->PolyNormal.vy>-250)
 		  &&(polygonPtr->PolyNormal.vy<250) )
@@ -1585,11 +1805,20 @@ static int MoveObject(STRATEGYBLOCK *sbPtr)
 			/* awkward problem here to do with non-exact normals */
 			{
 		   //     int magOfPerpVel = DotProduct(&obstacleNormal,&(dynPtr->Displacement));
-		        int magOfPerpVel = MUL_FIXED(66000,DotProduct(&obstacleNormal,&(dynPtr->Displacement)));
-		   		SubScaledVectorFromVector(obstacleNormal, magOfPerpVel, (dynPtr->Displacement));
+            if (actorSliding)
+                ClipActorVector(&dynPtr->Displacement, &obstacleNormal, 1.0);
+            else
+            {
+                int magOfPerpVel = MUL_FIXED(66000,DotProduct(&obstacleNormal,&dynPtr->Displacement));
+                SubScaledVectorFromVector(obstacleNormal, magOfPerpVel, dynPtr->Displacement);
+            }
 			}
 	
     		/* collision - elasticity */
+            if (actorSliding)
+                ClipActorVector(&dynPtr->LinImpulse, &obstacleNormal,
+                    1.0+(double)dynPtr->Elasticity/ONE_FIXED);
+            else
 			{
 				int magOfPerpImp =	MUL_FIXED
 									(
@@ -1705,7 +1934,7 @@ static int MoveObject(STRATEGYBLOCK *sbPtr)
 			}
 		}
 		dynPtr->DistanceLeftToMove = Magnitude(&dynPtr->Displacement);    
-		if (dynPtr->DistanceLeftToMove<=16)
+		if (dynPtr->DistanceLeftToMove<=(actorSliding ? 0 : 16))
 		{
 			dynPtr->DistanceLeftToMove = 0;
 		}
@@ -1714,7 +1943,7 @@ static int MoveObject(STRATEGYBLOCK *sbPtr)
     else
     {
 		dynPtr->DistanceLeftToMove = Magnitude(&dynPtr->Displacement);    
-		if (dynPtr->DistanceLeftToMove<=16)
+		if (dynPtr->DistanceLeftToMove<=(actorSliding ? 0 : 16))
 		{
 			dynPtr->DistanceLeftToMove = 0;
 		}
@@ -1723,9 +1952,130 @@ static int MoveObject(STRATEGYBLOCK *sbPtr)
 	
 }
 
+/* Touching only the edge of a face is not penetrating that face.
+ * In particular, an AABB wrapping onto a wall must be allowed to descend
+ * once its footprint has left the top face, even at sub-step speeds.
+ * The two-millimetre edge allowance covers integer sweep rounding only. */
+static int HasTangentialInterior(struct ColPolyTag *p, VECTORCH *box)
+{
+    int axis, i;
+    for (axis = 0; axis < 3; ++axis)
+    {
+        int normal = ((int *)&p->PolyNormal)[axis];
+        int minimum, maximum;
+        if (normal <= -250 || normal >= 250) continue;
+        minimum = maximum = ((int *)&p->PolyPoint[0])[axis];
+        for (i = 1; i < p->NumberOfVertices; ++i)
+        {
+            int value = ((int *)&p->PolyPoint[i])[axis];
+            if (value < minimum) minimum = value;
+            if (value > maximum) maximum = value;
+        }
+        if (maximum <= ((int *)&box[7])[axis]+2 ||
+            minimum >= ((int *)&box[0])[axis]-2) return 0;
+    }
+    return 1;
+}
+
+
+/* Convex triangles/quads clipped against an axis-aligned actor box.
+ * Relative coordinates keep distant modules as precise as the origin. Legacy
+ * edge/box tests rounded intersection parameters before testing other axes,
+ * making neighbouring sloped faces intermittently overlap or leave gaps. */
+static int ActorPolygonOverlap(const struct ColPolyTag *p, const DYNAMICSBLOCK *d, int lambda)
+{
+    double a[16][3], b[16][3], origin[3], extent[3];
+    int axis, side, i, j, count=p->NumberOfVertices;
+    if (count<3 || count>4) return 0;
+    for (axis=0; axis<3; ++axis)
+    {
+        origin[axis]=((const int *)&d->ObjectVertices[7])[axis]
+            + (double)((const int *)&d->Displacement)[axis]*lambda/ONE_FIXED;
+        extent[axis]=(double)((const int *)&d->ObjectVertices[0])[axis]
+            - ((const int *)&d->ObjectVertices[7])[axis];
+        for (i=0; i<count; ++i) a[i][axis]=((const int *)&p->PolyPoint[i])[axis]-origin[axis];
+    }
+    for (axis=0; axis<3; ++axis) for (side=0; side<2; ++side)
+    {
+        int out=0;
+        double limit=side ? extent[axis] : 0.0;
+        for (i=0; i<count; ++i)
+        {
+            int next=(i+1)%count;
+            double da=side ? limit-a[i][axis] : a[i][axis]-limit;
+            double db=side ? limit-a[next][axis] : a[next][axis]-limit;
+            if (da>=0.0) { if(out>=16) return 1; for (j=0;j<3;++j) b[out][j]=a[i][j]; ++out; }
+            if ((da<0.0)!=(db<0.0))
+            {
+                double fraction=da/(da-db);
+                if(out>=16) return 1;
+                for (j=0;j<3;++j) b[out][j]=a[i][j]+fraction*(a[next][j]-a[i][j]);
+                ++out;
+            }
+        }
+        if (out<3) return 0;
+        count=out;
+        for (i=0;i<count;++i) for(j=0;j<3;++j) a[i][j]=b[i][j];
+    }
+    /* A shared edge/point alone must not obstruct tangential travel. */
+    {
+        double area[3]={0,0,0};
+        for (i=1;i<count-1;++i)
+        {
+            double u[3],v[3];
+            for (j=0;j<3;++j) { u[j]=a[i][j]-a[0][j]; v[j]=a[i+1][j]-a[0][j]; }
+            area[0]+=u[1]*v[2]-u[2]*v[1];
+            area[1]+=u[2]*v[0]-u[0]*v[2];
+            area[2]+=u[0]*v[1]-u[1]*v[0];
+        }
+        return area[0]*area[0]+area[1]*area[1]+area[2]*area[2]>1e-12;
+    }
+}
+
+/* Grounded walking uses a compact sole on horizontal treads. The full body
+ * box must still hit walls/risers, but its trailing corner must not hold the
+ * player over the preceding tread until the entire 900mm box has cleared it.
+ * Lifts, jumps, free fall, crawl contacts, slopes and step-up retain their box. */
+static int ActorCollisionOverlap(const struct ColPolyTag *p,const DYNAMICSBLOCK *d,int lambda)
+{
+    if(d==DescendingFootprintBody && d->Displacement.vy>0 &&
+        p->PolyNormal.vx==0 && p->PolyNormal.vy==-ONE_FIXED && p->PolyNormal.vz==0){
+        DYNAMICSBLOCK sole=*d;
+        int axis,j;
+        double leading=0;
+        if(d->Displacement.vx==0 && d->Displacement.vz==0)return ActorPolygonOverlap(p,d,lambda);
+        /* Keep the original leading support during ascent: a newly climbed
+         * tread can support the front of the box before its centre crosses.
+         * Only a tread wholly behind travel uses the compact trailing sole. */
+        for(axis=0;axis<3;axis+=2){
+            int lo=((const int *)&p->PolyPoint[0])[axis],hi=lo;
+            int bmin=((const int *)&d->ObjectVertices[7])[axis],bmax=((const int *)&d->ObjectVertices[0])[axis];
+            int delta=((const int *)&d->Displacement)[axis];
+            for(j=1;j<p->NumberOfVertices;j++){
+                int value=((const int *)&p->PolyPoint[j])[axis];if(value<lo)lo=value;if(value>hi)hi=value;
+            }
+            if(lo<bmin)lo=bmin;if(hi>bmax)hi=bmax;
+            if(hi<lo)return ActorPolygonOverlap(p,d,lambda);
+            leading+=((delta>=0?hi:lo)-((double)bmin+bmax)*.5)*delta;
+        }
+        if(leading>0)return ActorPolygonOverlap(p,d,lambda);
+        if(p->PolyPoint[0].vy<d->ObjectVertices[0].vy-2)return 0;
+        for(axis=0;axis<3;axis+=2){
+            int lo=((const int *)&d->ObjectVertices[7])[axis],hi=((const int *)&d->ObjectVertices[0])[axis];
+            int radius=(hi-lo)/2,center=lo+radius;
+            if(radius>100)radius=100;
+            ((int *)&sole.ObjectVertices[7])[axis]=center-radius;
+            ((int *)&sole.ObjectVertices[0])[axis]=center+radius;
+        }
+        return ActorPolygonOverlap(p,&sole,lambda);
+    }
+    return ActorPolygonOverlap(p,d,lambda);
+}
+
 static int InterferenceAt(int lambda, DYNAMICSBLOCK *dynPtr)
 {
     VECTORCH objectVertices[8];
+    const int actorSliding = ActorSlidingEnabled(dynPtr);
     int polysLeft;
     struct ColPolyTag *polyPtr;
     
@@ -1756,8 +2106,15 @@ static int InterferenceAt(int lambda, DYNAMICSBLOCK *dynPtr)
     while(polysLeft)
 	{
 		{
-			if(DotProduct(&DirectionOfTravel,&polyPtr->PolyNormal)<0)
-			if (DoesPolygonIntersectNRBB(polyPtr,objectVertices))
+			if (actorSliding
+                ? ((double)dynPtr->Displacement.vx*polyPtr->PolyNormal.vx
+                 + (double)dynPtr->Displacement.vy*polyPtr->PolyNormal.vy
+                 + (double)dynPtr->Displacement.vz*polyPtr->PolyNormal.vz < 0.0)
+                : DotProduct(&DirectionOfTravel,&polyPtr->PolyNormal)<0)
+			if ((!actorSliding || dynPtr->UseStandardGravity ||
+                 dynPtr->ToppleForce != TOPPLE_FORCE_ALIEN || HasTangentialInterior(polyPtr,objectVertices))
+                && (actorSliding ? ActorCollisionOverlap(polyPtr,dynPtr,lambda)
+                    : DoesPolygonIntersectNRBB(polyPtr,objectVertices)))
 			{
 				InterferencePolygons[NumberOfInterferencePolygons++] = *polyPtr;
 				if (NumberOfInterferencePolygons==MAX_NUMBER_OF_INTERFERENCE_POLYGONS) break;
@@ -2261,6 +2618,120 @@ static int SteppingUpIsValid(STRATEGYBLOCK *sbPtr)
 
 }   
 
+
+/* Only a crawl supported in the previous frame can recover a convex edge.
+ * No persistent contact pointers, attraction across gaps, or airborne snapping. */
+static int CanFollowClimbingCorner(const DYNAMICSBLOCK *d)
+{
+    return ActorSlidingEnabled(d) && d->GravityOn && !d->UseStandardGravity &&
+        d->ToppleForce==TOPPLE_FORCE_ALIEN && d->IsInContactWithFloor &&
+        !d->UseDisplacement && d->TimeNotInContactWithFloor>0;
+}
+static void FollowClimbingCorner(STRATEGYBLOCK *s,const VECTORCH *previousGravity)
+{
+    DYNAMICSBLOCK *d=s->DynPtr;
+    VECTORCH travel={d->Position.vx-d->PrevPosition.vx,d->Position.vy-d->PrevPosition.vy,d->Position.vz-d->PrevPosition.vz};
+    VECTORCH saved=d->Displacement, normal={0,0,0};
+    int distance=d->DistanceLeftToMove,i;
+    double length=Magnitude(&travel),best=1e30;
+    if(d->IsInContactWithFloor || length==0 || length>900 || d->TimeNotInContactWithFloor<=0) return;
+    /* Search back over this frame's travel, with only a normal contact skin.
+     * The new face must already touch/intersect the previous body footprint. */
+    d->Displacement=(VECTORCH){-travel.vx+(int)lround(previousGravity->vx*11.0/ONE_FIXED),
+        -travel.vy+(int)lround(previousGravity->vy*11.0/ONE_FIXED),
+        -travel.vz+(int)lround(previousGravity->vz*11.0/ONE_FIXED)};
+    d->DistanceLeftToMove=Magnitude(&d->Displacement);
+    FindLandscapePolygonsInObjectsPath(s);
+    for(i=0;i<NumberOfCollisionPolys;i++){
+        struct ColPolyTag *p=&CollisionPolysArray[i];VECTORCH n=p->PolyNormal;
+        double ndot=(double)n.vx*previousGravity->vx+(double)n.vy*previousGravity->vy+(double)n.vz*previousGravity->vz;
+        double outward=((double)n.vx*travel.vx+(double)n.vy*travel.vy+(double)n.vz*travel.vz)/ONE_FIXED;
+        double gap=((double)n.vx*((n.vx>=0?d->ObjectVertices[7].vx:d->ObjectVertices[0].vx)-p->PolyPoint[0].vx)
+            +(double)n.vy*((n.vy>=0?d->ObjectVertices[7].vy:d->ObjectVertices[0].vy)-p->PolyPoint[0].vy)
+            +(double)n.vz*((n.vz>=0?d->ObjectVertices[7].vz:d->ObjectVertices[0].vz)-p->PolyPoint[0].vz))/ONE_FIXED;
+        if(fabs(ndot)>0.5*ONE_FIXED*ONE_FIXED || outward<=0 || gap< -2 || gap-outward>11)continue;
+        if(!ActorPolygonOverlap(p,d,ONE_FIXED))continue;
+        if(gap<best){best=gap;normal=n;}
+    }
+    if(best<1e30){
+        /* Edge-only tolerance may leave the box up to 2mm past the new
+         * plane before its interior exists below the ledge. Separate that
+         * rounding sliver first so the inward sweep cannot catch the old top. */
+        if(best<2){
+            double separation=2-best;
+            d->Displacement=(VECTORCH){(int)lround(normal.vx*separation/ONE_FIXED),
+                (int)lround(normal.vy*separation/ONE_FIXED),(int)lround(normal.vz*separation/ONE_FIXED)};
+            d->DistanceLeftToMove=Magnitude(&d->Displacement);
+            FindLandscapePolygonsInObjectsPath(s);
+            if(InterferenceAt(ONE_FIXED,d)){d->Displacement=saved;d->DistanceLeftToMove=distance;return;}
+            MoveObject(s,1);best=2;
+        }
+        d->Displacement=(VECTORCH){(int)lround(-normal.vx*fmax(1,best+1)/ONE_FIXED+previousGravity->vx*11.0/ONE_FIXED),
+            (int)lround(-normal.vy*fmax(1,best+1)/ONE_FIXED+previousGravity->vy*11.0/ONE_FIXED),
+            (int)lround(-normal.vz*fmax(1,best+1)/ONE_FIXED+previousGravity->vz*11.0/ONE_FIXED)};
+        d->DistanceLeftToMove=Magnitude(&d->Displacement);
+        FindLandscapePolygonsInObjectsPath(s);
+        if(InterferenceAt(ONE_FIXED,d)){
+            COLLISIONREPORT *report;
+            VECTORCH oldGravity=d->GravityDirection;
+            d->GravityDirection=(VECTORCH){-normal.vx,-normal.vy,-normal.vz};
+            MoveObject(s,1);
+            d->GravityDirection=oldGravity;
+            for(report=d->CollisionReportPtr;report;report=report->NextCollisionReportPtr){
+                if(ClimbableSupport(report->ObstacleSBPtr) && DotProduct(&report->ObstacleNormal,&normal)>60000){
+                    d->GravityDirection=(VECTORCH){-normal.vx,-normal.vy,-normal.vz};
+                    d->IsInContactWithFloor=d->IsInContactWithNearlyFlatFloor=1;
+                    break;
+                }
+            }
+        }
+    }
+    d->Displacement=saved;d->DistanceLeftToMove=distance;
+}
+
+/* Small stair drops retain support, rather than alternating free-fall and
+ * landing every tread. This is bounded by the same height as step-up and
+ * never applies to jumping, airborne actors, wall crawling or lift passengers. */
+static int CanFollowDescendingStep(const DYNAMICSBLOCK *d)
+{
+    const COLLISIONREPORT *c;
+    if (!ActorSlidingEnabled(d) || !d->GravityOn || !PlanarGravity || d->UseDisplacement
+        || !d->IsInContactWithFloor || (!d->UseStandardGravity && d->GravityDirection.vy<=60000)
+        || d->TimeNotInContactWithFloor==-1 || d->LinVelocity.vy+d->LinImpulse.vy<0) return 0;
+    for(c=d->CollisionReportPtr;c;c=c->NextCollisionReportPtr)
+        if(c->ObstacleSBPtr && c->ObstacleSBPtr->I_SBtype==I_BehaviourPlatform) return 0;
+    return 1;
+}
+static void FollowDescendingStep(STRATEGYBLOCK *sbPtr)
+{
+    DYNAMICSBLOCK *d=sbPtr->DynPtr;
+    VECTORCH savedDisplacement=d->Displacement;
+    int savedDistance=d->DistanceLeftToMove, i, out=0;
+    if (d->IsInContactWithFloor || d->LinVelocity.vy+d->LinImpulse.vy<0
+        || (d->Position.vx==d->PrevPosition.vx && d->Position.vz==d->PrevPosition.vz)) return;
+    d->Displacement=(VECTORCH){0,MAXIMUM_STEP_HEIGHT,0};
+    d->DistanceLeftToMove=MAXIMUM_STEP_HEIGHT;
+    FindLandscapePolygonsInObjectsPath(sbPtr);
+    /* Moving characters must not become a stair. Landscape query already
+     * includes solid scenery and platforms, with their current transforms. */
+    for (i=0;i<NumberOfCollisionPolys;++i)
+    {
+        struct ColPolyTag *p=&CollisionPolysArray[i];
+        VECTORCH n=p->PolyNormal;
+        double gap;
+        if (n.vy>=-NEARLYFLATFLOOR_THRESHOLD) continue;
+        gap=(double)n.vx*((n.vx>=0?d->ObjectVertices[7].vx:d->ObjectVertices[0].vx)-p->PolyPoint[0].vx)
+            +(double)n.vy*(d->ObjectVertices[0].vy-p->PolyPoint[0].vy)
+            +(double)n.vz*((n.vz>=0?d->ObjectVertices[7].vz:d->ObjectVertices[0].vz)-p->PolyPoint[0].vz);
+        if (gap<0 || gap>-(double)n.vy*MAXIMUM_STEP_HEIGHT) continue;
+        CollisionPolysArray[out++]=*p;
+    }
+    NumberOfCollisionPolys=out;
+    if (InterferenceAt(ONE_FIXED,d)) MoveObject(sbPtr,1);
+    d->Displacement=savedDisplacement;
+    d->DistanceLeftToMove=savedDistance;
+}
+
 static void FindLandscapePolygonsInObjectsPath(STRATEGYBLOCK *sbPtr)
 {
 	extern int NumActiveBlocks;
@@ -2352,6 +2823,9 @@ static void FindObjectPolygonsInObjectsPath(STRATEGYBLOCK *sbPtr)
 				   ||((sbPtr->SBdptr == Player) && obstaclePtr->DynPtr->IgnoreThePlayer) )
 					continue;
 
+                /* Allied marines collect with the same intangible pickup
+                   volumes as the human; terrain/props/actors still collide. */
+                if(obstaclePtr->DynPtr->IsPickupObject && sbPtr->I_SBtype==I_BehaviourMarine && NPCSupportCanCommand(sbPtr))continue;
 				if( (sbPtr->SBdptr==Player)
 				  &&( (obstaclePtr->I_SBtype == I_BehaviourHierarchicalFragment)
 				    ||(obstaclePtr->DynPtr->IsPickupObject))
@@ -2571,6 +3045,7 @@ static void FindObjectsToRelocateAgainst(STRATEGYBLOCK *sbPtr)
 			if (obstaclePtr->DynPtr->OnlyCollideWithEnvironment)
 				continue;
 
+            if(obstaclePtr->DynPtr->IsPickupObject && sbPtr->I_SBtype==I_BehaviourMarine && NPCSupportCanCommand(sbPtr))continue;
 			/* don't relocate against ammo and stuff */
 			if (sbPtr->SBdptr==Player)
 			{
@@ -2661,8 +3136,10 @@ static void MakeStaticBoundingBoxForNRBB(STRATEGYBLOCK *sbPtr)
 	SBBMaxZ = dynPtr->ObjectVertices[0].vz + COLLISION_GRANULARITY*16;
 }																  
 
+#include "particle_mesh_cache.inc"
 static void TestShapeWithDynamicBoundingBox(DISPLAYBLOCK *objectPtr, DYNAMICSBLOCK *mainDynPtr)
 {
+ if(ParticleMeshAppend(objectPtr,mainDynPtr->IgnoresNotVisPolys?2:0))return;
 	int numberOfItems;
     int needToRotate = 0;
 
@@ -2846,6 +3323,7 @@ static void TestShapeWithDynamicBoundingBox(DISPLAYBLOCK *objectPtr, DYNAMICSBLO
 }	
 static void TestShapeWithParticlesDynamicBoundingBox(DISPLAYBLOCK *objectPtr)
 {
+ if(ParticleMeshAppend(objectPtr,1))return;
 	int numberOfItems;
     int needToRotate = 0;
 
@@ -5766,7 +6244,13 @@ static signed int DistanceMovedBeforeParticleHitsPolygon(PARTICLE *particlePtr, 
 * PARTICLE DYNAMICS *
 ****************KJL*/
 
-int ParticleDynamics(PARTICLE *particlePtr, VECTORCH *obstacleNormalPtr, int *moduleIndexPtr)
+extern NPC_DAMAGE_SOURCE ParticleSupportOwner(PARTICLE *particle);
+static int ParticleDynamicsBody(PARTICLE *particlePtr,VECTORCH *obstacleNormalPtr,int *moduleIndexPtr);
+int ParticleDynamics(PARTICLE *particlePtr,VECTORCH *obstacleNormalPtr,int *moduleIndexPtr){
+ NPC_DAMAGE_SOURCE previous=NPCSupportPushOwner(ParticleSupportOwner(particlePtr));
+ int result=ParticleDynamicsBody(particlePtr,obstacleNormalPtr,moduleIndexPtr);NPCSupportPopSource(previous);return result;
+}
+static int ParticleDynamicsBody(PARTICLE *particlePtr, VECTORCH *obstacleNormalPtr, int *moduleIndexPtr)
 {
 	VECTORCH prevPosition = particlePtr->Position;
 	DISPLAYBLOCK *hitModule = 0;
@@ -6016,13 +6500,13 @@ int ParticleDynamics(PARTICLE *particlePtr, VECTORCH *obstacleNormalPtr, int *mo
 									//just add up the number of particles that have hit the ghost 
 									//so the damage message can be sent in one block
 									ghostData->FlameHitCount++;
-									sbPtr->SBDamageBlock.IsOnFire = 1;
+									NPCSupportIgnite(sbPtr);sbPtr->SBDamageBlock.IsOnFire = 1;
 								}
 							}
 							else
 							{
 								CauseDamageToObject(sbPtr,&TemplateAmmo[AMMO_FLAMETHROWER].MaxDamage[AvP.Difficulty], ONE_FIXED/400,NULL);
-								sbPtr->SBDamageBlock.IsOnFire = 1;
+								NPCSupportIgnite(sbPtr);sbPtr->SBDamageBlock.IsOnFire = 1;
 							}
 						}
 					}

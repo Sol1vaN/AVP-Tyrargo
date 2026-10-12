@@ -1,4 +1,4 @@
-# Aliens vs Predator - https://github.com/atsb/NakedAVP
+# AVP: Tyrargo - direct fork of NakedAVP 1.2.3 (https://github.com/atsb/NakedAVP)
 CMAKE_MINIMUM_REQUIRED(VERSION 3.15)
 
 # default to Release
@@ -8,7 +8,16 @@ IF(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     SET_PROPERTY(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 ENDIF(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 
-PROJECT(avp)
+FILE(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/tyrargo_version.h" TYRARGO_VERSION_HEADER)
+FOREACH(PART MAJOR MINOR PATCH RC)
+    STRING(REGEX MATCH "#define TYRARGO_VERSION_${PART} ([0-9]+)" MATCHED "${TYRARGO_VERSION_HEADER}")
+    IF(NOT MATCHED)
+        MESSAGE(FATAL_ERROR "Missing Tyrargo version component ${PART}")
+    ENDIF()
+    SET(TYRARGO_${PART} "${CMAKE_MATCH_1}")
+ENDFOREACH()
+PROJECT(Tyrargo VERSION ${TYRARGO_MAJOR}.${TYRARGO_MINOR}.${TYRARGO_PATCH}.${TYRARGO_RC} LANGUAGES C CXX)
+SET_PROPERTY(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/tyrargo_version.h")
 
 # required dependencies
 INCLUDE(FindOpenGLES2.cmake)
@@ -67,6 +76,7 @@ IF(NOT OPENAL_FOUND)
 ENDIF(NOT OPENAL_FOUND)
 
 # required source files
+LIST(APPEND source src/water_effect.c src/water_render.c)
 LIST(APPEND source src/files.c)
 LIST(APPEND source src/winapi.c)
 LIST(APPEND source src/stubs.c)
@@ -75,6 +85,14 @@ LIST(APPEND source src/mathline.c)
 LIST(APPEND source src/net.c)
 LIST(APPEND source src/frustum.c)
 LIST(APPEND source src/kshape.c)
+LIST(APPEND source src/render_geometry.c src/vertex_lights.c)
+LIST(APPEND source src/viewmodel.c)
+LIST(APPEND source src/projection.c)
+LIST(APPEND source src/playeryaw.c)
+LIST(APPEND source src/dev_viewmodel.c)
+LIST(APPEND source src/fidget_timer.c)
+LIST(APPEND source src/motion_params.c
+    src/camera_motion.c src/camera_motion_game.c src/hud_motion.c src/shake_params.c)
 LIST(APPEND source src/map.c)
 LIST(APPEND source src/maths.c)
 LIST(APPEND source src/md5.c)
@@ -108,6 +126,7 @@ LIST(APPEND source src/avp/bh_light.c)
 LIST(APPEND source src/avp/bh_lnksw.c)
 LIST(APPEND source src/avp/bh_ltfx.c)
 LIST(APPEND source src/avp/bh_marin.c)
+LIST(APPEND source src/avp/npc_support.c src/avp/npc_local_nav.c)
 LIST(APPEND source src/avp/bh_mission.c)
 LIST(APPEND source src/avp/bh_near.c)
 LIST(APPEND source src/avp/bh_pargen.c)
@@ -160,7 +179,8 @@ LIST(APPEND source src/avp/paintball.c)
 LIST(APPEND source src/avp/particle.c)
 LIST(APPEND source src/avp/pfarlocs.c)
 LIST(APPEND source src/avp/pheromon.c)
-LIST(APPEND source src/avp/player.c)
+LIST(APPEND source src/avp/player.c src/campaign_state.c src/molecular_acid.c
+    src/optimized_ammo.c)
 LIST(APPEND source src/avp/pmove.c)
 LIST(APPEND source src/avp/psnd.c)
 LIST(APPEND source src/avp/psndproj.c)
@@ -283,11 +303,35 @@ LIST(APPEND source src/win95/wpchunk.cpp)
 LIST(APPEND source src/win95/zsp.cpp)
 LIST(APPEND source src/opengl.c)
 LIST(APPEND source src/oglfunc.c)
+LIST(APPEND source src/crt_filter.c src/fire_batch.c)
 LIST(APPEND source src/fmv.c)
-LIST(APPEND source src/openal.c)
+LIST(APPEND source src/fmv_backend.cpp)
+LIST(APPEND source src/third_party/libsmacker/smacker.c)
+LIST(APPEND source src/third_party/libbinkdec/src/BinkAudio.cpp)
+LIST(APPEND source src/third_party/libbinkdec/src/BinkDecoder.cpp)
+LIST(APPEND source src/third_party/libbinkdec/src/BinkVideo.cpp)
+LIST(APPEND source src/third_party/libbinkdec/src/BitReader.cpp)
+LIST(APPEND source src/third_party/libbinkdec/src/FileStream.cpp)
+LIST(APPEND source src/third_party/libbinkdec/src/HuffmanVLC.cpp)
+LIST(APPEND source src/third_party/libbinkdec/src/LogError.cpp)
+LIST(APPEND source src/third_party/libbinkdec/src/Util.cpp)
+LIST(APPEND source src/third_party/libbinkdec/src/avfft.c)
+LIST(APPEND source src/third_party/libbinkdec/src/dct.c)
+LIST(APPEND source src/third_party/libbinkdec/src/dct32.c)
+LIST(APPEND source src/third_party/libbinkdec/src/fft.c)
+LIST(APPEND source src/third_party/libbinkdec/src/mdct.c)
+LIST(APPEND source src/third_party/libbinkdec/src/rdft.c)
+LIST(APPEND source src/openal.c src/audio_environment.c src/audio_latency.c src/event_latency.c)
 LIST(APPEND source src/cdplayer.c)
 LIST(APPEND source src/menus.c)
-LIST(APPEND source src/main.c)
+LIST(APPEND source src/main.c src/screenshot_image.c)
+# stb_image_write documents strict-aliasing limitations. Isolate this flag.
+IF(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    SET_SOURCE_FILES_PROPERTIES(src/screenshot_image.c PROPERTIES COMPILE_OPTIONS "-fno-strict-aliasing")
+ENDIF()
+LIST(APPEND source avp_resources.rc)
+# windres does not scan included version headers with this generator.
+SET_SOURCE_FILES_PROPERTIES(avp_resources.rc PROPERTIES OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/tyrargo_version.h")
 
 ### build all source as C++
 ### (not normally used)
@@ -302,8 +346,11 @@ INCLUDE_DIRECTORIES(${include})
 
 # manually include src/include
 INCLUDE_DIRECTORIES(src/include)
+INCLUDE_DIRECTORIES(src/third_party/libsmacker)
+INCLUDE_DIRECTORIES(src/third_party/libbinkdec/include)
 
-ADD_EXECUTABLE(avp ${source})
+ADD_EXECUTABLE(avpt WIN32 ${source})
+SET_TARGET_PROPERTIES(avpt PROPERTIES OUTPUT_NAME avpt)
 
 # required dependencies
 INCLUDE_DIRECTORIES(${SDL3_INCLUDE})
@@ -320,15 +367,21 @@ ENDIF(OPENGL_TYPE STREQUAL "OPENGLES2")
 
 INCLUDE_DIRECTORIES(${OPENAL_INCLUDE_DIR})
 
-TARGET_LINK_LIBRARIES(avp ${SDL3_LIBRARY})
+TARGET_LINK_LIBRARIES(avpt ${SDL3_LIBRARY})
 
 IF(OPENGL_TYPE STREQUAL "OPENGL")
-  TARGET_LINK_LIBRARIES(avp ${OPENGL_gl_LIBRARY})
+  TARGET_LINK_LIBRARIES(avpt ${OPENGL_gl_LIBRARY})
 ENDIF(OPENGL_TYPE STREQUAL "OPENGL")
 
 IF(OPENGL_TYPE STREQUAL "OPENGLES2")
-  TARGET_LINK_LIBRARIES(avp ${OPENGLES_gl_LIBRARY})
-  TARGET_LINK_LIBRARIES(avp ${EGL_LIBRARIES})
+  TARGET_LINK_LIBRARIES(avpt ${OPENGLES_gl_LIBRARY})
+  TARGET_LINK_LIBRARIES(avpt ${EGL_LIBRARIES})
 ENDIF(OPENGL_TYPE STREQUAL "OPENGLES2")
 
-TARGET_LINK_LIBRARIES(avp ${OPENAL_LIBRARY})
+TARGET_LINK_LIBRARIES(avpt ${OPENAL_LIBRARY})
+
+# Native Windows APIs used by files.c and win95/io.c.
+IF(WIN32)
+  TARGET_LINK_LIBRARIES(avpt shlwapi winmm)
+ENDIF(WIN32)
+

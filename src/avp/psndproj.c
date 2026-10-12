@@ -20,6 +20,7 @@
 #include "ffstdio.h"
 #include "db.h"
 #include "dxlog.h"
+#include "audio_latency.h"
 
 #define PRED_PISTOL_PITCH_CHANGE 300
 
@@ -270,13 +271,10 @@ void DoPlayerSounds(void)
 				}
 			}
    		else if (weaponPtr->CurrentState == WEAPONSTATE_FIRING_SECONDARY)
-   		{
-   			if (weaponHandle == SOUND_NOACTIVEINDEX)
-   			{
-     			Sound_Play(SID_NADEFIRE,"h");
-				playerNoise=1;
-   			}
-	 		}
+        {
+            /* The committed grenade callback emits its own one-shot. Keep
+             * this state independent of the existing primary loop. */
+        }
    		else
 			{
 				if(weaponHandle != SOUND_NOACTIVEINDEX)
@@ -848,58 +846,59 @@ void PlayCudgelSound(void) {
 char * SecondSoundDir = 0;
 static const char * FirstSoundDir = "SOUND\\";
 
+static int FindAndLoadWavFileInternal(int soundNum,char* wavFileName)
+{
+ char sound_name[1024];
+ int n=snprintf(sound_name,sizeof(sound_name),"%s%s",FirstSoundDir,wavFileName);
+ if(n<0 || n>=(int)sizeof(sound_name))return 0;
+#if LOAD_SOUND_FROM_FAST_FILE
+ {
+  size_t nLen;
+  if(ffreadbuf(sound_name,&nLen))return LoadWavFromFastFile(soundNum,sound_name);
+ }
+#endif
+#if !LOAD_SOUND_FROM_FAST_FILE_ONLY
+ /* LoadWavFile already opens the file: avoid a second filesystem lookup.
+  * Missing optional sounds must never call fclose(NULL). */
+ if(LoadWavFile(soundNum,sound_name))return 1;
+ if(SecondSoundDir){
+  n=snprintf(sound_name,sizeof(sound_name),"%s%s",SecondSoundDir,wavFileName);
+  if(n>=0 && n<(int)sizeof(sound_name))return LoadWavFile(soundNum,sound_name);
+ }
+#endif
+ return 0;
+}
 int FindAndLoadWavFile(int soundNum,char* wavFileName)
 {
-	static char sound_name[200];
-	sprintf (sound_name, "%s%s", FirstSoundDir,wavFileName);
-
-#if LOAD_SOUND_FROM_FAST_FILE
-	//first look in fast file
-	{
-		size_t nLen;
-		if(ffreadbuf(sound_name,&nLen))
-		{
-			return LoadWavFromFastFile(soundNum,sound_name);
-		}
-	}
-#endif
-
-#if !LOAD_SOUND_FROM_FAST_FILE_ONLY
-	//look for sound locally
-	{
-	
-		{
-			//check to see if file exists locally first
-			FILE* wavFile = OpenGameFile(sound_name, FILEMODE_READONLY, FILETYPE_PERM);
-			if(!wavFile && SecondSoundDir)
-			{
-				//look for sound over network
-				sprintf (sound_name, "%s%s", SecondSoundDir,wavFileName);
-
-				wavFile = OpenGameFile(sound_name, FILEMODE_READONLY, FILETYPE_PERM);
-				if(!wavFile) {
-					LOGDXFMT(("Failed to find %s\n",wavFileName));	
-					return 0;
-				}
-
-			}
-			fclose(wavFile);
-		}
-
-		return LoadWavFile(soundNum,sound_name) ;
-	}
-#else
-	LOGDXFMT(("Failed to find %s\n",wavFileName));	
-	return 0;
-#endif
+ unsigned long long start=AudioLatencyNow();
+ int result=FindAndLoadWavFileInternal(soundNum,wavFileName);
+ AudioLatencyRecord(start,"asset load",soundNum,wavFileName);
+ return result;
 }
 
-
-
-/* Patrick 5/6/97 -------------------------------------------------------------
-  Sound data loaders 
-  ----------------------------------------------------------------------------*/
-
+/* Decode/upload optional UI cues at the loading boundary, never from input.
+ * Missing mod assets remain silent rather than retrying disk/archive I/O. */
+static void PreloadSmartJetpackSounds(void)
+{
+ int enabled;
+ for(enabled=0;enabled<2;enabled++){
+  SOUNDINDEX idx=enabled?SID_SMART_JETPACK_TOGGLE_ON:SID_SMART_JETPACK_TOGGLE_OFF;
+  char *name=enabled?"Npc\\Marine\\MarSqueek2F.wav":"mission pack env\\hadleyshope\\squeak.wav";
+  if(GameSounds[idx].loaded || !FindAndLoadWavFile(idx,name))continue;
+  GameSounds[idx].loaded=1;
+  GameSounds[idx].activeInstances=0;
+  GameSounds[idx].volume=VOLUME_DEFAULT;
+  GameSounds[idx].pitch=PITCH_DEFAULTPLAT;
+  InitialiseBaseFrequency(idx);
+ }
+}
+int PlaySmartJetpackToggleSound(int enabled)
+{
+ SOUNDINDEX idx=enabled?SID_SMART_JETPACK_TOGGLE_ON:SID_SMART_JETPACK_TOGGLE_OFF;
+ if(!GameSounds[idx].loaded)return 0;
+ Sound_Play(idx,"h");
+ return 1;
+}
 extern unsigned char *ExtractWavFile(int soundIndex, unsigned char *bufferPtr);
 void *LoadRebSndFile(char *filename)
 {
@@ -1004,4 +1003,6 @@ void LoadSounds(char *soundDirectory)
 	}
 
 	ReleaseRebSndFile(rebSndBuffer);
+	PreloadSmartJetpackSounds();
+	AudioLatencyFlush();
 }

@@ -1,3 +1,4 @@
+#include "molecular_acid.h"
 /* KJL 11:24:31 03/21/97 - quick cheat mode stuff */
 #include "3dc.h"
 #include "module.h"
@@ -144,7 +145,17 @@ void GiveAllWeaponsCheat(void)
 		
 			if (wdPtr->Possessed==-1) continue; /* This weapon not allowed! */
 
-			if (wdPtr->WeaponIDNumber==WEAPON_PRED_RIFLE) {
+			if (wdPtr->WeaponIDNumber==WEAPON_PRED_PISTOL) {
+                /* Match StartingEquipment.predator_pistol: these are presence
+                 * tokens; firing spends FieldCharge rather than magazines. */
+                wdPtr->PrimaryRoundsRemaining=ONE_FIXED;
+                wdPtr->SecondaryRoundsRemaining=ONE_FIXED;
+                wdPtr->Possessed=1;
+                playerStatusPtr->FieldCharge=AcidResourceCapacity(PLAYERCLOAK_MAXENERGY);
+                continue;
+            }
+
+            if (wdPtr->WeaponIDNumber==WEAPON_PRED_RIFLE) {
 				wdPtr->PrimaryRoundsRemaining+=(ONE_FIXED*SPEARS_PER_PICKUP);
 				if (wdPtr->PrimaryRoundsRemaining>(ONE_FIXED*MAX_SPEARS)) {
 					wdPtr->PrimaryRoundsRemaining=(ONE_FIXED*MAX_SPEARS);

@@ -1,0 +1,15 @@
+*.c -text
+*.cpp -text
+*.h -text
+*.hpp -text
+*.inc -text
+*.def -text
+*.rc -text
+*.md text eol=lf
+*.py text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.ps1 text eol=lf
+*.png binary
+*.jpg binary
+*.gif binary

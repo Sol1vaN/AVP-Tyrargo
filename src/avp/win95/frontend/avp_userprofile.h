@@ -14,7 +14,8 @@
  */
 #define MAX_NO_OF_USERS 4
 
-#define MAX_SIZE_OF_USERS_NAME 15
+#define MAX_SIZE_OF_USERS_NAME 63
+#define LEGACY_SIZE_OF_USERS_NAME 15
 
 enum AVP_DIFFICULTY_LEVEL_ID
 {
@@ -25,6 +26,8 @@ enum AVP_DIFFICULTY_LEVEL_ID
 	AVP_DIFFICULTY_LEVEL_EASY,
 	AVP_DIFFICULTY_LEVEL_MEDIUM,
 	AVP_DIFFICULTY_LEVEL_HARD,
+	AVP_DIFFICULTY_LEVEL_IMPOSSIBLE,
+    AVP_DIFFICULTY_LEVEL_MOLECULAR_ACID,
 };
 
 enum CHEATMODE_ID
@@ -67,7 +70,7 @@ typedef struct {
 
 typedef struct 
 {
-	char Name[MAX_SIZE_OF_USERS_NAME+1];
+	char Name[LEGACY_SIZE_OF_USERS_NAME+1]; /* Stable on-disk prefix. */
 
 	// SBF: 32-bit time_t
 	uint32_t FileTime;
@@ -82,7 +85,11 @@ typedef struct
 	unsigned char CheatMode[32];
 	unsigned char GammaSetting;
 	unsigned char AutoWeaponChangeDisabled : 1;
-	unsigned char SpareBits : 7; //not used
+	unsigned char CrouchToggleEnabled : 1;
+	unsigned char UnlimitedSaveGamesEnabled : 1;
+	unsigned char SmartJetpackEnabled : 1;
+	unsigned char SmartZoomEnabled : 1;
+	unsigned char SpareBits : 3; //not used
 	char Padding[74];
 
 	int CDPlayerVolume;
@@ -109,6 +116,15 @@ typedef struct
 	AvP_GameStats_Stored PersonalBests[I_MaxDifficulties][AVP_ENVIRONMENT_END_OF_LIST];
 	/* Yes, it contains impossible!  So sue me! */
 
+    /* Appended runtime fields; file extension is encoded explicitly, never by
+       writing compiler padding. The original 44560-byte prefix stays intact. */
+    char FullName[MAX_SIZE_OF_USERS_NAME+1];
+    unsigned char PreviousVisionBindings[2];
+    unsigned char HUDShakeIntensityValue;
+    unsigned char HUDSwayIntensityValue,HUDBobbingIntensityValue;
+    /* Episode + 1 per species; zero means no remembered selection. */
+    unsigned char LastSelectedEpisode[3];
+    unsigned char AlwaysRun[3]; /* Marine, Predator, Alien; appended suffix v217. */
 } AVP_USER_PROFILE;
 
 
@@ -158,6 +174,7 @@ extern "C"
 #endif
 
 extern void ExamineSavedUserProfiles(void);
+extern void LoadSettingsForStartup(void);
 extern int NumberOfUserProfiles(void);
 extern AVP_USER_PROFILE *GetFirstUserProfile(void);
 extern AVP_USER_PROFILE *GetNextUserProfile(void);

@@ -1,8 +1,15 @@
+#include "event_latency.h"
+#include "camera_motion.h"
 /*KJL************************************************************************************
 * kshape.c - replacement for all the pipeline stuff previously done in shape.c & clip.c *
 ************************************************************************************KJL*/
 #include "3dc.h"
+#include "projection.h"
+#include "viewmodel.h"
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include "module.h"
 #include "inline.h"
 
@@ -11,6 +18,8 @@
 #include "maths.h"
 
 #include "kshape.h"
+#include "render_geometry.h"
+#include "vertex_lights.h"
 #include "kzsort.h"
 #include "frustum.h"
 
@@ -34,6 +43,7 @@
 #include "detaillevels.h"
 #include "avp_userprofile.h"
 #include "hud.h"
+#include "d3d_hud.h"
 #include "weapons.h"
 
 #define ALIENS_LIFEFORCE_GLOW_COLOUR 0x20ff8080
@@ -77,6 +87,61 @@ extern int NumActiveBlocks;
 
 extern DISPLAYBLOCK *ActiveBlockList[];
 extern SHAPEHEADER **mainshapelist;
+
+/* TEXTANIM on static environment geometry has no DISPLAYBLOCK controller.
+   Advance each shared header once per simulation frame. */
+#define STATIC_TXANIM_STAMPS 8192
+typedef struct StaticTxAnimStamp {
+	TXANIMHEADER *header;
+	int frame;
+} StaticTxAnimStamp;
+
+static StaticTxAnimStamp StaticTxAnimStamps[STATIC_TXANIM_STAMPS];
+static int StaticTxAnimStampCount;
+extern int GlobalFrameCounter;
+
+
+
+static int StaticTxAnimNeedsUpdate(TXANIMHEADER *header)
+{
+	int i;
+	for (i = 0; i < StaticTxAnimStampCount; ++i) {
+		if (StaticTxAnimStamps[i].header == header) {
+			if (StaticTxAnimStamps[i].frame == GlobalFrameCounter) return 0;
+			StaticTxAnimStamps[i].frame = GlobalFrameCounter;
+			return 1;
+		}
+	}
+	if (StaticTxAnimStampCount < STATIC_TXANIM_STAMPS) {
+		StaticTxAnimStamps[StaticTxAnimStampCount].header = header;
+		StaticTxAnimStamps[StaticTxAnimStampCount].frame = GlobalFrameCounter;
+		++StaticTxAnimStampCount;
+		return 1;
+	}
+	return 1;
+}
+
+static void AdvanceStaticTextureAnimations(DISPLAYBLOCK *dptr, SHAPEHEADER *shape)
+{
+	int item;
+	if ((shape == NULL) || (shape->items == NULL) || (shape->sh_textures == NULL)) return;
+	if (!(shape->shapeflags & ShapeFlag_HasTextureAnimation)) return;
+	for (item = 0; item < shape->numitems; ++item) {
+		POLYHEADER *poly = (POLYHEADER *)shape->items[item];
+		TXANIMHEADER **headers;
+		int textureDefn;
+		int sequence;
+		if ((poly == NULL) || !(poly->PolyFlags & iflag_txanim)) continue;
+		textureDefn = poly->PolyColour >> TxDefn;
+		headers = (TXANIMHEADER **)shape->sh_textures[textureDefn];
+		if (headers == NULL) continue;
+		for (sequence = 1; headers[sequence] != NULL; ++sequence) {
+			if (StaticTxAnimNeedsUpdate(headers[sequence])) {
+				UpdateTxAnim(headers[sequence]);
+			}
+		}
+	}
+}
 
 int MirroringActive=0;
 int MirroringAxis=-149*2;
@@ -144,6 +209,14 @@ void DrawWaterFallPoly(VECTORCH *v);
 */
 
 VECTORCH RotatedPts[maxrotpts]={{1,}};
+
+static void CopyViewmodelVertex(RENDERVERTEX *vertex, int index)
+{
+    if (!ViewmodelShapeActive) { GeometryCopyVertex(vertex,index); return; }
+    vertex->ViewX=ViewmodelPoints[index][0]+(vertex->X-RotatedPts[index].vx);
+    vertex->ViewY=ViewmodelPoints[index][1]+(vertex->Y-RotatedPts[index].vy);
+    vertex->ViewZ=ViewmodelPoints[index][2]+(vertex->Z-RotatedPts[index].vz);
+}
 int ItemColour=1;
 
 
@@ -173,6 +246,10 @@ extern int *MorphedObjectPointsPtr;
 
 #define MAX_NO_OF_TRANSLUCENT_POLYGONS 1000
 RENDERPOLYGON TranslucentPolygons[MAX_NO_OF_TRANSLUCENT_POLYGONS];
+static int TranslucentViewmodel[MAX_NO_OF_TRANSLUCENT_POLYGONS];
+static enum TRANSLUCENCY_TYPE TranslucentBlend[MAX_NO_OF_TRANSLUCENT_POLYGONS];
+static AVP_PROJECTION_STATE TranslucentProjection[MAX_NO_OF_TRANSLUCENT_POLYGONS];
+static int TranslucentViewmodelProjX[MAX_NO_OF_TRANSLUCENT_POLYGONS], TranslucentViewmodelProjY[MAX_NO_OF_TRANSLUCENT_POLYGONS];
 POLYHEADER TranslucentPolygonHeaders[MAX_NO_OF_TRANSLUCENT_POLYGONS];
 int CurrentNumberOfTranslucentPolygons;
 
@@ -182,7 +259,7 @@ int HeadUpDisplayZOffset=0;
 
 extern int CloakingPhase;
 static VECTORCH ObjectCentre;
-static int HierarchicalObjectsLowestYValue;
+int HierarchicalObjectsLowestYValue;
 
 HEATSOURCE HeatSourceList[MAX_NUMBER_OF_HEAT_SOURCES];
 int NumberOfHeatSources;
@@ -330,6 +407,9 @@ void ChooseLightingModel(DISPLAYBLOCK *dispPtr)
 **********************************************************************************KJL*/
 void ShapePipeline(SHAPEHEADER *shapePtr)
 {
+ EventLatencyCount(EL_SHAPE_POINTS,shapePtr->numpoints);
+ EventLatencyCount(EL_SHAPE_POLYGONS,shapePtr->numitems);
+
 	int numitems= shapePtr->numitems;
 	int **itemArrayPtr = shapePtr->items;
 	#if 0
@@ -888,6 +968,9 @@ void ShapePipeline(SHAPEHEADER *shapePtr)
 
 void PredatorThermalVision_ShapePipeline(SHAPEHEADER *shapePtr)
 {
+ EventLatencyCount(EL_SHAPE_POINTS,shapePtr->numpoints);
+ EventLatencyCount(EL_SHAPE_POLYGONS,shapePtr->numitems);
+
 	int numitems= shapePtr->numitems;
 	int **itemArrayPtr = shapePtr->items;
 
@@ -926,6 +1009,9 @@ void PredatorThermalVision_ShapePipeline(SHAPEHEADER *shapePtr)
 }
 void PredatorSeeAliensVision_ShapePipeline(SHAPEHEADER *shapePtr)
 {
+ EventLatencyCount(EL_SHAPE_POINTS,shapePtr->numpoints);
+ EventLatencyCount(EL_SHAPE_POLYGONS,shapePtr->numitems);
+
 	int numitems= shapePtr->numitems;
 	int **itemArrayPtr = shapePtr->items;
 
@@ -1048,6 +1134,7 @@ static void CloakedPolygon_Construct(POLYHEADER *polyPtr)
 				}	
 
 			}
+			CopyViewmodelVertex(renderVerticesPtr,*VertexNumberPtr);
 			renderVerticesPtr++;
 			VertexNumberPtr++;
 
@@ -1101,6 +1188,7 @@ static void CloakedPolygon_Construct(POLYHEADER *polyPtr)
 					}
 				}	
 			}
+			CopyViewmodelVertex(renderVerticesPtr,*VertexNumberPtr);
 			renderVerticesPtr++;
 			VertexNumberPtr++;
 
@@ -1191,7 +1279,8 @@ static void PredatorThermalVisionPolygon_Construct(POLYHEADER *polyPtr)
 				}
 		 	}
 		}
-		renderVerticesPtr++;
+		CopyViewmodelVertex(renderVerticesPtr,*VertexNumberPtr);
+			renderVerticesPtr++;
 		VertexNumberPtr++;
 	}
     while(--i);
@@ -1275,6 +1364,7 @@ static void PredatorSeeAliensVisionPolygon_Construct(POLYHEADER *polyPtr)
 			}
 
 			texture_defn_ptr += 2;
+			CopyViewmodelVertex(renderVerticesPtr,*VertexNumberPtr);
 			renderVerticesPtr++;
 			VertexNumberPtr++;
 		}
@@ -1301,7 +1391,8 @@ static void GouraudPolygon_Construct(POLYHEADER *polyPtr)
 		renderVerticesPtr->R = i;
 		renderVerticesPtr->G = i;
 		renderVerticesPtr->B = 0;
-		renderVerticesPtr++;
+		CopyViewmodelVertex(renderVerticesPtr,*VertexNumberPtr);
+			renderVerticesPtr++;
 		VertexNumberPtr++;
 	}
     while(--i);
@@ -1336,7 +1427,6 @@ static void GouraudTexturedPolygon_Construct(POLYHEADER *polyPtr)
 		int uv_array[maxpolypts * 2];
 		CreateTxAnimUVArray(texture_defn_ptr, uv_array, (int*)polyPtr);
 		texture_defn_ptr = uv_array;
-
 		do
 		{
 			VECTORCH *vertexPtr = &(RotatedPts[*VertexNumberPtr]);
@@ -1390,7 +1480,7 @@ static void GouraudTexturedPolygon_Construct(POLYHEADER *polyPtr)
 				RenderPolygon.TranslucencyMode = TRANSLUCENCY_OFF;
 			}
 
-	 		if (polyPtr->PolyFlags & iflag_nolight)
+			if (polyPtr->PolyFlags & iflag_nolight)
 			{
 				switch (CurrentVisionMode)
 				{
@@ -1452,6 +1542,7 @@ static void GouraudTexturedPolygon_Construct(POLYHEADER *polyPtr)
 			{
 				VertexIntensity(renderVerticesPtr);
 			}
+			CopyViewmodelVertex(renderVerticesPtr,*VertexNumberPtr);
 			renderVerticesPtr++;
 			VertexNumberPtr++;
 
@@ -1623,6 +1714,7 @@ static void GouraudTexturedPolygon_Construct(POLYHEADER *polyPtr)
 			{
 		 		VertexIntensity(renderVerticesPtr);
 			}
+			CopyViewmodelVertex(renderVerticesPtr,*VertexNumberPtr);
 			renderVerticesPtr++;
 			VertexNumberPtr++;
 
@@ -1942,6 +2034,8 @@ static void VertexIntensity_ImageIntensifier(RENDERVERTEX *renderVertexPtr)
 		VECTORCH *vertexNormalPtr = ((VECTORCH *)Global_ShapeVNormals) + vertexNumber;
 		VECTORCH *vertexPtr = ((VECTORCH *)Global_ShapePoints)+vertexNumber;
 
+		VERTEX_LIGHT_VECTORS lightVectors;
+		if(NumLightSourcesForObject)BuildVertexLightVectors(vertexPtr,&lightVectors);
 		LIGHTBLOCK **larrayptr;
 		LIGHTBLOCK *lptr;
 		int i;
@@ -1959,46 +2053,12 @@ static void VertexIntensity_ImageIntensifier(RENDERVERTEX *renderVertexPtr)
 	
 			lptr = *larrayptr++;
 			
-			vertexToLight.vx = lptr->LocalLP.vx - vertexPtr->vx;
-			vertexToLight.vy = lptr->LocalLP.vy - vertexPtr->vy;
-			vertexToLight.vz = lptr->LocalLP.vz - vertexPtr->vz;
-			{
-				int dx,dy,dz;
+            int lightIndex=NumLightSourcesForObject-i;
+            vertexToLight.vx=lightVectors.x[lightIndex];
+            vertexToLight.vy=lightVectors.y[lightIndex];
+            vertexToLight.vz=lightVectors.z[lightIndex];
+            distanceToLight=lightVectors.distance[lightIndex];
 
-				dx = vertexToLight.vx;
-				if (dx<0) dx = -dx;
-					 
-				dy = vertexToLight.vy;
-				if (dy<0) dy = -dy;
-				
-				dz = vertexToLight.vz;	 	 
-				if (dz<0) dz = -dz;
-									 
-				
-				if (dx>dy)
-				{
-					if (dx>dz)
-					{
-						distanceToLight = dx + ((dy+dz)>>2);
-					}
-					else
-					{
-						distanceToLight = dz + ((dy+dx)>>2);
-					}
-				}
-				else
-				{
-					if (dy>dz)
-					{
-						distanceToLight = dy + ((dx+dz)>>2);
-					}
-					else
-					{
-						distanceToLight = dz + ((dx+dy)>>2);
-					}
-				}
-			}
-																	  				
 			if(distanceToLight < lptr->LightRange) 
 			{
 				int idot = MUL_FIXED(lptr->LightRange-distanceToLight,lptr->BrightnessOverRange);
@@ -2116,6 +2176,8 @@ static void VertexIntensity_Standard_Opt(RENDERVERTEX *renderVertexPtr)
 		VECTORCH *vertexNormalPtr = ((VECTORCH *)Global_ShapeVNormals) + vertexNumber;
 		VECTORCH *vertexPtr = ((VECTORCH *)Global_ShapePoints)+vertexNumber;
 
+		VERTEX_LIGHT_VECTORS lightVectors;
+		if(NumLightSourcesForObject)BuildVertexLightVectors(vertexPtr,&lightVectors);
 		LIGHTBLOCK **larrayptr;
 		LIGHTBLOCK *lptr;
 		int i;
@@ -2154,46 +2216,12 @@ static void VertexIntensity_Standard_Opt(RENDERVERTEX *renderVertexPtr)
 	
 			lptr = *larrayptr++;
 			
-			vertexToLight.vx = lptr->LocalLP.vx - vertexPtr->vx;
-			vertexToLight.vy = lptr->LocalLP.vy - vertexPtr->vy;
-			vertexToLight.vz = lptr->LocalLP.vz - vertexPtr->vz;
-			{
-				int dx,dy,dz;
+            int lightIndex=NumLightSourcesForObject-i;
+            vertexToLight.vx=lightVectors.x[lightIndex];
+            vertexToLight.vy=lightVectors.y[lightIndex];
+            vertexToLight.vz=lightVectors.z[lightIndex];
+            distanceToLight=lightVectors.distance[lightIndex];
 
-				dx = vertexToLight.vx;
-				if (dx<0) dx = -dx;
-					 
-				dy = vertexToLight.vy;
-				if (dy<0) dy = -dy;
-				
-				dz = vertexToLight.vz;	 	 
-				if (dz<0) dz = -dz;
-									 
-				
-				if (dx>dy)
-				{
-					if (dx>dz)
-					{
-						distanceToLight = dx + ((dy+dz)>>2);
-					}
-					else
-					{
-						distanceToLight = dz + ((dy+dx)>>2);
-					}
-				}
-				else
-				{
-					if (dy>dz)
-					{
-						distanceToLight = dy + ((dx+dz)>>2);
-					}
-					else
-					{
-						distanceToLight = dz + ((dx+dy)>>2);
-					}
-				}
-			}
-																	  				
 			if(distanceToLight < lptr->LightRange) 
 			{
 				int idot = MUL_FIXED(lptr->LightRange-distanceToLight,lptr->BrightnessOverRange);
@@ -3836,7 +3864,7 @@ int GetMVSIndex(TXANIMHEADER
 }
 
 
-void AddShape(DISPLAYBLOCK *dptr, VIEWDESCRIPTORBLOCK *VDB_Ptr)
+static void AddShape_MeasuredBody(DISPLAYBLOCK *dptr, VIEWDESCRIPTORBLOCK *VDB_Ptr)
 {
 	SHAPEHEADER *shapeheaderptr;
 
@@ -3867,7 +3895,7 @@ void AddShape(DISPLAYBLOCK *dptr, VIEWDESCRIPTORBLOCK *VDB_Ptr)
 		/* SBF - commented out */
 		/* if(dptr->ObMorphCtrl->ObMorphHeader) */
 	 	{
-			GetMorphDisplay(&MorphDisplay, dptr);
+			{ EVENT_TICK span=EventLatencyBegin(); GetMorphDisplay(&MorphDisplay, dptr); EventLatencyEnd(span,"shape morph",0,dptr->ObMyModule?dptr->ObMyModule->m_index:-1,0,dptr->ObMyModule?dptr->ObMyModule->name:0,0); }
 			dptr->ObShape     = MorphDisplay.md_shape1;
 			dptr->ObShapeData = MorphDisplay.md_sptr1;
 			shapeheaderptr    = MorphDisplay.md_sptr1;
@@ -3889,18 +3917,18 @@ void AddShape(DISPLAYBLOCK *dptr, VIEWDESCRIPTORBLOCK *VDB_Ptr)
 		{
 			if (!(dptr->ShapeAnimControlBlock->current.empty))
 			{
-				CopyAnimationFrameToShape (&dptr->ShapeAnimControlBlock->current, dptr);
+				{ EVENT_TICK span=EventLatencyBegin(); CopyAnimationFrameToShape (&dptr->ShapeAnimControlBlock->current, dptr); EventLatencyEnd(span,"shape copy animation",0,dptr->ObMyModule?dptr->ObMyModule->m_index:-1,0,dptr->ObMyModule?dptr->ObMyModule->name:0,0); }
 			}
 		}
 	}
   	
   	
-	ChooseLightingModel(dptr);
+	{ EVENT_TICK span=EventLatencyBegin(); ChooseLightingModel(dptr); EventLatencyEnd(span,"shape lighting model",0,dptr->ObMyModule?dptr->ObMyModule->m_index:-1,0,dptr->ObMyModule?dptr->ObMyModule->name:0,0); }
 	/* hierarchical object? */
 	#if 0
 	if (dptr->HModelControlBlock && !dptr->ObStrategyBlock)
 	{
-   		DoHModel(dptr->HModelControlBlock,dptr);
+   		{ EVENT_TICK span=EventLatencyBegin(); DoHModel(dptr->HModelControlBlock,dptr); EventLatencyEnd(span,"shape hierarchical model",0,dptr->ObMyModule?dptr->ObMyModule->m_index:-1,0,dptr->ObMyModule?dptr->ObMyModule->name:0,0); }
 		return;
 	}
 	#endif
@@ -3908,8 +3936,8 @@ void AddShape(DISPLAYBLOCK *dptr, VIEWDESCRIPTORBLOCK *VDB_Ptr)
 
 
 	/* Texture Animation Control */
-
-	if(dptr->ObTxAnimCtrlBlks) ControlTextureAnimation(dptr);
+	if(dptr->ObTxAnimCtrlBlks) { EVENT_TICK span=EventLatencyBegin(); ControlTextureAnimation(dptr); EventLatencyEnd(span,"shape texture animation",0,dptr->ObMyModule?dptr->ObMyModule->m_index:-1,0,dptr->ObMyModule?dptr->ObMyModule->name:0,0); }
+	else { EVENT_TICK span=EventLatencyBegin(); AdvanceStaticTextureAnimations(dptr, shapeheaderptr); EventLatencyEnd(span,"shape static textures",0,dptr->ObMyModule?dptr->ObMyModule->m_index:-1,0,dptr->ObMyModule?dptr->ObMyModule->name:0,0); }
 
 	/* Global Variables */
 	Global_VDB_Ptr        = VDB_Ptr;
@@ -3917,7 +3945,7 @@ void AddShape(DISPLAYBLOCK *dptr, VIEWDESCRIPTORBLOCK *VDB_Ptr)
 	Global_ShapeHeaderPtr = shapeheaderptr;
 
 	/* Shape Language Specific Setup */
-	SetupShapePipeline();
+	{ EVENT_TICK span=EventLatencyBegin(); SetupShapePipeline(); EventLatencyEnd(span,"shape pipeline setup",0,dptr->ObMyModule?dptr->ObMyModule->m_index:-1,0,dptr->ObMyModule?dptr->ObMyModule->name:0,0); }
 
 		/*
 																		   
@@ -3991,14 +4019,14 @@ void AddShape(DISPLAYBLOCK *dptr, VIEWDESCRIPTORBLOCK *VDB_Ptr)
 		{
 			FindHeatSourcesInHModel(dptr);
 		}
-		DoHModel(dptr->HModelControlBlock,dptr);
+		{ EVENT_TICK span=EventLatencyBegin(); DoHModel(dptr->HModelControlBlock,dptr); EventLatencyEnd(span,"shape hierarchical model",0,dptr->ObMyModule?dptr->ObMyModule->m_index:-1,0,dptr->ObMyModule?dptr->ObMyModule->name:0,0); }
 		return;
 	}
   //	return;
 	
 
   	/* Find out which light sources are in range of of the object */
-	LightSourcesInRangeOfObject(dptr);
+	{ EVENT_TICK span=EventLatencyBegin(); LightSourcesInRangeOfObject(dptr); EventLatencyEnd(span,"shape light selection",0,dptr->ObMyModule?dptr->ObMyModule->m_index:-1,0,dptr->ObMyModule?dptr->ObMyModule->name:0,0); }
 
 	/* Shape Language Execution Shell */
 	{
@@ -4012,20 +4040,21 @@ void AddShape(DISPLAYBLOCK *dptr, VIEWDESCRIPTORBLOCK *VDB_Ptr)
 			{
 				if(Global_ODB_Ptr->ObMorphCtrl)
 				{
-					MorphPoints(shapeinstrptr);
+					{ EVENT_TICK span=EventLatencyBegin(); MorphPoints(shapeinstrptr); EventLatencyEnd(span,"shape morph points",0,dptr->ObMyModule?dptr->ObMyModule->m_index:-1,0,dptr->ObMyModule?dptr->ObMyModule->name:0,0); }
 				}
 				else
 				{
-					TranslateShapeVertices(shapeinstrptr);
+					{ EVENT_TICK span=EventLatencyBegin(); TranslateShapeVertices(shapeinstrptr); EventLatencyEnd(span,"shape transform",0,dptr->ObMyModule?dptr->ObMyModule->m_index:-1,0,dptr->ObMyModule?dptr->ObMyModule->name:0,0); }
 				}
 				break;
 	 		}
 		}
 	}
 	/* call polygon pipeline */
-	ShapePipeline(shapeheaderptr);
+	{ EVENT_TICK span=EventLatencyBegin(); ShapePipeline(shapeheaderptr); EventLatencyEnd(span,"shape polygon pipeline",0,dptr->ObMyModule?dptr->ObMyModule->m_index:-1,0,dptr->ObMyModule?dptr->ObMyModule->name:0,0); }
+	ViewmodelShapeActive=0; GeometryShapeActive=0;
 	/* call sfx code */
-	HandleSfxForObject(dptr);
+	{ EVENT_TICK span=EventLatencyBegin(); HandleSfxForObject(dptr); EventLatencyEnd(span,"shape object effects",0,dptr->ObMyModule?dptr->ObMyModule->m_index:-1,0,dptr->ObMyModule?dptr->ObMyModule->name:0,0); }
 	if (dptr->ObStrategyBlock)
 	{
 		if (dptr->ObStrategyBlock->I_SBtype==I_BehaviourInanimateObject)
@@ -4062,6 +4091,17 @@ void AddShape(DISPLAYBLOCK *dptr, VIEWDESCRIPTORBLOCK *VDB_Ptr)
 		}
 	}
 }
+
+void AddShape(DISPLAYBLOCK *dptr, VIEWDESCRIPTORBLOCK *VDB_Ptr)
+{
+ EVENT_TICK stamp=EventLatencyBegin();
+ int type=dptr->ObStrategyBlock?dptr->ObStrategyBlock->I_SBtype:0;
+ int module=dptr->ObMyModule?dptr->ObMyModule->m_index:-1;
+ EVENT_TICK id=EventLatencyId(dptr->ObStrategyBlock?dptr->ObStrategyBlock->SBname:0);
+ AddShape_MeasuredBody(dptr,VDB_Ptr);
+ EventLatencyEnd(stamp,"shape submission",type,module,id,dptr->ObMyModule?dptr->ObMyModule->name:0,0);
+}
+
 void DoAlienEnergyView(DISPLAYBLOCK *dispPtr)
 {
 	HMODELCONTROLLER *controllerPtr = dispPtr->HModelControlBlock;
@@ -4219,14 +4259,14 @@ static void FindAlienEnergySource_Recursion(HMODELCONTROLLER *controllerPtr, SEC
 	}
 }
 
-void AddHierarchicalShape(DISPLAYBLOCK *dptr, VIEWDESCRIPTORBLOCK *VDB_Ptr)
+static void AddHierarchicalShape_MeasuredBody(DISPLAYBLOCK *dptr, VIEWDESCRIPTORBLOCK *VDB_Ptr)
 {
 
 	SHAPEHEADER *shapeheaderptr;
 	SHAPEINSTR *shapeinstrptr;
 
 	GLOBALASSERT(!dptr->HModelControlBlock);
-	if(!ObjectWithinFrustrum(dptr)) return;
+	if(!ViewmodelDrawActive && !ObjectWithinFrustrum(dptr)) return;
 
 
 	#if 0
@@ -4242,6 +4282,7 @@ void AddHierarchicalShape(DISPLAYBLOCK *dptr, VIEWDESCRIPTORBLOCK *VDB_Ptr)
 
 	/* Texture Animation Control */
 	if(dptr->ObTxAnimCtrlBlks) ControlTextureAnimation(dptr);
+	else AdvanceStaticTextureAnimations(dptr, shapeheaderptr);
 
 	/* Global Variables */
 	Global_VDB_Ptr        = VDB_Ptr;
@@ -4313,6 +4354,7 @@ void AddHierarchicalShape(DISPLAYBLOCK *dptr, VIEWDESCRIPTORBLOCK *VDB_Ptr)
 		
 		/* call polygon pipeline */
 	  	ShapePipeline(shapeheaderptr);
+	ViewmodelShapeActive=0; GeometryShapeActive=0;
 	}
 
 	if (BALLSOFFIRE_CHEATMODE && dptr->ObStrategyBlock)
@@ -4324,6 +4366,14 @@ void AddHierarchicalShape(DISPLAYBLOCK *dptr, VIEWDESCRIPTORBLOCK *VDB_Ptr)
 	HandleSfxForObject(dptr);
 
 }
+
+void AddHierarchicalShape(DISPLAYBLOCK *dptr, VIEWDESCRIPTORBLOCK *VDB_Ptr)
+{
+ EVENT_TICK stamp=EventLatencyBegin();
+ AddHierarchicalShape_MeasuredBody(dptr,VDB_Ptr);
+ EventLatencyEnd(stamp,"model section geometry",0,dptr->ObShape,0,0,0);
+}
+
 
 
 float ViewMatrix[12];
@@ -4377,6 +4427,8 @@ extern void TranslationSetup(void)
 	ViewMatrix[3+1*4] = ((float)-v.vy)*4.0f/3.0f*p;
 	ViewMatrix[3+2*4] = ((float)-v.vz)*CameraZoomScale;
 
+	MarineMotionViewMatrix(ViewMatrix,o,4.0/3.0*p,CameraZoomScale);
+
 	if (MIRROR_CHEATMODE)
 	{
 		ViewMatrix[0+0*4] = -ViewMatrix[0+0*4];
@@ -4385,6 +4437,7 @@ extern void TranslationSetup(void)
 		
 		ViewMatrix[3+0*4] =	-ViewMatrix[3+0*4];
 	}
+ GeometrySetupView(o,4.0/3.0*p,CameraZoomScale,MIRROR_CHEATMODE);
 }
 
 
@@ -4463,38 +4516,7 @@ void TranslatePointIntoViewspace(VECTORCH *pointPtr)
 
 void SquishPoints(SHAPEINSTR *shapeinstrptr)
 {
-	int **shapeitemarrayptr = shapeinstrptr->sh_instr_data;
-	VECTORCH *shapePts      = (VECTORCH*)*shapeitemarrayptr;
-	{
-		int i;
-		int scale = Global_ODB_Ptr->ObFlags2;
-		
-		for (i=0; i<Global_ShapeHeaderPtr->numpoints; i++)
-		{
-			VECTORCH point = shapePts[i];
-
-			RotateVector(&point,&Global_ODB_Ptr->ObMat);
-
-			point.vx = MUL_FIXED(point.vx,ONE_FIXED*3/2 - scale/2);
-			point.vx += Global_ODB_Ptr->ObWorld.vx;
-
-			point.vz = MUL_FIXED(point.vz,ONE_FIXED*3/2 - scale/2);
-			point.vz += Global_ODB_Ptr->ObWorld.vz;
-
-			point.vy += Global_ODB_Ptr->ObWorld.vy;
-			point.vy = HierarchicalObjectsLowestYValue + MUL_FIXED(point.vy-HierarchicalObjectsLowestYValue, scale);
-
-			Source[0] = point.vx;
-			Source[1] = point.vy;
-			Source[2] = point.vz;
-
-			TranslatePoint(Source, Dest, ViewMatrix);
-
-			f2i(RotatedPts[i].vx,Dest[0]);
-			f2i(RotatedPts[i].vy,Dest[1]);
-			f2i(RotatedPts[i].vz,Dest[2]);
-		}	
-	}
+ GeometryTransformShape(shapeinstrptr,2);
 }
 
 void MorphPoints(SHAPEINSTR *shapeinstrptr)
@@ -4549,9 +4571,9 @@ void MorphPoints(SHAPEINSTR *shapeinstrptr)
 					{
 						/* KJL 15:27:20 05/22/97 - I've changed this to speed things up, If a vertex
 						component has a magnitude greater than 32768 things will go wrong. */
-						morphedPointsPtr->vx = vertex1.vx + (((vertex2.vx-vertex1.vx)*MorphDisplay.md_lerp)>>16);
-						morphedPointsPtr->vy = vertex1.vy + (((vertex2.vy-vertex1.vy)*MorphDisplay.md_lerp)>>16);
-						morphedPointsPtr->vz = vertex1.vz + (((vertex2.vz-vertex1.vz)*MorphDisplay.md_lerp)>>16);
+						morphedPointsPtr->vx = vertex1.vx + MUL_FIXED(vertex2.vx-vertex1.vx,MorphDisplay.md_lerp);
+						morphedPointsPtr->vy = vertex1.vy + MUL_FIXED(vertex2.vy-vertex1.vy,MorphDisplay.md_lerp);
+						morphedPointsPtr->vz = vertex1.vz + MUL_FIXED(vertex2.vz-vertex1.vz,MorphDisplay.md_lerp);
 					}
 
 		            shape1PointsPtr++;
@@ -4564,82 +4586,18 @@ void MorphPoints(SHAPEINSTR *shapeinstrptr)
 		    srcPtr = (VECTORCH *)MorphedPts;
 		}
 	}
-	{
-		VECTORCH *destPtr = RotatedPts;
-		int i;
-		for(i = shapeinstrptr->sh_numitems; i!=0; i--)
-		{
-			Source[0] = srcPtr->vx+Global_ODB_Ptr->ObWorld.vx;
-			Source[1] = srcPtr->vy+Global_ODB_Ptr->ObWorld.vy;
-			Source[2] = srcPtr->vz+Global_ODB_Ptr->ObWorld.vz;
-
-			TranslatePoint(Source, Dest, ViewMatrix);
-			
-			f2i(destPtr->vx,Dest[0]);
-			f2i(destPtr->vy,Dest[1]);
-			f2i(destPtr->vz,Dest[2]);
-			srcPtr++;
-			destPtr++;
-		}
-	}
-
+ GeometryTransformShape(shapeinstrptr,1);
 }
+
 
 void TranslateShapeVertices(SHAPEINSTR *shapeinstrptr)
 {
-	VECTORCH *destPtr = RotatedPts;
-	int **shapeitemarrayptr;
-	VECTORCH *srcPtr;
-	int i;
-//	MNormalise(&LToVMat);
-	shapeitemarrayptr = shapeinstrptr->sh_instr_data;
-	srcPtr = (VECTORCH*)*shapeitemarrayptr;
-	if (Global_ODB_Ptr->ObFlags & ObFlag_ArbRot)
-	{
-		for(i = shapeinstrptr->sh_numitems; i!=0; i--)
-		{
-			destPtr->vx = (srcPtr->vx+Global_ODB_Ptr->ObView.vx);
-			destPtr->vy = ((srcPtr->vy+Global_ODB_Ptr->ObView.vy)*4)/3;
-			destPtr->vz = (srcPtr->vz+Global_ODB_Ptr->ObView.vz);
+ if (ViewmodelTransform(shapeinstrptr)) { GeometryShapeActive=0; return; }
+ GeometryTransformShape(shapeinstrptr,0);
+}
 
-			srcPtr++;
-			destPtr++;
-
-		}
-	}
-	else
-	{
-		ObjectViewMatrix[0+0*4] = (float)(Global_ODB_Ptr->ObMat.mat11)/65536.0f;
-		ObjectViewMatrix[1+0*4] = (float)(Global_ODB_Ptr->ObMat.mat21)/65536.0f;
-		ObjectViewMatrix[2+0*4] = (float)(Global_ODB_Ptr->ObMat.mat31)/65536.0f;
-
-		ObjectViewMatrix[0+1*4] = (float)(Global_ODB_Ptr->ObMat.mat12)/(65536.0f);
-		ObjectViewMatrix[1+1*4] = (float)(Global_ODB_Ptr->ObMat.mat22)/(65536.0f);
-		ObjectViewMatrix[2+1*4] = (float)(Global_ODB_Ptr->ObMat.mat32)/(65536.0f);
-
-		ObjectViewMatrix[0+2*4] = (float)(Global_ODB_Ptr->ObMat.mat13)/65536.0f;
-		ObjectViewMatrix[1+2*4] = (float)(Global_ODB_Ptr->ObMat.mat23)/65536.0f;
-		ObjectViewMatrix[2+2*4] = (float)(Global_ODB_Ptr->ObMat.mat33)/65536.0f;
-
-		ObjectViewMatrix[3+0*4] = Global_ODB_Ptr->ObWorld.vx;
-		ObjectViewMatrix[3+1*4] = Global_ODB_Ptr->ObWorld.vy;
-		ObjectViewMatrix[3+2*4] = Global_ODB_Ptr->ObWorld.vz;
-		for(i = shapeinstrptr->sh_numitems; i!=0; i--)
-		{
-			Source[0] = srcPtr->vx;
-			Source[1] = srcPtr->vy;
-			Source[2] = srcPtr->vz;
-
-			TranslatePoint(Source, Dest, ObjectViewMatrix);
-			TranslatePoint(Dest, Source, ViewMatrix);
-			
-			f2i(destPtr->vx,Source[0]);
-			f2i(destPtr->vy,Source[1]);
-			f2i(destPtr->vz,Source[2]);
-			srcPtr++;
-			destPtr++;
-		}
-	}
+static void GeometryVertexFromWorld(RENDERVERTEX *v,const VECTORCH *point){
+ double p[3];GeometryTransformPoint(p,point->vx,point->vy,point->vz);v->X=p[0];v->Y=p[1];v->Z=p[2];
 }
 
 void RenderDecal(DECAL *decalPtr)
@@ -4647,31 +4605,19 @@ void RenderDecal(DECAL *decalPtr)
 	/* translate decal into view space */
 	{
 		VECTORCH translatedPosition = decalPtr->Vertices[0];
-		TranslatePointIntoViewspace(&translatedPosition);
-		VerticesBuffer[0].X = translatedPosition.vx;
-		VerticesBuffer[0].Y = translatedPosition.vy;
-		VerticesBuffer[0].Z = translatedPosition.vz;
+		GeometryVertexFromWorld(&VerticesBuffer[0],&translatedPosition);
 	}
 	{
 		VECTORCH translatedPosition = decalPtr->Vertices[1];
-		TranslatePointIntoViewspace(&translatedPosition);
-		VerticesBuffer[1].X = translatedPosition.vx;
-		VerticesBuffer[1].Y = translatedPosition.vy;
-		VerticesBuffer[1].Z = translatedPosition.vz;
+		GeometryVertexFromWorld(&VerticesBuffer[1],&translatedPosition);
 	}
 	{
 		VECTORCH translatedPosition = decalPtr->Vertices[2];
-		TranslatePointIntoViewspace(&translatedPosition);
-		VerticesBuffer[2].X = translatedPosition.vx;
-		VerticesBuffer[2].Y = translatedPosition.vy;
-		VerticesBuffer[2].Z = translatedPosition.vz;
+		GeometryVertexFromWorld(&VerticesBuffer[2],&translatedPosition);
 	}
 	{
 		VECTORCH translatedPosition = decalPtr->Vertices[3];
-		TranslatePointIntoViewspace(&translatedPosition);
-		VerticesBuffer[3].X = translatedPosition.vx;
-		VerticesBuffer[3].Y = translatedPosition.vy;
-		VerticesBuffer[3].Z = translatedPosition.vz;
+		GeometryVertexFromWorld(&VerticesBuffer[3],&translatedPosition);
 	}
 	{
 		int outcode = DecalWithinFrustrum(decalPtr);
@@ -4714,16 +4660,30 @@ void RenderParticle(PARTICLE *particlePtr)
 {
 //	PARTICLE_DESC *particleDescPtr = &ParticleDescription[particlePtr->ParticleID];
 	int particleSize = particlePtr->Size;
+ double muzzleCentre[3]={0}; VECTORCH muzzleRounded={0};
 	
 	{
 		VECTORCH translatedPosition = particlePtr->Position;
-		TranslatePointIntoViewspace(&translatedPosition);
+		if(ViewmodelMuzzleActive){
+            ViewmodelMuzzlePoint(&particlePtr->Position,muzzleCentre);
+            translatedPosition.vx=(int)muzzleCentre[0];translatedPosition.vy=(int)muzzleCentre[1];translatedPosition.vz=(int)muzzleCentre[2];
+            muzzleRounded=translatedPosition;
+        }else TranslatePointIntoViewspace(&translatedPosition);
 		VerticesBuffer[0].X = translatedPosition.vx;
 		VerticesBuffer[3].X = translatedPosition.vx;
 		VerticesBuffer[0].Y = translatedPosition.vy;
 		VerticesBuffer[3].Y = translatedPosition.vy;
 		VerticesBuffer[0].Z = translatedPosition.vz;
 		VerticesBuffer[3].Z = translatedPosition.vz;
+        if(!ViewmodelMuzzleActive){
+            GeometryVertexFromWorld(&VerticesBuffer[0],&particlePtr->Position);
+            { double shift[3];
+              if(ParticlePlayerFlameOffset(particlePtr,shift)){
+               VerticesBuffer[0].X+=shift[0];VerticesBuffer[0].Y+=shift[1];VerticesBuffer[0].Z+=shift[2];
+              }
+            }
+            VerticesBuffer[3].X=VerticesBuffer[0].X;VerticesBuffer[3].Y=VerticesBuffer[0].Y;VerticesBuffer[3].Z=VerticesBuffer[0].Z;
+        }
 	}
 
 	if ((particlePtr->ParticleID == PARTICLE_EXPLOSIONFIRE)
@@ -4750,6 +4710,8 @@ void RenderParticle(PARTICLE *particlePtr)
 		VerticesBuffer[2].Y = translatedPosition.vy;
 		VerticesBuffer[1].Z = translatedPosition.vz;
 		VerticesBuffer[2].Z = translatedPosition.vz;
+        GeometryVertexFromWorld(&VerticesBuffer[1],&particlePtr->Offset);
+        VerticesBuffer[2].X=VerticesBuffer[1].X;VerticesBuffer[2].Y=VerticesBuffer[1].Y;VerticesBuffer[2].Z=VerticesBuffer[1].Z;
 	
 		{
 			int deltaX = VerticesBuffer[1].X - VerticesBuffer[0].X;
@@ -4898,7 +4860,15 @@ void RenderParticle(PARTICLE *particlePtr)
 	}
 	
 	{
-		int outcode = QuadWithinFrustrum();
+		int outcode;
+        if(ViewmodelMuzzleActive){
+            for(int i=0;i<4;i++){
+                VerticesBuffer[i].ViewX=muzzleCentre[0]+VerticesBuffer[i].X-muzzleRounded.vx;
+                VerticesBuffer[i].ViewY=muzzleCentre[1]+VerticesBuffer[i].Y-muzzleRounded.vy;
+                VerticesBuffer[i].ViewZ=muzzleCentre[2];
+            }
+        }
+        outcode = QuadWithinFrustrum();
 										  
 		if (outcode)
 		{		 
@@ -5082,34 +5052,22 @@ void RenderMirroredDecal(DECAL *decalPtr)
 	{
 		VECTORCH translatedPosition = decalPtr->Vertices[0];
 		translatedPosition.vx = MirroringAxis - translatedPosition.vx;
-		TranslatePointIntoViewspace(&translatedPosition);
-		VerticesBuffer[0].X = translatedPosition.vx;
-		VerticesBuffer[0].Y = translatedPosition.vy;
-		VerticesBuffer[0].Z = translatedPosition.vz;
+		GeometryVertexFromWorld(&VerticesBuffer[0],&translatedPosition);
 	}
 	{
 		VECTORCH translatedPosition = decalPtr->Vertices[1];
 		translatedPosition.vx = MirroringAxis - translatedPosition.vx;
-		TranslatePointIntoViewspace(&translatedPosition);
-		VerticesBuffer[1].X = translatedPosition.vx;
-		VerticesBuffer[1].Y = translatedPosition.vy;
-		VerticesBuffer[1].Z = translatedPosition.vz;
+		GeometryVertexFromWorld(&VerticesBuffer[1],&translatedPosition);
 	}
 	{
 		VECTORCH translatedPosition = decalPtr->Vertices[2];
 		translatedPosition.vx = MirroringAxis - translatedPosition.vx;
-		TranslatePointIntoViewspace(&translatedPosition);
-		VerticesBuffer[2].X = translatedPosition.vx;
-		VerticesBuffer[2].Y = translatedPosition.vy;
-		VerticesBuffer[2].Z = translatedPosition.vz;
+		GeometryVertexFromWorld(&VerticesBuffer[2],&translatedPosition);
 	}
 	{
 		VECTORCH translatedPosition = decalPtr->Vertices[3];
 		translatedPosition.vx = MirroringAxis - translatedPosition.vx;
-		TranslatePointIntoViewspace(&translatedPosition);
-		VerticesBuffer[3].X = translatedPosition.vx;
-		VerticesBuffer[3].Y = translatedPosition.vy;
-		VerticesBuffer[3].Z = translatedPosition.vz;
+		GeometryVertexFromWorld(&VerticesBuffer[3],&translatedPosition);
 	}
 	{
 		int outcode = DecalWithinFrustrum(decalPtr);
@@ -5596,12 +5554,19 @@ void ClearTranslucentPolyList(void)
 
 void AddToTranslucentPolyList(POLYHEADER *inputPolyPtr,RENDERVERTEX *renderVerticesPtr)
 {
+	/* Never write past the queue before checking its capacity. */
+    if(CurrentNumberOfTranslucentPolygons>=MAX_NO_OF_TRANSLUCENT_POLYGONS || RenderPolygon.NumberOfVertices<3)return;
 	/* copy the data to the list for processing later */
 	int i = RenderPolygon.NumberOfVertices;
 	int maxZ = 0;
 	RENDERVERTEX *vertexPtr = TranslucentPolygons[CurrentNumberOfTranslucentPolygons].Vertices;
 
 	TranslucentPolygons[CurrentNumberOfTranslucentPolygons].NumberOfVertices = i;
+    TranslucentViewmodel[CurrentNumberOfTranslucentPolygons]=ViewmodelShapeActive;
+    TranslucentBlend[CurrentNumberOfTranslucentPolygons]=RenderPolygon.TranslucencyMode;
+    TranslucentProjection[CurrentNumberOfTranslucentPolygons]=AvpProjection;
+    TranslucentViewmodelProjX[CurrentNumberOfTranslucentPolygons]=Global_VDB_Ptr->VDB_ProjX;
+    TranslucentViewmodelProjY[CurrentNumberOfTranslucentPolygons]=Global_VDB_Ptr->VDB_ProjY;
 	
 	do
 	{
@@ -5615,33 +5580,73 @@ void AddToTranslucentPolyList(POLYHEADER *inputPolyPtr,RENDERVERTEX *renderVerti
 
 	/* increment counter */
 	CurrentNumberOfTranslucentPolygons++;
-	LOCALASSERT(CurrentNumberOfTranslucentPolygons<MAX_NO_OF_TRANSLUCENT_POLYGONS);
+	LOCALASSERT(CurrentNumberOfTranslucentPolygons<=MAX_NO_OF_TRANSLUCENT_POLYGONS);
 }
 
-void OutputTranslucentPolyList(void)
+/* The former max scan starts with index zero, then visits remaining indices
+ * backwards. Preserve that tie priority rather than changing blend order. */
+static int CompareTranslucentDepth(const void *aa,const void *bb)
 {
-	int i = CurrentNumberOfTranslucentPolygons;
-	while(i--)
-	{
-		int k = CurrentNumberOfTranslucentPolygons;
-		int maxFound = 0;
-		while(k--)
-		{
-			if (TranslucentPolygons[k].MaxZ>TranslucentPolygons[maxFound].MaxZ)
-			{
-				maxFound = k;
-			}
-		}
-		
-		RenderAllParticlesFurtherAwayThan(TranslucentPolygons[maxFound].MaxZ);
+    int a=*(const int*)aa,b=*(const int*)bb;
+    int za=TranslucentPolygons[a].MaxZ,zb=TranslucentPolygons[b].MaxZ;
+    if(za!=zb)return za>zb?-1:1;
+    if(a==b)return 0;
+    if(a==0)return -1;if(b==0)return 1;
+    return a>b?-1:1;
+}
+static void ProcessTranslucentPolyList(int particlesOnly)
+{
+    int order[MAX_NO_OF_TRANSLUCENT_POLYGONS];
+    int thresholds[MAX_NO_OF_TRANSLUCENT_POLYGONS+1];
+    int originalDepth[MAX_NO_OF_TRANSLUCENT_POLYGONS];
+    int count=CurrentNumberOfTranslucentPolygons;
+    int orderedPolygons=1;
+    for(int i=0;i<count;i++){order[i]=i;originalDepth[i]=TranslucentPolygons[i].MaxZ;if(TranslucentPolygons[i].MaxZ<=0)orderedPolygons=0;}
+    if(orderedPolygons){
+        qsort(order,count,sizeof(order[0]),CompareTranslucentDepth);
+        for(int i=0;i<count;i++)thresholds[i]=TranslucentPolygons[order[i]].MaxZ;
+        thresholds[count]=-0x7fffffff;
+        if(particlesOnly)BeginParticleRenderOrder(thresholds,count+1);
+    }else EndParticleRenderOrder(); /* Preserve legacy handling of degenerate input. */
+    for(int i=0;i<count;i++)
+    {
+        int maxFound=order[i];
+        if(!orderedPolygons){
+            maxFound=0;
+            for(int k=count-1;k>=0;k--)if(TranslucentPolygons[k].MaxZ>TranslucentPolygons[maxFound].MaxZ)maxFound=k;
+        }
+        if(particlesOnly){
+            RenderAllParticlesFurtherAwayThan(TranslucentPolygons[maxFound].MaxZ);
+            TranslucentPolygons[maxFound].MaxZ=0;
+            continue;
+        }
 
 		RenderPolygon.NumberOfVertices = TranslucentPolygons[maxFound].NumberOfVertices;
-		RenderPolygon.TranslucencyMode = TRANSLUCENCY_NORMAL;
-		D3D_ZBufferedGouraudTexturedPolygon_Output(&TranslucentPolygonHeaders[maxFound],TranslucentPolygons[maxFound].Vertices);
+		RenderPolygon.TranslucencyMode = TranslucentBlend[maxFound];
+		{
+            AVP_PROJECTION_STATE savedProjection=AvpProjection;
+            int savedPrecision=ViewmodelShapeActive;
+            int px=Global_VDB_Ptr->VDB_ProjX, py=Global_VDB_Ptr->VDB_ProjY;
+            ViewmodelShapeActive=TranslucentViewmodel[maxFound];
+            if(ViewmodelShapeActive) {
+                AvpProjection=TranslucentProjection[maxFound];
+                Global_VDB_Ptr->VDB_ProjX=TranslucentViewmodelProjX[maxFound];
+                Global_VDB_Ptr->VDB_ProjY=TranslucentViewmodelProjY[maxFound];
+            }
+            D3D_ZBufferedGouraudTexturedPolygon_Output(&TranslucentPolygonHeaders[maxFound],TranslucentPolygons[maxFound].Vertices);
+            ViewmodelShapeActive=savedPrecision;
+            AvpProjection=savedProjection;
+            Global_VDB_Ptr->VDB_ProjX=px; Global_VDB_Ptr->VDB_ProjY=py;
+        }
 		TranslucentPolygons[maxFound].MaxZ=0;
 	}
 	
-	RenderAllParticlesFurtherAwayThan(-0x7fffffff);
+	if(particlesOnly){
+        RenderAllParticlesFurtherAwayThan(-0x7fffffff);
+        for(int i=0;i<count;i++)TranslucentPolygons[i].MaxZ=originalDepth[i];
+    }
+    EndParticleRenderOrder();
+    if(!particlesOnly)CurrentNumberOfTranslucentPolygons=0;
 	
 }
 
@@ -5694,10 +5699,7 @@ void RenderMirrorSurface(void)
 		{
 			VerticesBuffer[i].A = 128;
 
-			TranslatePointIntoViewspace(&translatedPts[i]);
-			VerticesBuffer[i].X	= translatedPts[i].vx;
-			VerticesBuffer[i].Y	= translatedPts[i].vy;
-			VerticesBuffer[i].Z	= translatedPts[i].vz;
+			GeometryVertexFromWorld(&VerticesBuffer[i],&translatedPts[i]);
 			VerticesBuffer[i].U = mirrorUV[i*2];
 			VerticesBuffer[i].V = mirrorUV[i*2+1];
 
@@ -5724,7 +5726,7 @@ void RenderMirrorSurface(void)
 	if(RenderPolygon.NumberOfVertices<3) return;
 	GouraudTexturedPolygon_ClipWithPositiveX();
 	if(RenderPolygon.NumberOfVertices<3) return;
-	D3D_ZBufferedGouraudTexturedPolygon_Output(&fakeHeader,RenderPolygon.Vertices);
+	AddToTranslucentPolyList(&fakeHeader,RenderPolygon.Vertices);
 }
 void RenderMirrorSurface2(void)
 {
@@ -5753,10 +5755,7 @@ void RenderMirrorSurface2(void)
 		{
 			VerticesBuffer[i].A = 128;
 
-			TranslatePointIntoViewspace(&translatedPts[i]);
-			VerticesBuffer[i].X	= translatedPts[i].vx;
-			VerticesBuffer[i].Y	= translatedPts[i].vy;
-			VerticesBuffer[i].Z	= translatedPts[i].vz;
+			GeometryVertexFromWorld(&VerticesBuffer[i],&translatedPts[i]);
 			VerticesBuffer[i].U = mirrorUV[i*2];
 			VerticesBuffer[i].V = mirrorUV[i*2+1];
 
@@ -5783,7 +5782,7 @@ void RenderMirrorSurface2(void)
 	if(RenderPolygon.NumberOfVertices<3) return;
 	GouraudTexturedPolygon_ClipWithPositiveX();
 	if(RenderPolygon.NumberOfVertices<3) return;
-	D3D_ZBufferedGouraudTexturedPolygon_Output(&fakeHeader,RenderPolygon.Vertices);
+	AddToTranslucentPolyList(&fakeHeader,RenderPolygon.Vertices);
 }
 void RenderSmokeTest(void)
 {
@@ -5824,10 +5823,7 @@ void RenderSmokeTest(void)
 			{
 				VerticesBuffer[i].A = a/2;
 
-				TranslatePointIntoViewspace(&translatedPts[i]);
-				VerticesBuffer[i].X	= translatedPts[i].vx;
-				VerticesBuffer[i].Y	= translatedPts[i].vy;
-				VerticesBuffer[i].Z	= translatedPts[i].vz;
+				GeometryVertexFromWorld(&VerticesBuffer[i],&translatedPts[i]);
 				VerticesBuffer[i].U = mirrorUV[i*2];
 				VerticesBuffer[i].V = mirrorUV[i*2+1]+image*(32<<16);
 
@@ -5923,10 +5919,7 @@ void RenderSky(void)
 				translatedPts[i].vx += Global_VDB_Ptr->VDB_World.vx;
 				translatedPts[i].vy += Global_VDB_Ptr->VDB_World.vy;
 				translatedPts[i].vz += Global_VDB_Ptr->VDB_World.vz;
-				TranslatePointIntoViewspace(&translatedPts[i]);
-				VerticesBuffer[i].X	= translatedPts[i].vx;
-				VerticesBuffer[i].Y	= translatedPts[i].vy;
-				VerticesBuffer[i].Z	= translatedPts[i].vz;
+				GeometryVertexFromWorld(&VerticesBuffer[i],&translatedPts[i]);
 
 				switch (CurrentVisionMode)
 				{
@@ -6165,6 +6158,7 @@ void RenderPredatorTargetingSegment(int theta, int scale, int drawInRed)
 	VECTOR2D offset[4];
  	POLYHEADER fakeHeader;
 	int centreX,centreY;
+	int crosshairScale = HUD_GetCrosshairScaleFixed();
 	int z = ONE_FIXED-scale;
 	z = MUL_FIXED(MUL_FIXED(z,z),2048);
 	{
@@ -6217,17 +6211,17 @@ void RenderPredatorTargetingSegment(int theta, int scale, int drawInRed)
 			offset[2].vx = -offset[2].vx;
 			offset[3].vx = -offset[3].vx;
 		}
-		VerticesBuffer[0].X = offset[0].vx+centreX;
-		VerticesBuffer[0].Y = MUL_FIXED(offset[0].vy,87381)+centreY;
+		VerticesBuffer[0].X = MUL_FIXED(offset[0].vx,crosshairScale)+centreX;
+		VerticesBuffer[0].Y = MUL_FIXED(MUL_FIXED(offset[0].vy,87381),crosshairScale)+centreY;
 		
-		VerticesBuffer[1].X = offset[1].vx+centreX;
-		VerticesBuffer[1].Y = MUL_FIXED(offset[1].vy,87381)+centreY;
+		VerticesBuffer[1].X = MUL_FIXED(offset[1].vx,crosshairScale)+centreX;
+		VerticesBuffer[1].Y = MUL_FIXED(MUL_FIXED(offset[1].vy,87381),crosshairScale)+centreY;
 
-		VerticesBuffer[2].X = offset[2].vx+centreX;
-		VerticesBuffer[2].Y = MUL_FIXED(offset[2].vy,87381)+centreY;
+		VerticesBuffer[2].X = MUL_FIXED(offset[2].vx,crosshairScale)+centreX;
+		VerticesBuffer[2].Y = MUL_FIXED(MUL_FIXED(offset[2].vy,87381),crosshairScale)+centreY;
 		
-		VerticesBuffer[3].X = offset[3].vx+centreX;
-		VerticesBuffer[3].Y = MUL_FIXED(offset[3].vy,87381)+centreY;
+		VerticesBuffer[3].X = MUL_FIXED(offset[3].vx,crosshairScale)+centreX;
+		VerticesBuffer[3].Y = MUL_FIXED(MUL_FIXED(offset[3].vy,87381),crosshairScale)+centreY;
 	}
 	fakeHeader.PolyFlags = iflag_transparent;
 	RenderPolygon.TranslucencyMode = TRANSLUCENCY_GLOWING;
@@ -6272,17 +6266,17 @@ void RenderPredatorTargetingSegment(int theta, int scale, int drawInRed)
 
 	if (drawInRed)
 	{
-		VerticesBuffer[0].X = MUL_FIXED(offset[3].vx,scale*8)+centreX;
-		VerticesBuffer[0].Y = MUL_FIXED(MUL_FIXED(offset[3].vy,scale*8),87381)+centreY;
+		VerticesBuffer[0].X = MUL_FIXED(MUL_FIXED(offset[3].vx,scale*8),crosshairScale)+centreX;
+		VerticesBuffer[0].Y = MUL_FIXED(MUL_FIXED(MUL_FIXED(offset[3].vy,scale*8),87381),crosshairScale)+centreY;
 		
-		VerticesBuffer[1].X = MUL_FIXED(offset[2].vx,scale*8)+centreX;
-		VerticesBuffer[1].Y = MUL_FIXED(MUL_FIXED(offset[2].vy,scale*8),87381)+centreY;
+		VerticesBuffer[1].X = MUL_FIXED(MUL_FIXED(offset[2].vx,scale*8),crosshairScale)+centreX;
+		VerticesBuffer[1].Y = MUL_FIXED(MUL_FIXED(MUL_FIXED(offset[2].vy,scale*8),87381),crosshairScale)+centreY;
 
-		VerticesBuffer[2].X = offset[2].vx+centreX;
-		VerticesBuffer[2].Y = MUL_FIXED(offset[2].vy,87381)+centreY;
+		VerticesBuffer[2].X = MUL_FIXED(offset[2].vx,crosshairScale)+centreX;
+		VerticesBuffer[2].Y = MUL_FIXED(MUL_FIXED(offset[2].vy,87381),crosshairScale)+centreY;
 		
-		VerticesBuffer[3].X = offset[3].vx+centreX;
-		VerticesBuffer[3].Y = MUL_FIXED(offset[3].vy,87381)+centreY;
+		VerticesBuffer[3].X = MUL_FIXED(offset[3].vx,crosshairScale)+centreX;
+		VerticesBuffer[3].Y = MUL_FIXED(MUL_FIXED(offset[3].vy,87381),crosshairScale)+centreY;
 	 	{
 			int i;
 			for (i=0; i<2; i++) 
@@ -6317,13 +6311,17 @@ void RenderPredatorTargetingSegment(int theta, int scale, int drawInRed)
 		D3D_ZBufferedGouraudPolygon_Output(&fakeHeader,RenderPolygon.Vertices);
 	}
 }
-void RenderPredatorPlasmaCasterCharge(int value, VECTORCH *worldOffsetPtr, MATRIXCH *orientationPtr)
+void RenderPredatorPlasmaCasterCharge(int value, struct section_data *section)
 {
- 	POLYHEADER fakeHeader;
+ 	POLYHEADER fakeHeader = {0};
  	VECTORCH translatedPts[4];
+	SHAPEINSTR instruction = {0};
+	int *points = (int *)translatedPts;
+	int i;
 	int halfWidth = 100;
 	int halfHeight = 4;
 	int z = -1;
+	if (!ViewmodelDrawActive || !section) return;
 	translatedPts[0].vx = -halfWidth;
 	translatedPts[0].vy = z;
 	translatedPts[0].vz = -halfHeight-4;
@@ -6340,54 +6338,40 @@ void RenderPredatorPlasmaCasterCharge(int value, VECTORCH *worldOffsetPtr, MATRI
 	translatedPts[3].vy = z;
 	translatedPts[3].vz = halfHeight-4;
 
-	fakeHeader.PolyFlags = iflag_transparent;
-	RenderPolygon.TranslucencyMode = TRANSLUCENCY_GLOWING;
 
-
-	{
-		int i;
-		for (i=0; i<4; i++) 
-		{
-			VerticesBuffer[i].A = 255;
-		
-			RotateVector(&(translatedPts[i]),orientationPtr);
-			translatedPts[i].vx += worldOffsetPtr->vx;
-			translatedPts[i].vy += worldOffsetPtr->vy;
-			translatedPts[i].vz += worldOffsetPtr->vz;
-			TranslatePointIntoViewspace(&translatedPts[i]);
-		
-			VerticesBuffer[i].X	= translatedPts[i].vx;
-			VerticesBuffer[i].Y	= translatedPts[i].vy;
-			VerticesBuffer[i].Z	= translatedPts[i].vz;
-
-			VerticesBuffer[i].R = 32;
-			VerticesBuffer[i].G	= 0;
-			VerticesBuffer[i].B = 0;
-		}
-		RenderPolygon.NumberOfVertices=4;
-	}
-	{
-		int outcode = QuadWithinFrustrum();
-										  
-		if (outcode)
-		{		 
-			if (outcode!=2)
-			{
-				GouraudPolygon_ClipWithZ();
-				if(RenderPolygon.NumberOfVertices<3) return;
-				GouraudPolygon_ClipWithNegativeX();
-				if(RenderPolygon.NumberOfVertices<3) return;
-				GouraudPolygon_ClipWithPositiveY();
-				if(RenderPolygon.NumberOfVertices<3) return;
-				GouraudPolygon_ClipWithNegativeY();
-				if(RenderPolygon.NumberOfVertices<3) return;
-				GouraudPolygon_ClipWithPositiveX();
-				if(RenderPolygon.NumberOfVertices<3) return;
-				D3D_ZBufferedGouraudPolygon_Output(&fakeHeader,RenderPolygon.Vertices);
-  			}
-			else D3D_ZBufferedGouraudPolygon_Output(&fakeHeader,VerticesBuffer);
-		}
-	}
+ /* Use the same animated hierarchy, calibrated Z, zoom and camera-space
+    precision as Wrist2's mesh. Never reconstruct this attachment in world space. */
+ ViewmodelSection(section);
+ instruction.sh_instr_data=&points;
+ instruction.sh_numitems=4;
+ if (!ViewmodelTransform(&instruction)) return;
+ memset(VerticesBuffer,0,4*sizeof(VerticesBuffer[0]));
+ for (i=0;i<4;i++) {
+  VerticesBuffer[i].ViewX=ViewmodelPoints[i][0];
+  VerticesBuffer[i].ViewY=ViewmodelPoints[i][1];
+  VerticesBuffer[i].ViewZ=ViewmodelPoints[i][2];
+  VerticesBuffer[i].X=RotatedPts[i].vx;
+  VerticesBuffer[i].Y=RotatedPts[i].vy;
+  VerticesBuffer[i].Z=RotatedPts[i].vz;
+  VerticesBuffer[i].A=255;
+  VerticesBuffer[i].R=32;
+ }
+ fakeHeader.PolyFlags=iflag_transparent;
+ RenderPolygon.TranslucencyMode=TRANSLUCENCY_GLOWING;
+ RenderPolygon.NumberOfVertices=4;
+ /* Clip all five planes with the precise viewmodel path; integer quad
+    rejection would otherwise lose sub-unit motion at the frustum edges. */
+ GouraudPolygon_ClipWithZ();
+ if(RenderPolygon.NumberOfVertices<3) return;
+ GouraudPolygon_ClipWithNegativeX();
+ if(RenderPolygon.NumberOfVertices<3) return;
+ GouraudPolygon_ClipWithPositiveY();
+ if(RenderPolygon.NumberOfVertices<3) return;
+ GouraudPolygon_ClipWithNegativeY();
+ if(RenderPolygon.NumberOfVertices<3) return;
+ GouraudPolygon_ClipWithPositiveX();
+ if(RenderPolygon.NumberOfVertices<3) return;
+ D3D_ZBufferedGouraudPolygon_Output(&fakeHeader,RenderPolygon.Vertices);
 }
 
 
@@ -7325,3 +7309,7 @@ void RenderStarfield(void)
 		}
 	}		
 }
+
+/* Particle traversal occurs before retirement; glass after all world effects. */
+void RenderParticlesForTranslucentPolyList(void){ProcessTranslucentPolyList(1);}
+void OutputTranslucentPolyList(void){ProcessTranslucentPolyList(0);}

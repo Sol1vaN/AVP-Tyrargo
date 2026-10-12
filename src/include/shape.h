@@ -485,6 +485,7 @@ typedef struct polyheader {
 
 */
 
+#define iflag_coplanar_trim 0x10000000 /* render-only priority for contained coplanar trim */
 #define iflag_notvis				0x00000001	/* Don't draw this item */
 #define iflag_nolight			0x00000002	/* Take colour as is */
 #define iflag_ignore0			0x00000004	/* Don't draw colour 0 - textures */

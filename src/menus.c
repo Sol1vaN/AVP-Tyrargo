@@ -1,3 +1,5 @@
+#include "tyrargo_version.h"
+#include "menu_background.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,6 +17,7 @@
 #include "hud_layout.h"
 
 #include "avp_menus.h"
+#include "avp/win95/text_encoding.h"
 
 #define UseLocalAssert Yes
 #include "ourasert.h"
@@ -363,36 +366,197 @@ static void LoadMenuFont()
 
 }
 
+static void ResetAcidMenuAtlas(void);
+static void ResetTyrargoTitleAtlas(void);
 static void UnloadMenuFont()
 {
 	ReleaseDDSurface(IntroFont_Light.info.ImagePtr);
 	IntroFont_Light.info.ImagePtr = NULL;
+ ResetTyrargoTitleAtlas();
+ ResetAcidMenuAtlas();
 }
 
 int LengthOfMenuText(const char *textPtr)
 {
 	int width = 0;
-	
+
 	while (textPtr && *textPtr) {
-		width += IntroFont_Light.FontWidth[(unsigned char) *textPtr];
-		
-		textPtr++;
+		unsigned char glyph = AvPTextNextGlyphConst(&textPtr);
+		width += IntroFont_Light.FontWidth[glyph];
 	}
 	return width;
+}
+
+/* Cache the separable glow only while this title atlas is alive. */
+static unsigned char TyrargoTitleMask[512*64],TyrargoTitleGlow[512*64];
+static D3DTexture *TyrargoTitleAtlas;
+static int TyrargoTitleWidth;
+static void ResetTyrargoTitleAtlas(void){TyrargoTitleAtlas=NULL;TyrargoTitleWidth=0;}
+void RenderTyrargoTitle(int centreX,int top,int alpha,double pulse)
+{
+ D3DTexture *atlas=IntroFont_Light.info.ImagePtr;int x,y,i,width,height=57;
+ const char *name=TYRARGO_SHORT_NAME;
+ if(!alpha||!atlas||!surface)return;
+ width=LengthOfMenuText(name)+24;if(width>512)return;
+ /* Rebuild on load (UnloadMenuFont invalidates the pointer) or changed atlas. */
+ if(TyrargoTitleAtlas!=atlas||TyrargoTitleWidth!=width){
+  unsigned char temp[512*64];int pen=12;
+  memset(TyrargoTitleMask,0,sizeof TyrargoTitleMask);
+  for(i=0;name[i];i++){
+   int c=(unsigned char)name[i],w=IntroFont_Light.FontWidth[c],v=1+(c-32)*33;
+   for(y=0;y<33;y++)for(x=0;x<w;x++){
+    const unsigned char *src=atlas->buf+4*((v+y)*atlas->w+x);
+    int a=src[0];if(src[1]>a)a=src[1];if(src[2]>a)a=src[2];
+    TyrargoTitleMask[(y+12)*width+pen+x]=(unsigned char)a;
+   }pen+=w;
+  }
+  memcpy(TyrargoTitleGlow,TyrargoTitleMask,sizeof TyrargoTitleGlow);
+  for(i=0;i<3;i++){
+   for(y=0;y<height;y++)for(x=0;x<width;x++){
+    int sum=0,k;for(k=-3;k<=3;k++)if(x+k>=0&&x+k<width)sum+=TyrargoTitleGlow[y*width+x+k];
+    temp[y*width+x]=(unsigned char)(sum/7);
+   }
+   for(y=0;y<height;y++)for(x=0;x<width;x++){
+    int sum=0,k;for(k=-3;k<=3;k++)if(y+k>=0&&y+k<height)sum+=temp[(y+k)*width+x];
+    TyrargoTitleGlow[y*width+x]=(unsigned char)(sum/7);
+   }
+  }
+  TyrargoTitleAtlas=atlas;TyrargoTitleWidth=width;
+ }
+ if(SDL_MUSTLOCK(surface)&&!SDL_LockSurface(surface))return;
+ for(y=0;y<height;y++)for(x=0;x<width;x++){
+  int sx=centreX-width/2+x,sy=top-12+y;
+  if(sx<0||sy<0||sx>=surface->w||sy>=surface->h)continue;
+  double strength=alpha/65536.0*pulse;
+  double core=TyrargoTitleMask[y*width+x]*strength,glow=TyrargoTitleGlow[y*width+x]*strength*2.4;
+  unsigned short *dst=(unsigned short*)((unsigned char*)surface->pixels+sy*surface->pitch)+sx;
+  int r=((*dst>>11)&31)*255/31+(int)(core*.34+glow*.08);
+  int g=((*dst>>5)&63)*255/63+(int)(core*.62+glow*.30);
+  int b=(*dst&31)*255/31+(int)(core+glow);
+  if(r>255)r=255;if(g>255)g=255;if(b>255)b=255;
+  *dst=((r>>3)<<11)|((g>>2)<<5)|(b>>3);
+ }
+ if(SDL_MUSTLOCK(surface))SDL_UnlockSurface(surface);
+}
+
+/* Coloured atlas glyphs with a cached green bloom, including composed Latin
+ * glyphs. This does not recolour the backdrop or other difficulty entries. */
+static unsigned char AcidTextMask[640*64],AcidTextGlow[640*64];
+static D3DTexture *AcidTextAtlas;
+static char AcidTextCached[256];
+static int AcidTextWidth;
+static void ResetAcidMenuAtlas(void){AcidTextAtlas=NULL;AcidTextCached[0]=0;}
+static void AcidCopyGlyph(D3DTexture *atlas,unsigned char c,int pen,int width)
+{
+ if(c<32)return;
+ int v=1+(c-32)*33,w=IntroFont_Light.FontWidth[c];
+ if(v+33>atlas->h)return;
+ for(int y=0;y<33;y++)for(int x=0;x<w&&x<atlas->w;x++){
+  int px=pen+x;if(px<0||px>=width)continue;
+  const unsigned char *src=atlas->buf+4*((v+y)*atlas->w+x);
+  int a=src[0];if(src[1]>a)a=src[1];if(src[2]>a)a=src[2];
+  if(a>AcidTextMask[(y+6)*width+px])AcidTextMask[(y+6)*width+px]=(unsigned char)a;
+ }
+}
+/* Match the existing selection fade: dark endpoint 1/4, selected endpoint 1.
+ * Attenuate emission before RGB saturation, never jump on a selection change. */
+static int MenuGlowScale(int alpha,int darkPercent,int selectedPercent)
+{
+ int selection=alpha-BRIGHTNESS_OF_DARKENED_ELEMENT;
+ int range=BRIGHTNESS_OF_HIGHLIGHTED_ELEMENT-BRIGHTNESS_OF_DARKENED_ELEMENT;
+ if(selection<0)selection=0;if(selection>range)selection=range;
+ return (int)(((long long)darkPercent*ONE_FIXED+
+  (long long)(selectedPercent-darkPercent)*ONE_FIXED*selection/range)/100);
+}
+void RenderAcidMenuText(char *name,int centreX,int top,int alpha)
+{
+ D3DTexture *atlas=IntroFont_Light.info.ImagePtr;
+ int width=LengthOfMenuText(name)+12,height=45;
+ if(!atlas||!surface||width>640||width<=12)return;
+ if(AcidTextAtlas!=atlas||AcidTextWidth!=width||strcmp(AcidTextCached,name)){
+  unsigned char temp[640*64];char *ptr=name;int pen=6;
+  memset(AcidTextMask,0,sizeof AcidTextMask);
+  while(*ptr){unsigned char accent=0,c=AvPTextNextGlyphWithAccent(&ptr,&accent);
+   AcidCopyGlyph(atlas,c,pen,width);
+   if(accent)AcidCopyGlyph(atlas,accent,pen+(IntroFont_Light.FontWidth[c]-IntroFont_Light.FontWidth[accent])/2,width);
+   pen+=IntroFont_Light.FontWidth[c];
+  }
+  for(int y=0;y<height;y++)for(int x=0;x<width;x++){
+   int sum=0;for(int k=-3;k<=3;k++)if(x+k>=0&&x+k<width)sum+=AcidTextMask[y*width+x+k];
+   temp[y*width+x]=(unsigned char)(sum/7);
+  }
+  for(int y=0;y<height;y++)for(int x=0;x<width;x++){
+   int sum=0;for(int k=-3;k<=3;k++)if(y+k>=0&&y+k<height)sum+=temp[(y+k)*width+x];
+   AcidTextGlow[y*width+x]=(unsigned char)(sum/7);
+  }
+  AcidTextAtlas=atlas;AcidTextWidth=width;snprintf(AcidTextCached,sizeof AcidTextCached,"%s",name);
+ }
+ if(SDL_MUSTLOCK(surface)&&!SDL_LockSurface(surface))return;
+ int strength=32768+alpha/2;if(strength>65536)strength=65536;
+ strength=MUL_FIXED(strength,MenuGlowScale(alpha,80,90));
+ for(int y=0;y<height;y++)for(int x=0;x<width;x++){
+  int sx=centreX-width/2+x,sy=top-6+y;
+  if(sx<0||sy<0||sx>=surface->w||sy>=surface->h)continue;
+  int core=MUL_FIXED(strength,AcidTextMask[y*width+x]),glow=MUL_FIXED(strength,AcidTextGlow[y*width+x]);
+  if(!core&&!glow)continue;
+  unsigned short *dst=(unsigned short*)((unsigned char*)surface->pixels+sy*surface->pitch)+sx;
+  int r=((*dst>>11)&31)*255/31+(core+2*glow)*165/255;
+  int g=((*dst>>5)&63)*255/63+(core+2*glow)*204/255;
+  int b=(*dst&31)*255/31+(core+2*glow)*118/255;
+  if(r>255)r=255;if(g>255)g=255;if(b>255)b=255;
+  *dst=((r>>3)<<11)|((g>>2)<<5)|(b>>3);
+ }
+ if(SDL_MUSTLOCK(surface))SDL_UnlockSurface(surface);
 }
 
 int LengthOfSmallMenuText(char *textPtr)
 {
-	int width = 0;
-	
-	while (textPtr && *textPtr) {
-		width += AAFontWidths[(unsigned char) *textPtr];
-		
-		textPtr++;
-	}
-	return width;
+	return textPtr ? AvPTextStringWidth(textPtr, AAFontWidths) : 0;
 }
 
+/* The large title atlas is ASCII-only as well.  This runs while the caller
+   owns the surface lock and paints a mark over the already-rendered base. */
+static int MenuAVContrast;
+/* Coverage compositing is scoped to the selected quick-load row only. */
+static int MenuQuickLoadAlpha = -1;
+static void MenuContrastPixel(int x,int y,int coverage,int r,int g,int b);
+static void RenderLargeMenuAccent(D3DTexture *image, unsigned char c, int sx, int sy, int alpha, int clipped, int topY, int bottomY)
+{
+	unsigned char *srcPtr;
+	unsigned short *destPtr;
+	unsigned int x, y;
+	unsigned int width;
+	unsigned int remainder = 0;
+	unsigned int stride;
+	unsigned int topLeftV;
+
+	if (!c || c < ' ' || c > '~') return;
+	width = IntroFont_Light.FontWidth[c];
+	topLeftV = 1 + (c - 32) * 33;
+	stride = width;
+	if (image->w > width) remainder = image->w - width; else stride = image->w;
+	srcPtr = &image->buf[topLeftV * image->w * 4];
+	for (y = sy; y < sy + 33; ++y) {
+		if (!clipped || (y >= (unsigned int)topY && y <= (unsigned int)bottomY)) {
+			destPtr = (unsigned short *)(((unsigned char *)surface->pixels) + y * surface->pitch) + sx;
+			for (x = stride; x > 0; --x) {
+				if (srcPtr[0] || srcPtr[1] || srcPtr[2]) {
+					unsigned int destR = (*destPtr & 0xF800) >> 8;
+					unsigned int destG = (*destPtr & 0x07E0) >> 3;
+					unsigned int destB = (*destPtr & 0x001F) << 3;
+					int r = MUL_FIXED(alpha, CloudTable[(x + sx + CloakingPhase / 64) & 127][(y + CloakingPhase / 128) & 127]);
+					destR += MUL_FIXED(r, srcPtr[0]); destG += MUL_FIXED(r, srcPtr[1]); destB += MUL_FIXED(r, srcPtr[2]);
+					if (destR > 255) destR = 255; if (destG > 255) destG = 255; if (destB > 255) destB = 255;
+					*destPtr = ((destR >> 3) << 11) | ((destG >> 2) << 5) | (destB >> 3);
+				}
+				srcPtr += 4; ++destPtr;
+			}
+			srcPtr += remainder * 4;
+		} else {
+			srcPtr += image->w * 4;
+		}
+	}
+}
 int RenderMenuText(char *textPtr, int sx, int sy, int alpha, enum AVPMENUFORMAT_ID format)
 {
 	int width;
@@ -439,7 +603,8 @@ int RenderMenuText(char *textPtr, int sx, int sy, int alpha, enum AVPMENUFORMAT_
 	}
 	
 	while( *textPtr ) {
-		char c = *textPtr++;
+		unsigned char accent = 0;
+		unsigned char c = AvPTextNextGlyphWithAccent(&textPtr, &accent);
 
 		if (c>=' ') {
 			unsigned int topLeftU = 0;
@@ -487,6 +652,7 @@ int RenderMenuText(char *textPtr, int sx, int sy, int alpha, enum AVPMENUFORMAT_
 				}
 				srcPtr += remainder * 4;
 			}
+			if (accent) RenderLargeMenuAccent(image, accent, sx + ((int)width - (int)IntroFont_Light.FontWidth[accent]) / 2, sy, alpha, 0, 0, 0);
 			sx += width;
 		}
 	}
@@ -544,7 +710,8 @@ int RenderMenuText_Clipped(char *textPtr, int sx, int sy, int alpha, enum AVPMEN
 	}
 	
 	while( *textPtr ) {
-		char c = *textPtr++;
+		unsigned char accent = 0;
+		unsigned char c = AvPTextNextGlyphWithAccent(&textPtr, &accent);
 
 		if (c>=' ') {
 			unsigned int topLeftU = 0;
@@ -596,6 +763,7 @@ int RenderMenuText_Clipped(char *textPtr, int sx, int sy, int alpha, enum AVPMEN
 					srcPtr += image->w * 4;
 				}
 			}
+			if (accent) RenderLargeMenuAccent(image, accent, sx + ((int)width - (int)IntroFont_Light.FontWidth[accent]) / 2, sy, alpha, 1, topY, bottomY);
 			sx += width;
 		}
 	}
@@ -609,73 +777,88 @@ int RenderMenuText_Clipped(char *textPtr, int sx, int sy, int alpha, enum AVPMEN
 
 }
 
-static int RenderSmallFontString(char *textPtr,int sx,int sy,int alpha, int red, int green, int blue)
+/* aa_font.rim has the ASCII page only. Compose Western-Latin accents from an
+   existing ASCII mark without consuming an extra layout cell. */
+/* Scoped to main-menu AV controls/help; titles and all other menus use the
+ * original renderer. 1=idle ivory, 2=selected amber, 3=help ivory. */
+
+void SetMenuAVContrast(int mode){MenuAVContrast=mode;}
+static void MenuContrastPixel(int x,int y,int coverage,int r,int g,int b){
+ if(x<0||y<0||x>=surface->w||y>=surface->h)return;
+ unsigned short *p=(unsigned short*)((unsigned char*)surface->pixels+y*surface->pitch)+x;
+ int dr=(*p>>11)*255/31,dg=((*p>>5)&63)*255/63,db=(*p&31)*255/31;
+ r=(r*coverage+dr*(255-coverage)+127)/255;
+ g=(g*coverage+dg*(255-coverage)+127)/255;
+ b=(b*coverage+db*(255-coverage)+127)/255;
+ *p=((r>>3)<<11)|((g>>2)<<5)|(b>>3);
+}
+static void MenuContrastMask(D3DTexture *image,int u,int v,int w,int h,int sx,int sy,int slider){
+ int r=MenuAVContrast==2?255:232,g=MenuAVContrast==2?202:240,b=MenuAVContrast==2?72:245;
+ /* Draw the complete outline before the foreground, retaining antialiased edges. */
+ for(int pass=0;pass<2;pass++)for(int y=0;y<h;y++)for(int x=0;x<w;x++){
+  const unsigned char *p=(unsigned char*)image->buf+4*((v+y)*image->w+u+x);
+  int a=p[0];if(p[1]>a)a=p[1];if(p[2]>a)a=p[2];if(slider){a*=4;if(a>255)a=255;}
+  if(!a)continue;
+  if(pass)MenuContrastPixel(sx+x,sy+y,a,r,g,b);
+  else for(int dy=-1;dy<=1;dy++)for(int dx=-1;dx<=1;dx++)MenuContrastPixel(sx+x+dx,sy+y+dy,a,0,0,0);
+ }
+}
+
+static void RenderSmallFontGlyph(D3DTexture *image, unsigned char c, int sx, int sy, int alphaR, int alphaG, int alphaB)
 {
 	unsigned char *srcPtr;
 	unsigned short *destPtr;
+	int topLeftU, topLeftV, x, y;
+	if (c < ' ' || c > 'z') return;
+	topLeftU = 1 + ((c - 32) & 15) * 16;
+	topLeftV = 1 + ((c - 32) >> 4) * 16;
+ if(MenuAVContrast){MenuContrastMask(image,topLeftU,topLeftV,HUD_FONT_WIDTH,HUD_FONT_HEIGHT,sx,sy,0);return;}
+	srcPtr = &image->buf[(topLeftU + topLeftV * image->w) * 4];
+	for (y = sy; y < HUD_FONT_HEIGHT + sy; y++) {
+		destPtr = (unsigned short *)(((unsigned char *)surface->pixels) + y * surface->pitch) + sx;
+		for (x = 0; x < HUD_FONT_WIDTH; x++) {
+			if (srcPtr[0] || srcPtr[1] || srcPtr[2]) {
+                if (MenuQuickLoadAlpha >= 0) {
+                    int coverage=srcPtr[0];
+                    if(srcPtr[1]>coverage)coverage=srcPtr[1];
+                    if(srcPtr[2]>coverage)coverage=srcPtr[2];
+                    coverage=MUL_FIXED(coverage,MenuQuickLoadAlpha);
+                    if(coverage>255)coverage=255;
+                    MenuContrastPixel(sx+x,y,coverage,178,24,240);
+                    srcPtr+=4;destPtr++;continue;
+                }
+				unsigned int destR = (*destPtr & 0xF800) >> 8;
+				unsigned int destG = (*destPtr & 0x07E0) >> 3;
+				unsigned int destB = (*destPtr & 0x001F) << 3;
+				destR += MUL_FIXED(alphaR, srcPtr[0]); destG += MUL_FIXED(alphaG, srcPtr[1]); destB += MUL_FIXED(alphaB, srcPtr[2]);
+				if (destR > 0x00FF) destR = 0x00FF; if (destG > 0x00FF) destG = 0x00FF; if (destB > 0x00FF) destB = 0x00FF;
+				*destPtr = ((destR >> 3) << 11) | ((destG >> 2) << 5) | (destB >> 3);
+			}
+			srcPtr += 4; destPtr++;
+		}
+		srcPtr += (image->w - HUD_FONT_WIDTH) * 4;
+	}
+}
+static int RenderSmallFontString(char *textPtr,int sx,int sy,int alpha, int red, int green, int blue)
+{
 	int alphaR = MUL_FIXED(alpha,red);
 	int alphaG = MUL_FIXED(alpha,green);
 	int alphaB = MUL_FIXED(alpha,blue);
-	AVPMENUGFX *gfxPtr;
-	D3DTexture *image;
-	
-	gfxPtr = &AvPMenuGfxStorage[AVPMENUGFX_SMALL_FONT];
-	image = gfxPtr->ImagePtr;
-	
-	if (SDL_MUSTLOCK(surface)) {
-		if (SDL_LockSurface(surface) < 0) {
-			return 0; /* ... */
+	D3DTexture *image = AvPMenuGfxStorage[AVPMENUGFX_SMALL_FONT].ImagePtr;
+	if (SDL_MUSTLOCK(surface) && SDL_LockSurface(surface) < 0) return 0;
+	while (*textPtr) {
+		unsigned char accent = 0;
+		unsigned char c = AvPTextNextGlyphWithAccent(&textPtr, &accent);
+		if (c >= ' ') {
+			int glyphWidth = AAFontWidths[c];
+			RenderSmallFontGlyph(image, c, sx, sy, alphaR, alphaG, alphaB);
+			if (accent) RenderSmallFontGlyph(image, accent, sx + (glyphWidth - AAFontWidths[accent]) / 2, sy, alphaR, alphaG, alphaB);
+			sx += glyphWidth;
 		}
 	}
-	
-	while( *textPtr ) {
-		char c = *textPtr++;
-
-		if (c>=' ') {
-			int topLeftU = 1+((c-32)&15)*16;
-			int topLeftV = 1+((c-32)>>4)*16;
-			int x, y;
-			
-			srcPtr = &image->buf[(topLeftU+topLeftV*image->w)*4];
-			
-			for (y=sy; y<HUD_FONT_HEIGHT+sy; y++) {
-				destPtr = (unsigned short *)(((unsigned char *)surface->pixels)+y*surface->pitch) + sx;
-				
-				for (x=0; x<HUD_FONT_WIDTH; x++) {
-					if (srcPtr[0] || srcPtr[1] || srcPtr[2]) {
-						unsigned int destR, destG, destB;
-						
-						destR = (*destPtr & 0xF800)>>8;
-						destG = (*destPtr & 0x07E0)>>3;
-						destB = (*destPtr & 0x001F)<<3;
-						
-						destR += MUL_FIXED(alphaR, srcPtr[0]);
-						destG += MUL_FIXED(alphaG, srcPtr[1]);
-						destB += MUL_FIXED(alphaB, srcPtr[2]);
-						if (destR > 0x00FF) destR = 0x00FF;
-						if (destG > 0x00FF) destG = 0x00FF;
-						if (destB > 0x00FF) destB = 0x00FF;
-						
-						*destPtr =	((destR>>3)<<11) |
-								((destG>>2)<<5 ) |
-								((destB>>3));
-					}
-					srcPtr += 4;
-					destPtr++;
-				}
-				srcPtr += (image->w - HUD_FONT_WIDTH) * 4;	
-			}
-			sx += AAFontWidths[(unsigned char) c];
-		}
-	}
-
-	if (SDL_MUSTLOCK(surface)) {
-		SDL_UnlockSurface(surface);
-	}
-	
+	if (SDL_MUSTLOCK(surface)) SDL_UnlockSurface(surface);
 	return sx;
 }
-
 void RenderSmallFontString_Wrapped(const char *textPtr,RECT* area,int alpha,int* output_x,int* output_y)
 {
 	unsigned char *srcPtr;
@@ -699,11 +882,11 @@ Determine area used by text , so we can draw it centrally
 		int widthFromChars=0;
 		
 		while(*textPtr2 && *textPtr2==' ') {
-			widthFromSpaces+=AAFontWidths[(unsigned char) *textPtr2++];
+			widthFromSpaces+=AAFontWidths[AvPTextNextGlyphConst(&textPtr2)];
 		}
 		
 		while(*textPtr2 && *textPtr2!=' ') {
-			widthFromChars+=AAFontWidths[(unsigned char) *textPtr2++];
+			widthFromChars+=AAFontWidths[AvPTextNextGlyphConst(&textPtr2)];
 		}
 		
 		wordWidth=widthFromSpaces+widthFromChars;
@@ -762,11 +945,11 @@ Determine area used by text , so we can draw it centrally
 		wordWidth=0;
 		
 		while(*textPtr2 && *textPtr2==' ') {
-			wordWidth+=AAFontWidths[(unsigned char) *textPtr2++];
+			wordWidth+=AAFontWidths[AvPTextNextGlyphConst(&textPtr2)];
 		}
 		
 		while(*textPtr2 && *textPtr2!=' ') {
-			wordWidth+=AAFontWidths[(unsigned char) *textPtr2++];
+			wordWidth+=AAFontWidths[AvPTextNextGlyphConst(&textPtr2)];
 		}
 		
 		if(wordWidth> area->right-sx) {
@@ -790,7 +973,7 @@ Determine area used by text , so we can draw it centrally
 		}
 		
 		while(*textPtr && *textPtr==' ') {
-			sx+=AAFontWidths[(unsigned char) *textPtr++];
+			sx+=AAFontWidths[AvPTextNextGlyphConst((const char **)&textPtr)];
 		}
 		
 		if(sx>area->right) {
@@ -803,8 +986,9 @@ Determine area used by text , so we can draw it centrally
 		}
 		
 		while(*textPtr && *textPtr!=' ') {
-			char c = *textPtr++;
-			int letterWidth = AAFontWidths[(unsigned char) c];
+			unsigned char accent = 0;
+			unsigned char c = AvPTextNextGlyphConstWithAccent(&textPtr, &accent);
+			int letterWidth = AAFontWidths[c];
 			
 			if(sx+letterWidth>area->right) {
 				sx=area->left;
@@ -813,41 +997,10 @@ Determine area used by text , so we can draw it centrally
 				if(sy+HUD_FONT_HEIGHT> area->bottom) break;
 			}
 			
-			if (c>=' ' && c<='z') {
-				int topLeftU = 1+((c-32)&15)*16;
-				int topLeftV = 1+((c-32)>>4)*16;
-				int x, y;
-				
-				srcPtr = &image->buf[(topLeftU+topLeftV*image->w)*4];
-				
-				for (y=sy; y<HUD_FONT_HEIGHT+sy; y++) {
-					destPtr = (unsigned short *)(((unsigned char *)surface->pixels) + y*surface->pitch) + sx;
-					
-					for (x=0; x<HUD_FONT_WIDTH; x++) {
-						if (srcPtr[0] || srcPtr[1] || srcPtr[2]) {
-							unsigned int destR, destG, destB;
-						
-							destR = (*destPtr & 0xF800)>>8;
-							destG = (*destPtr & 0x07E0)>>3;
-							destB = (*destPtr & 0x001F)<<3;
-						
-							destR += MUL_FIXED(alpha, srcPtr[0]);
-							destG += MUL_FIXED(alpha, srcPtr[1]);
-							destB += MUL_FIXED(alpha, srcPtr[2]);
-							if (destR > 0x00FF) destR = 0x00FF;
-							if (destG > 0x00FF) destG = 0x00FF;
-							if (destB > 0x00FF) destB = 0x00FF;
-						
-							*destPtr =	((destR>>3)<<11) |
-									((destG>>2)<<5 ) |
-									((destB>>3));
-						}
-						srcPtr += 4;
-						destPtr++;
-					}
-					srcPtr += (image->w - HUD_FONT_WIDTH) * 4;	
-				}
-				sx += AAFontWidths[(unsigned char) c];
+			if (c >= ' ') {
+				RenderSmallFontGlyph(image, c, sx, sy, alpha, alpha, alpha);
+				if (accent) RenderSmallFontGlyph(image, accent, sx + (letterWidth - AAFontWidths[accent]) / 2, sy, alpha, alpha, alpha);
+				sx += letterWidth;
 			}
 		}
 	}
@@ -872,22 +1025,12 @@ int RenderSmallMenuText(char *textPtr, int x, int y, int alpha, enum AVPMENUFORM
 		case AVPMENUFORMAT_LEFTJUSTIFIED:
 			break;
 		case AVPMENUFORMAT_RIGHTJUSTIFIED:
-			length = 0;
-			ptr = textPtr;
-			
-			while (*ptr) {
-				length+=AAFontWidths[(unsigned char) *ptr++];
-			}
+			length = LengthOfSmallMenuText(textPtr);
 			
 			x -= length;
 			break;
 		case AVPMENUFORMAT_CENTREJUSTIFIED:
-			length = 0;
-			ptr = textPtr;
-			
-			while (*ptr) {
-				length+=AAFontWidths[(unsigned char) *ptr++];
-			}
+			length = LengthOfSmallMenuText(textPtr);
 			
 			x -= length / 2;
 			break;
@@ -910,22 +1053,12 @@ int RenderSmallMenuText_Coloured(char *textPtr, int x, int y, int alpha, enum AV
 		case AVPMENUFORMAT_LEFTJUSTIFIED:
 			break;
 		case AVPMENUFORMAT_RIGHTJUSTIFIED:
-			length = 0;
-			ptr = textPtr;
-	
-			while (*ptr) {
-				length+=AAFontWidths[(unsigned char) *ptr++];
-			}
+			length = LengthOfSmallMenuText(textPtr);
 			
 			x -= length;
 			break;
 		case AVPMENUFORMAT_CENTREJUSTIFIED:
-			length = 0;
-			ptr = textPtr;
-			
-			while (*ptr) {
-				length+=AAFontWidths[(unsigned char) *ptr++];
-			}
+			length = LengthOfSmallMenuText(textPtr);
 			
 			x -= length / 2;
 			break;
@@ -934,6 +1067,45 @@ int RenderSmallMenuText_Coloured(char *textPtr, int x, int y, int alpha, enum AV
 	LOCALASSERT(x>0);
 	
 	return RenderSmallFontString(textPtr,x,y,alpha,red,green,blue);			
+}
+
+int RenderSmallMenuText_QuickLoad(char *text,int x,int y,int alpha,enum AVPMENUFORMAT_ID format)
+{
+ int saved=MenuQuickLoadAlpha;
+ MenuQuickLoadAlpha=alpha<0?0:alpha;
+ int result=RenderSmallMenuText_Coloured(text,x,y,alpha,format,ONE_FIXED,ONE_FIXED/8,ONE_FIXED/8);
+ MenuQuickLoadAlpha=saved;
+ return result;
+}
+
+void RenderCampaignModeText(char *text,int x,int y,int alpha,int mode)
+{
+ static const int colors[3][3]={{90,220,255},{70,110,255},{85,255,105}};
+ if(mode<0 || mode>2)mode=0;
+ int rgb[3];for(int i=0;i<3;i++)rgb[i]=colors[mode][i]*ONE_FIXED/255;
+ int strength=32768+alpha/2;
+ if(strength>65536)strength=65536;
+ strength=MUL_FIXED(strength,MenuGlowScale(alpha,100,95));
+ for(int dy=-2;dy<=2;dy++)for(int dx=-2;dx<=2;dx++){
+  int distance=abs(dx)+abs(dy);if(distance<1 || distance>3)continue;
+  RenderSmallMenuText_Coloured(text,x+dx,y+dy,strength/(10+distance*5),AVPMENUFORMAT_CENTREJUSTIFIED,rgb[0],rgb[1],rgb[2]);
+ }
+ RenderSmallMenuText_Coloured(text,x,y,strength,AVPMENUFORMAT_CENTREJUSTIFIED,rgb[0],rgb[1],rgb[2]);
+}
+
+void RenderOptimizedAmmoText(char *text,int x,int y,int alpha,int mode)
+{
+ static const int colors[2][3]={{190,145,28},{180,42,78}};
+ if(mode<0 || mode>1)mode=0;
+ int rgb[3];for(int i=0;i<3;i++)rgb[i]=colors[mode][i]*ONE_FIXED/255;
+ int strength=32768+alpha/2;
+ if(strength>65536)strength=65536;
+ strength=MUL_FIXED(strength,MenuGlowScale(alpha,100,100));
+ for(int dy=-2;dy<=2;dy++)for(int dx=-2;dx<=2;dx++){
+  int distance=abs(dx)+abs(dy);if(distance<1 || distance>3)continue;
+  RenderSmallMenuText_Coloured(text,x+dx,y+dy,strength/(10+distance*5),AVPMENUFORMAT_CENTREJUSTIFIED,rgb[0],rgb[1],rgb[2]);
+ }
+ RenderSmallMenuText_Coloured(text,x,y,strength,AVPMENUFORMAT_CENTREJUSTIFIED,rgb[0],rgb[1],rgb[2]);
 }
 
 static void CalculateWidthsOfAAFont()
@@ -1166,8 +1338,48 @@ void InitialiseMenuGfx()
 	}	
 }
 
+int MenuBackgroundMode=MENU_BG_LETTERBOXED; /* Only background framing; UI canvas is independent. */
+static D3DTexture *SettingsBackdrop;
+static int SettingsBackdropAttempted,SettingsBackdropWidth,SettingsBackdropHeight;
+int DrawSettingsMenuBackdrop(int biomech)
+{
+ D3DTexture *image=(D3DTexture*)AvPMenuGfxStorage[AVPMENUGFX_BACKDROP].ImagePtr;
+ int iw=AvPMenuGfxStorage[AVPMENUGFX_BACKDROP].Width,ih=AvPMenuGfxStorage[AVPMENUGFX_BACKDROP].Height;
+ if(biomech && !SettingsBackdropAttempted){
+  size_t length=0;const void *data;char name[100];int w=0,h=0;
+  SettingsBackdropAttempted=1;
+  CL_GetImageFileName(name,sizeof name,"Menus\\biomechmenu.RIM",LIO_RELATIVEPATH);
+  data=ffreadbuf(name,&length);
+  if(data)SettingsBackdrop=AwCreateSurface("pxfXY",data,length,0,&w,&h);
+  else { FILE *f=fopen(name,"rb");if(f){fclose(f);SettingsBackdrop=AwCreateSurface("sfXY",name,0,&w,&h);} }
+  SettingsBackdropWidth=w;SettingsBackdropHeight=h;
+ }
+ if(biomech && SettingsBackdrop){image=SettingsBackdrop;iw=SettingsBackdropWidth;ih=SettingsBackdropHeight;}
+ if(!surface||!image||!image->buf||iw<=0||ih<=0)return 0;
+ if(SDL_MUSTLOCK(surface)&&!SDL_LockSurface(surface))return 0;
+ /* RIM and Bink use the same fill/letterbox/center mapping.
+  * Authored bands are removed only for fullscreen; UI scale stays separate. */
+ MenuBackdropMapping map=MenuBackdropMap(surface->w,surface->h,iw,ih,MenuBackgroundMode);
+ int sourceTop=map.top;ih=map.height;
+ double scaleX=map.scaleX,scaleY=map.scaleY,ox=map.ox,oy=map.oy;
+ for(int y=0;y<surface->h;y++){
+  unsigned short *dst=(unsigned short*)((unsigned char*)surface->pixels+y*surface->pitch);
+  double sourceY=oy+(y+.5)/scaleY;int sy=(int)sourceY;
+  for(int x=0;x<surface->w;x++){
+   double sourceX=ox+(x+.5)/scaleX;int sx=(int)sourceX;
+   if(sourceX<0||sourceY<0||sx>=iw||sy>=ih){dst[x]=0;continue;}
+   const unsigned char *rgb=(const unsigned char*)image->buf+4*((sy+sourceTop)*image->w+sx);
+   dst[x]=((rgb[0]>>3)<<11)|((rgb[1]>>2)<<5)|(rgb[2]>>3);
+  }
+ }
+ if(SDL_MUSTLOCK(surface))SDL_UnlockSurface(surface);
+ return 1;
+}
+
 void ReleaseAllAvPMenuGfx()
 {
+ if(SettingsBackdrop)ReleaseDDSurface(SettingsBackdrop);
+ SettingsBackdrop=NULL;SettingsBackdropAttempted=0;
 	int i;
 	
 	for (i = 0; i < MAX_NO_OF_AVPMENUGFXS; i++) {
@@ -1206,6 +1418,11 @@ void DrawAvPMenuGfx(enum AVPMENUGFX_ID menuGfxID, int topleftX, int topleftY, in
 			break;
 	}
 	
+ if(MenuAVContrast&&(menuGfxID==AVPMENUGFX_SLIDERBAR||menuGfxID==AVPMENUGFX_SLIDER)){
+  if(SDL_MUSTLOCK(surface)&&!SDL_LockSurface(surface))return;
+  MenuContrastMask(image,0,0,gfxPtr->Width,gfxPtr->Height,topleftX,topleftY,1);
+  if(SDL_MUSTLOCK(surface))SDL_UnlockSurface(surface);return;
+ }
 	srcPtr = (unsigned char *)image->buf;
 	length = gfxPtr->Width;
 	
@@ -1536,29 +1753,46 @@ int HeightOfMenuGfx(enum AVPMENUGFX_ID menuGfxID)
 void FadedScreen(int alpha)
 {
 	int x, y;
+	if (!surface) return;
+	if (alpha < 0) alpha = 0;
+	if (alpha > ONE_FIXED) alpha = ONE_FIXED;
 	unsigned short *ptr;
 	
 	if (SDL_MUSTLOCK(surface)) {
-		if (SDL_LockSurface(surface) < 0) {
+		if (!SDL_LockSurface(surface)) {
 			return; /* ... */
 		}
 	}
 	
-	for (y = 60; y < surface->h-60; y++) {
+	/* Fade the canvas already composed by DrawSettingsMenuBackdrop.
+	 * Fullscreen includes its edges; letterbox bars remain black. */
+	for (y = 0; y < surface->h; y++) {
 		ptr = (unsigned short *)(((unsigned char *)surface->pixels)+y*surface->pitch);
 		for (x = 0; x < surface->w; x++) {
-			unsigned int srcR, srcG, srcB;
-			
-			srcR = (*ptr & 0xF800) >> 11;
-			srcG = (*ptr & 0x07E0) >> 5;
-			srcB = (*ptr & 0x001F);
-			
-			srcR = MUL_FIXED(srcR, alpha);
-			srcG = MUL_FIXED(srcG, alpha);
-			srcB = MUL_FIXED(srcB, alpha);
-			*ptr =	((srcR>>3)<<11) |
-				((srcG>>2)<<5 ) |
-				((srcB>>3));
+			unsigned int red5, green6, blue5;
+			unsigned int red8, green8, blue8;
+
+			/* The menu framebuffer is RGB565.  Do the fade in expanded RGB8
+			 * space, then quantise once when storing it.  The former code
+			 * treated the 5/6-bit components as RGB8 and shifted them again;
+			 * at the start of a fade that discarded red and blue much earlier
+			 * than green, producing a brief green cast after the logo FMV. */
+			red5 = (*ptr & 0xF800) >> 11;
+			green6 = (*ptr & 0x07E0) >> 5;
+			blue5 = (*ptr & 0x001F);
+
+			red8 = (red5 << 3) | (red5 >> 2);
+			green8 = (green6 << 2) | (green6 >> 4);
+			blue8 = (blue5 << 3) | (blue5 >> 2);
+
+			red8 = MUL_FIXED(red8, alpha);
+			green8 = MUL_FIXED(green8, alpha);
+			blue8 = MUL_FIXED(blue8, alpha);
+
+			*ptr = (unsigned short)(
+				(((red8 * 31 + 127) / 255) << 11) |
+				(((green8 * 63 + 127) / 255) << 5) |
+				 ((blue8 * 31 + 127) / 255));
 			ptr++;
 		}
 	}

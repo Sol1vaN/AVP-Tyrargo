@@ -39,13 +39,10 @@ void LoseSound (LOADED_SOUND const * ls)
 			return;
 		}
 		
-		if (ls_in_list->num_attached <= 0)
-		{
-			PlatEndGameSound ((SOUNDINDEX)ls_in_list->sound_num);
-			loaded_sounds.delete_entry (ls_in_list);
-			DeallocateMem (ls_in_list->wavname);
-			DeallocateMem (ls_in_list);
-		}
+        /* Retain decoded map sounds for subsequent enemies/triggers. The
+         * fixed slot pool bounds this cache; level cleanup frees it as before. */
+        if(ls_in_list->num_attached < 0)ls_in_list->num_attached=0;
+
 	}
 	else
 	{
@@ -82,6 +79,21 @@ static int find_empty_game_sound()
 			return(i);
 		}
 	}
+    /* Only unreferenced, inactive cache entries can be recycled. Never
+     * invalidate a strategy's LOADED_SOUND pointer or a playing voice. */
+    for(LIF<LOADED_SOUND *> it(&loaded_sounds);!it.done();it.next()){
+        LOADED_SOUND *entry=it();
+        int index=entry->sound_num;
+        if(!entry->permanent && entry->num_attached==0
+           && index>=SID_STARTOF_LOADSLOTS && index<=SID_ENDOF_LOADSLOTS
+           && GameSounds[index].activeInstances==0){
+            PlatEndGameSound((SOUNDINDEX)index);
+            loaded_sounds.delete_entry(entry);
+            DeallocateMem(entry->wavname);
+            DeallocateMem(entry);
+            return index;
+        }
+    }
 	return(-1);
 	
 }

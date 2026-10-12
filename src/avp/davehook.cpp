@@ -1,3 +1,4 @@
+#include "event_latency.h"
 /*******************************************************************
  *
  *    DESCRIPTION: 	davehook.cpp
@@ -336,12 +337,12 @@ void DAVEHOOK_Maintain(void)
 	{
 //		AmmoDaemon :: Maintain();
 
-		DAEMON_Maintain();
+		{ EVENT_TICK span=EventLatencyBegin(); DAEMON_Maintain(); EventLatencyEnd(span,"daemon update",0,0,0,0,0); }
 	}
 
 	#if KeyBindingUses_KEY_ID
 	{
-		KeyBinding :: Maintain();
+		{ EVENT_TICK span=EventLatencyBegin(); KeyBinding :: Maintain(); EventLatencyEnd(span,"console key bindings",0,0,0,0,0); }
 	}
 	#endif
 
@@ -376,7 +377,7 @@ void DAVEHOOK_Maintain(void)
 
 	if ( bFirstFrame )
 	{
-		RE_ENTRANT_QUEUE_WinMain_FlushMessagesWithoutProcessing();
+		{ EVENT_TICK span=EventLatencyBegin(); RE_ENTRANT_QUEUE_WinMain_FlushMessagesWithoutProcessing(); EventLatencyEnd(span,"console discard input",0,0,0,0,0); }
 		// this is a hack to ensure that none of the keypresses used
 		// in the menu get through to the first frame of the game and 
 		// for example, switch to typing mode (for CR presses)
@@ -386,8 +387,13 @@ void DAVEHOOK_Maintain(void)
 	else
 	{
 		// Flush the WinProc messages:
-		RE_ENTRANT_QUEUE_WinMain_FlushMessages();
+		{ EVENT_TICK span=EventLatencyBegin(); RE_ENTRANT_QUEUE_WinMain_FlushMessages(); EventLatencyEnd(span,"console queued input",0,0,0,0,0); }
 	}
+}
+
+void DAVEHOOK_RefreshScreenBounds(void)
+{
+ R2BASE_ScreenModeChange_Cleanup();
 }
 
 void DAVEHOOK_ScreenModeChange_Setup(void)

@@ -1,5 +1,6 @@
 
 #include "3dc.h"
+#include "projection.h"
 #include "inline.h"
 
 
@@ -259,7 +260,7 @@ CLIPPLANEPOINTS *cpp)
 	x=cpp->cpp1.vx;
 	x-=vdb->VDB_CentreX;
 	x*=cpp->cpp1.vz;
-	x/=vdb->VDB_ProjX;
+	x=(int)(x/AvpProjectionX(vdb));
 	cpp->cpp1.vx=x;
 
 /* y */
@@ -267,7 +268,7 @@ CLIPPLANEPOINTS *cpp)
 	y=cpp->cpp1.vy;
 	y-=vdb->VDB_CentreY;
 	y*=cpp->cpp1.vz;
-	y/=vdb->VDB_ProjY;
+	y=(int)(y/(AvpProjectionY(vdb)*(4.0/3.0)));
 	cpp->cpp1.vy=y;
 
 
@@ -278,7 +279,7 @@ CLIPPLANEPOINTS *cpp)
 	x=cpp->cpp2.vx;
 	x-=vdb->VDB_CentreX;
 	x*=cpp->cpp2.vz;
-	x/=vdb->VDB_ProjX;
+	x=(int)(x/AvpProjectionX(vdb));
 	cpp->cpp2.vx=x;
 
 /* y */
@@ -286,7 +287,7 @@ CLIPPLANEPOINTS *cpp)
 	y=cpp->cpp2.vy;
 	y-=vdb->VDB_CentreY;
 	y*=cpp->cpp2.vz;
-	y/=vdb->VDB_ProjY;
+	y=(int)(y/(AvpProjectionY(vdb)*(4.0/3.0)));
 	cpp->cpp2.vy=y;
 
 
@@ -297,7 +298,7 @@ CLIPPLANEPOINTS *cpp)
 	x=cpp->cpp3.vx;
 	x-=vdb->VDB_CentreX;
 	x*=cpp->cpp3.vz;
-	x/=vdb->VDB_ProjX;
+	x=(int)(x/AvpProjectionX(vdb));
 	cpp->cpp3.vx=x;
 
 /* y */
@@ -305,7 +306,7 @@ CLIPPLANEPOINTS *cpp)
 	y=cpp->cpp3.vy;
 	y-=vdb->VDB_CentreY;
 	y*=cpp->cpp3.vz;
-	y/=vdb->VDB_ProjY;
+	y=(int)(y/(AvpProjectionY(vdb)*(4.0/3.0)));
 	cpp->cpp3.vy=y;
 
 /* The 1st Clip Point can be the POP */

@@ -1,3 +1,4 @@
+#include "tyrargo_version.h"
 /* Main designed spec for use with windows95*/
 
 #include "3dc.h"
@@ -48,6 +49,8 @@
 #include "GammaControl.h"
 
 #include "CDTrackSelection.h"
+
+#include <stdio.h>
 
 /*------------Patrick 1/6/97---------------
 New sound system 
@@ -134,6 +137,41 @@ extern int DebuggingCommandsActive;
 extern void BuildMultiplayerLevelNameArray();
 
 extern int WindowMode;
+
+static int CommandLineHasOption(const char *commandLine, const char *option)
+{
+	const size_t optionLength = strlen(option);
+	const char *cursor = commandLine;
+
+	while ((cursor = strstr(cursor, option)) != 0)
+	{
+		const char previous = (cursor == commandLine) ? ' ' : cursor[-1];
+		const char following = cursor[optionLength];
+
+		if ((previous == ' ' || previous == '\t' || previous == '"') &&
+			(following == '\0' || following == ' ' || following == '\t' || following == '"'))
+		{
+			return 1;
+		}
+
+		cursor += optionLength;
+	}
+
+	return 0;
+}
+
+static void EnableWindowDebugConsole(const char *commandLine)
+{
+	if (!CommandLineHasOption(commandLine, "-windebug")) return;
+
+	if (AllocConsole())
+	{
+		freopen("CONOUT$", "w", stdout);
+		freopen("CONOUT$", "w", stderr);
+		freopen("CONIN$", "r", stdin);
+		SetConsoleTitleA(TYRARGO_PROJECT_NAME " - Debug Output");
+	}
+}
 void exit_break_point_fucntion ()
 {
 	#if debug
@@ -156,6 +194,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 						
 	AVP_HInstance = hInst = hInstance;
 	AVP_NCmd = nCmdShow;
+	EnableWindowDebugConsole(lpCmdLine);
 
 	EnumerateCardsAndVideoModes();
 
@@ -558,7 +597,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 						#if MainTextPrint 		/* debugging stuff */
 						{
 
-							if (ShowDebuggingText.FPS) ReleasePrintDebuggingText("FrameRate = %d fps\n",FrameRate);
+							/* FPS is rendered by the configurable compact gameplay overlay. */
 							if (ShowDebuggingText.Environment) ReleasePrintDebuggingText("Environment %s\n", Env_List[AvP.CurrentEnv]->main);
 							if (ShowDebuggingText.Coords) ReleasePrintDebuggingText("Player World Coords: %d,%d,%d\n",Player->ObWorld.vx,Player->ObWorld.vy,Player->ObWorld.vz);
 
@@ -611,13 +650,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 					else
 					{
 						ReadUserInput();
-//						UpdateAllFMVTextures();	
+						UpdateAllFMVTextures();	
 						SoundSys_Management();
 						#if SOFTWARE_RENDERER
 						FlushSoftwareZBuffer();
 						#else
 						FlushD3DZBuffer();
-						#endifÿ
+						#endifï¿½
 						{
 							extern void ThisFramesRenderingHasBegun(void);
 							ThisFramesRenderingHasBegun();

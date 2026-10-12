@@ -1,3 +1,4 @@
+#include "molecular_acid.h"
 /* KJL 99/2/12 - Statistics of current game */
 #include "3dc.h"
 #include "inline.h"
@@ -13,6 +14,7 @@
 #include "bh_weap.h"
 #include "pldghost.h"
 #include "opengl.h"
+#include "win95/d3d_hud.h"
 
 #define UseLocalAssert Yes
 #include "ourasert.h"
@@ -29,7 +31,7 @@
 #define TABPOINT4	(((ScreenDescriptorBlock.SDB_Width/6)*2)+(ScreenDescriptorBlock.SDB_Width/2))
 
 extern int DebuggingCommandsActive;
-#define NotCheating ((CheatMode_Active==CHEATMODE_NONACTIVE)&&!DebuggingCommandsActive)
+#define NotCheating ((CheatMode_Active==CHEATMODE_NONACTIVE)&&!DebuggingCommandsActive&&!AcidActive())
 
 AvP_GameStats CurrentGameStatistics;
 extern SCREENDESCRIPTORBLOCK ScreenDescriptorBlock;
@@ -842,7 +844,12 @@ void DoFailedLevelStatisticsScreen(void)
 	
 	if (!deathFadeLevel) 
 	{
-		RenderStringCentred(GetTextString(TEXTSTRING_MULTIPLAYER_PRESSKEYTORESTARTGAME),ScreenDescriptorBlock.SDB_Width/2,ScreenDescriptorBlock.SDB_Height-20,0xffffffff);
+		int scale = D3D_GetConsoleTextScaleFixed();
+		int targetY = ScreenDescriptorBlock.SDB_Height - MUL_FIXED(20, scale);
+		int sourceY = 20 + (int)(((long long)(targetY - 20) * ONE_FIXED) / scale);
+		D3D_SetStatisticsTextRenderActive(1);
+		RenderStringCentred(GetTextString(TEXTSTRING_MULTIPLAYER_PRESSKEYTORESTARTGAME),ScreenDescriptorBlock.SDB_Width/2,sourceY,0xffffffff);
+		D3D_SetStatisticsTextRenderActive(0);
 	}
 
 }
@@ -898,6 +905,7 @@ extern void DoStatisticsScreen(int completed_level)
 
 	NPC_DATA *NpcData = NULL;
 	
+	D3D_SetStatisticsTextRenderActive(1);
 	switch (AvP.PlayerType)
 	{
 		case I_Marine:
@@ -964,7 +972,7 @@ extern void DoStatisticsScreen(int completed_level)
 	targetspassed=0;
 
 	/* Print their name. */
-	sprintf(buffer,"%s",UserProfilePtr->Name);
+	sprintf(buffer,"%s",UserProfilePtr->FullName);
 	RenderString(buffer,TABPOINT1,20,COLOUR_WHITE);
 
 	if (completed_level) {
@@ -1959,7 +1967,7 @@ extern void DoStatisticsScreen(int completed_level)
 		{
 			unsigned int percentage;
 
-			percentage=CurrentGameStatistics.FieldChargeUsed/(PLAYERCLOAK_MAXENERGY/100);
+			percentage=CurrentGameStatistics.FieldChargeUsed/(AcidResourceCapacity(PLAYERCLOAK_MAXENERGY)/100);
 
 			if ((completed_level)&&(level_num<AVP_ENVIRONMENT_END_OF_LIST)&&(NotCheating)) {
 				/* Is it a new best? */
@@ -2232,4 +2240,5 @@ extern void DoStatisticsScreen(int completed_level)
 			}
 		}
 	}
+	D3D_SetStatisticsTextRenderActive(0);
 }

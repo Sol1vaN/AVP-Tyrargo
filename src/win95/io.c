@@ -2,6 +2,7 @@
 
 #include <sys/stat.h>
 #include <string.h>
+#include <SDL3/SDL.h>
 
 #include "inline.h"
 #include "module.h"
@@ -96,6 +97,7 @@ extern IMAGEHEADER ImageHeaderArray[]; /* Array of Image Headers */
 
 /* Timer */
    long lastTickCount;
+   static Uint64 lastFrameCounterNS;
 
 	unsigned char *ScreenBuffer    = 0;		/* Ensure initialised to Null */
 
@@ -610,6 +612,7 @@ void ExitSystem(void)
 void ResetFrameCounter(void)
 {
 	lastTickCount = timeGetTime();
+	lastFrameCounterNS = SDL_GetTicksNS();
 
 	NormalFrameTime = ONE_FIXED >> 4;
 	PrevNormalFrameTime = NormalFrameTime;
@@ -624,18 +627,20 @@ void ResetFrameCounter(void)
 
 void FrameCounterHandler(void)
 {
-	int newTickCount = timeGetTime();
-	int fcnt_milliseconds;
+	Uint64 newTickNS = SDL_GetTicksNS();
+	Uint64 elapsedNS = newTickNS - lastFrameCounterNS;
 
-	fcnt_milliseconds = newTickCount - lastTickCount;
-	lastTickCount = newTickCount;
+	lastFrameCounterNS = newTickNS;
+	lastTickCount = (long)(newTickNS / 1000000ULL);
+	if (elapsedNS == 0) elapsedNS = 1;
 
-	if (fcnt_milliseconds <= 0) {
-		fcnt_milliseconds = 1;
-	}
-
-	if (TimerFrame > 0 && fcnt_milliseconds > 0) {
-		FrameRate = TimerFrame / fcnt_milliseconds;
+	/* The legacy timeGetTime clock quantised every gameplay frame to whole
+	 * milliseconds. At a 100 FPS cap that produced 9/10/11 ms simulation
+	 * steps, so trigger-heavy frames visibly propagated into frame pacing.
+	 * SDL_GetTicksNS is monotonic and keeps the game's fixed-point seconds
+	 * representation while preserving the actual sub-millisecond interval. */
+	if (TimerFrame > 0) {
+		FrameRate = (int)((1000000000ULL + elapsedNS / 2ULL) / elapsedNS);
 	}
 	else {
 		FrameRate = 0;
@@ -644,9 +649,7 @@ void FrameCounterHandler(void)
 	PrevNormalFrameTime = NormalFrameTime;
 
 	if (TimerFrame > 0) {
-		int fixed_fcnt = INT_TO_FIXED(fcnt_milliseconds);
-		int fixed_TimerFrame = INT_TO_FIXED(TimerFrame);
-		NormalFrameTime = DIV_FIXED(fixed_fcnt, fixed_TimerFrame);
+		NormalFrameTime = (int)((elapsedNS * (Uint64)ONE_FIXED + 500000000ULL) / 1000000000ULL);
 	}
 	else {
 		NormalFrameTime = ONE_FIXED >> 4;
@@ -692,7 +695,9 @@ void WaitForReturn(void)
 {
 	/* Crude but probably serviceable for now */
 	long SavedTickCount;
+	Uint64 SavedFrameCounterNS;
 	SavedTickCount  = lastTickCount;
+	SavedFrameCounterNS = lastFrameCounterNS;
 
 /* Display any lingering text */
     FlushTextprintBuffer();
@@ -702,6 +707,7 @@ void WaitForReturn(void)
 	   DirectReadKeyboard();
 
 	lastTickCount = SavedTickCount;
+	lastFrameCounterNS = SavedFrameCounterNS;
 }
 
 

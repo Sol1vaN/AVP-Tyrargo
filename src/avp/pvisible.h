@@ -133,6 +133,7 @@
 	  --------------------------------------------------*/
 	extern MODULEMAPBLOCK VisibilityDefaultObjectMap;
 	
+	STRATEGYBLOCK* CreateNPCWeaponPickup(VECTORCH* location,int type,char* name);
 	STRATEGYBLOCK* CreateMultiplayerWeaponPickup(VECTORCH* location,int type,char* name);
 	void MakePlayersWeaponPickupVisible();
 	#ifdef __cplusplus

@@ -90,7 +90,11 @@ int NPCGetWaypointDirection(WAYPOINT_HEADER *waypoints, STRATEGYBLOCK *sbPtr, VE
 	targetDirection = *targetPosition;
 	targetDirection.vx -= sbPtr->DynPtr->Position.vx;
 	targetDirection.vz -= sbPtr->DynPtr->Position.vz;
-	targetDirection.vy = 0;
+	/* Wall/ceiling navigation is three-dimensional, including the
+     * start==end shortcut and dropout direction. */
+    targetDirection.vy = (sbPtr->I_SBtype==I_BehaviourAlien &&
+        !sbPtr->DynPtr->UseStandardGravity) ?
+        targetPosition->vy-sbPtr->DynPtr->Position.vy : 0;
 	Normalise(&targetDirection);
 
 	/*in the unlikely case that the player or npc doesnt have a current containingg module, 
@@ -168,9 +172,33 @@ int NPCGetWaypointDirection(WAYPOINT_HEADER *waypoints, STRATEGYBLOCK *sbPtr, VE
 			/* wtf? */
 		}
 	} else {
-		if (NPCContainsPoint(sbPtr,&manager->current_target_point)) {
+        int reached=NPCContainsPoint(sbPtr,&manager->current_target_point);
+        /* A wall-attached NPC cannot reach a volume centre buried behind
+         * its support plane. Follow the existing route link after
+         * reaching the centre tangentially; collisions still constrain motion. */
+        if(!reached && sbPtr->I_SBtype==I_BehaviourAlien &&
+           !sbPtr->DynPtr->UseStandardGravity && sbPtr->DynPtr->IsInContactWithFloor &&
+           sbPtr->DynPtr->GravityDirection.vy<63000 &&
+           current_route.second && current_route.start->contains_npc){
+            VECTORCH delta=manager->current_target_point;
+            VECTORCH normal=sbPtr->DynPtr->GravityDirection;
+            int dot;
+            double x,y,z;
+            delta.vx+=Global_Module_Offset.vx-sbPtr->DynPtr->Position.vx;
+            delta.vy+=Global_Module_Offset.vy-sbPtr->DynPtr->Position.vy;
+            delta.vz+=Global_Module_Offset.vz-sbPtr->DynPtr->Position.vz;
+            dot=DotProduct(&delta,&normal);
+            x=delta.vx-MUL_FIXED(normal.vx,dot);
+            y=delta.vy-MUL_FIXED(normal.vy,dot);
+            z=delta.vz-MUL_FIXED(normal.vz,dot);
+            reached=x*x+y*y+z*z<=200.0*200.0;
+        }
+        if (reached) {
 			/* Must have reached the 'centre'. */
-			if (Global_NPC_Waypoint==current_route.start) {
+			if (Global_NPC_Waypoint==current_route.start ||
+                    (sbPtr->I_SBtype==I_BehaviourAlien &&
+                     !sbPtr->DynPtr->UseStandardGravity &&
+                     current_route.start->contains_npc)) {
 				dest_waypoint=current_route.second;
 			} else {
 				/* wtf? */

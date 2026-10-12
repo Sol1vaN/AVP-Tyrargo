@@ -8,6 +8,8 @@
 
 #include "chnktexi.h"
 #include "hud_layout.h"
+#include "../d3d_hud.h"
+#include "../text_encoding.h"
 
 #define UseLocalAssert Yes
 #include "ourasert.h"
@@ -272,10 +274,7 @@ extern int RenderSmallMenuText(char *textPtr, int x, int y, int alpha, enum AVPM
 			int length = 0;
 			char *ptr = textPtr;
 
-			while(*ptr)
-			{
-				length+=AAFontWidths[*ptr++];
-			}
+			length = AvPTextStringWidth(ptr, AAFontWidths);
 
 			x -= length;
 			break;
@@ -285,10 +284,7 @@ extern int RenderSmallMenuText(char *textPtr, int x, int y, int alpha, enum AVPM
 			int length = 0;
 			char *ptr = textPtr;
 
-			while(*ptr)
-			{
-				length+=AAFontWidths[*ptr++];
-			}
+			length = AvPTextStringWidth(ptr, AAFontWidths);
 
 			x -= length/2;
 			break;
@@ -316,10 +312,7 @@ extern int RenderSmallMenuText_Coloured(char *textPtr, int x, int y, int alpha, 
 			int length = 0;
 			char *ptr = textPtr;
 
-			while(*ptr)
-			{
-				length+=AAFontWidths[*ptr++];
-			}
+			length = AvPTextStringWidth(ptr, AAFontWidths);
 
 			x -= length;
 			break;
@@ -329,10 +322,7 @@ extern int RenderSmallMenuText_Coloured(char *textPtr, int x, int y, int alpha, 
 			int length = 0;
 			char *ptr = textPtr;
 
-			while(*ptr)
-			{
-				length+=AAFontWidths[*ptr++];
-			}
+			length = AvPTextStringWidth(ptr, AAFontWidths);
 
 			x -= length/2;
 			break;
@@ -361,10 +351,7 @@ extern int Hardware_RenderSmallMenuText(char *textPtr, int x, int y, int alpha, 
 			int length = 0;
 			char *ptr = textPtr;
 
-			while(*ptr)
-			{
-				length+=AAFontWidths[*ptr++];
-			}
+			length = MUL_FIXED(AvPTextStringWidth(ptr, AAFontWidths), D3D_GetActiveConsoleTextScaleFixed());
 
 			x -= length;
 			break;
@@ -374,10 +361,7 @@ extern int Hardware_RenderSmallMenuText(char *textPtr, int x, int y, int alpha, 
 			int length = 0;
 			char *ptr = textPtr;
 
-			while(*ptr)
-			{
-				length+=AAFontWidths[*ptr++];
-			}
+			length = MUL_FIXED(AvPTextStringWidth(ptr, AAFontWidths), D3D_GetActiveConsoleTextScaleFixed());
 
 			x -= length/2;
 			break;
@@ -411,10 +395,7 @@ extern int Hardware_RenderSmallMenuText_Coloured(char *textPtr, int x, int y, in
 			int length = 0;
 			char *ptr = textPtr;
 
-			while(*ptr)
-			{
-				length+=AAFontWidths[*ptr++];
-			}
+			length = MUL_FIXED(AvPTextStringWidth(ptr, AAFontWidths), D3D_GetActiveConsoleTextScaleFixed());
 
 			x -= length;
 			break;
@@ -424,10 +405,7 @@ extern int Hardware_RenderSmallMenuText_Coloured(char *textPtr, int x, int y, in
 			int length = 0;
 			char *ptr = textPtr;
 
-			while(*ptr)
-			{
-				length+=AAFontWidths[*ptr++];
-			}
+			length = MUL_FIXED(AvPTextStringWidth(ptr, AAFontWidths), D3D_GetActiveConsoleTextScaleFixed());
 
 			x -= length/2;
 			break;
@@ -448,10 +426,11 @@ extern int Hardware_RenderSmallMenuText_Coloured(char *textPtr, int x, int y, in
 	return x;
 }
 
-extern void Hardware_RenderKeyConfigRectangle(int alpha)
+extern void Hardware_RenderKeyConfigRectangle(int alpha, int topY, int bottomY)
 {
 	extern void D3D_DrawRectangle(int x, int y, int w, int h, int alpha);
-	D3D_DrawRectangle(10,ScreenDescriptorBlock.SDB_Height/2+25-115,ScreenDescriptorBlock.SDB_Width-20,250,alpha);
+	if (bottomY <= topY) return;
+	D3D_DrawRectangle(10, topY, ScreenDescriptorBlock.SDB_Width-20, bottomY-topY, alpha);
 }
 extern void RenderKeyConfigRectangle(int alpha)
 {
@@ -567,7 +546,7 @@ static int RenderSmallFontString(char *textPtr,int sx,int sy,int alpha, int red,
 
 	while( *textPtr )
 	{
-		char c = *textPtr++;
+		unsigned char c = AvPTextNextGlyph(&textPtr);
 
 		if (c>=' ')
 		{
@@ -674,13 +653,13 @@ extern void RenderSmallFontString_Wrapped(const char *textPtr,RECT* area,int alp
 			// get width used by spaces	before this word
 			while(*textPtr2 && *textPtr2==' ')
 			{
-				widthFromSpaces+=AAFontWidths[*textPtr2++];
+				widthFromSpaces+=AAFontWidths[AvPTextNextGlyph(&textPtr2)];
 			}
 			
 			//get width used by word
 			while(*textPtr2 && *textPtr2!=' ')
 			{
-				widthFromChars+=AAFontWidths[*textPtr2++];
+				widthFromChars+=AAFontWidths[AvPTextNextGlyph(&textPtr2)];
 			}
 			wordWidth=widthFromSpaces+widthFromChars;
 
@@ -761,13 +740,13 @@ extern void RenderSmallFontString_Wrapped(const char *textPtr,RECT* area,int alp
 		// get width used by spaces	before this word
 		while(*textPtr2 && *textPtr2==' ')
 		{
-			wordWidth+=AAFontWidths[*textPtr2++];
+			wordWidth+=AAFontWidths[AvPTextNextGlyph(&textPtr2)];
 		}
 		
 		//get width used by word
 		while(*textPtr2 && *textPtr2!=' ')
 		{
-			wordWidth+=AAFontWidths[*textPtr2++];
+			wordWidth+=AAFontWidths[AvPTextNextGlyph(&textPtr2)];
 		}
 
 		if(wordWidth> area->right-sx)
@@ -819,7 +798,7 @@ extern void RenderSmallFontString_Wrapped(const char *textPtr,RECT* area,int alp
 		//render this word
 		while(*textPtr && *textPtr!=' ')
 		{
-			char c = *textPtr++;
+			unsigned char c = AvPTextNextGlyph(&textPtr);
 			int letterWidth = AAFontWidths[c];
 			
 			if(sx+letterWidth>area->right)
@@ -1790,6 +1769,59 @@ extern void FadedScreen(int alpha)
 }
 
 
+/* Compose missing Western-Latin glyphs from the ASCII atlas before rendering. */
+struct ComposedLatinGlyph
+{
+	unsigned char target;
+	unsigned char base;
+	unsigned char accent;
+};
+
+static void PopulateLatinFontGlyphs(unsigned char *pixels, long pitch)
+{
+	static const ComposedLatinGlyph glyphs[] =
+	{
+		{0xa0,' ',0}, {0xa1,'!',0}, {0xab,'"',0}, {0xad,'-',0}, {0xb0,'o',0}, {0xbb,'"',0}, {0xbf,'?',0},
+		{0xc0,'A','`'}, {0xc1,'A','\''}, {0xc2,'A','^'}, {0xc3,'A','~'}, {0xc4,'A','"'}, {0xc5,'A','o'}, {0xc6,'A',0}, {0xc7,'C',','},
+		{0xc8,'E','`'}, {0xc9,'E','\''}, {0xca,'E','^'}, {0xcb,'E','"'}, {0xcc,'I','`'}, {0xcd,'I','\''}, {0xce,'I','^'}, {0xcf,'I','"'},
+		{0xd0,'D',0}, {0xd1,'N','~'}, {0xd2,'O','`'}, {0xd3,'O','\''}, {0xd4,'O','^'}, {0xd5,'O','~'}, {0xd6,'O','"'}, {0xd8,'O','/'},
+		{0xd9,'U','`'}, {0xda,'U','\''}, {0xdb,'U','^'}, {0xdc,'U','"'}, {0xdd,'Y','\''}, {0xde,'P',0}, {0xdf,'B',0},
+		{0xe0,'a','`'}, {0xe1,'a','\''}, {0xe2,'a','^'}, {0xe3,'a','~'}, {0xe4,'a','"'}, {0xe5,'a','o'}, {0xe6,'a',0}, {0xe7,'c',','},
+		{0xe8,'e','`'}, {0xe9,'e','\''}, {0xea,'e','^'}, {0xeb,'e','"'}, {0xec,'i','`'}, {0xed,'i','\''}, {0xee,'i','^'}, {0xef,'i','"'},
+		{0xf0,'d',0}, {0xf1,'n','~'}, {0xf2,'o','`'}, {0xf3,'o','\''}, {0xf4,'o','^'}, {0xf5,'o','~'}, {0xf6,'o','"'}, {0xf8,'o','/'},
+		{0xf9,'u','`'}, {0xfa,'u','\''}, {0xfb,'u','^'}, {0xfc,'u','"'}, {0xfd,'y','\''}, {0xfe,'p',0}, {0xff,'y','"'}
+	};
+	int glyph;
+
+	for (glyph = 0; glyph < (int)(sizeof(glyphs) / sizeof(glyphs[0])); ++glyph)
+	{
+		int y;
+		int targetX = 1 + ((glyphs[glyph].target - 32) & 15) * 16;
+		int targetY = 1 + ((glyphs[glyph].target - 32) >> 4) * 16;
+		int baseX = 1 + ((glyphs[glyph].base - 32) & 15) * 16;
+		int baseY = 1 + ((glyphs[glyph].base - 32) >> 4) * 16;
+		int accentX = 0;
+		int accentY = 0;
+
+		if (glyphs[glyph].accent)
+		{
+			accentX = 1 + ((glyphs[glyph].accent - 32) & 15) * 16;
+			accentY = 1 + ((glyphs[glyph].accent - 32) >> 4) * 16;
+		}
+
+		for (y = 0; y < 16; ++y)
+		{
+			unsigned short *target = (unsigned short *)(pixels + (targetY + y) * pitch) + targetX;
+			unsigned short *base = (unsigned short *)(pixels + (baseY + y) * pitch) + baseX;
+			unsigned short *accent = glyphs[glyph].accent ? (unsigned short *)(pixels + (accentY + y) * pitch) + accentX : 0;
+			int x;
+			for (x = 0; x < 16; ++x)
+			{
+				target[x] = (accent && accent[x]) ? accent[x] : base[x];
+			}
+		}
+	}
+}
 static void CalculateWidthsOfAAFont(void)
 {
 	DDSURFACEDESC ddsdimage;
@@ -1808,6 +1840,8 @@ static void CalculateWidthsOfAAFont(void)
 	while (surface->Lock(NULL, &ddsdimage, DDLOCK_WAIT, NULL) == DDERR_WASSTILLDRAWING);
 
 	srcPtr = (unsigned char *)ddsdimage.lpSurface;
+
+	PopulateLatinFontGlyphs(srcPtr, ddsdimage.lPitch);
 
 	// special case for space
 	AAFontWidths[32]=3;

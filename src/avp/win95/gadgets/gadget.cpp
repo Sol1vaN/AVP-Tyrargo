@@ -11,6 +11,7 @@
 /* Includes ********************************************************/
 #include "3dc.h"
 #include "gadget.h"
+#include "audio_latency.h"
 #include "rootgadg.hpp"
 #include "r2base.h"
 #include "hudgadg.hpp"
@@ -214,8 +215,9 @@ extern void GADGET_ScreenModeChange_Cleanup(void)
 	}
 }
 
-extern void GADGET_NewOnScreenMessage( ProjChar* messagePtr )
+static void PostOnScreenMessage(ProjChar* messagePtr, bool screenshot, unsigned int rgb=0xc0c0c0)
 {
+	unsigned long long stamp=AudioLatencyNow();
 	/* PRECONDITION */
 	{
 		GLOBALASSERT( messagePtr );
@@ -227,6 +229,8 @@ extern void GADGET_NewOnScreenMessage( ProjChar* messagePtr )
 		if ( RootGadget :: GetRoot() -> GetHUD() )
 		{
 			SCString* pSCString_New = new SCString( messagePtr );
+            pSCString_New->ScreenshotNotification=screenshot;
+            pSCString_New->NotificationRGB=rgb;
 
 			RootGadget :: GetRoot() -> GetHUD() -> AddTextReport
 			(
@@ -236,7 +240,12 @@ extern void GADGET_NewOnScreenMessage( ProjChar* messagePtr )
 			pSCString_New -> R_Release();
 		}
 	}
+	AudioLatencyRecord(stamp,"notification including SFX",-1,"");
 }										
+
+extern void GADGET_NewOnScreenMessage(ProjChar* messagePtr){PostOnScreenMessage(messagePtr,false);}
+extern void GADGET_NewScreenshotMessage(ProjChar* messagePtr){PostOnScreenMessage(messagePtr,true);}
+extern void GADGET_NewScreenModeMessage(ProjChar* messagePtr){if(RootGadget::GetRoot() && RootGadget::GetRoot()->GetHUD())PostOnScreenMessage(messagePtr,false,0xff2020);}
 
 extern void RemoveTheConsolePlease(void)
 {

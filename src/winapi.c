@@ -4,10 +4,10 @@
 #endif
 
 #ifdef _WIN32
-#include <Windows.h>
 #include <direct.h>
 #endif
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -61,7 +61,7 @@ HANDLE AVPCreateFile(const char *file, int mode, int x, int y, int flags, int fl
 			exit(EXIT_FAILURE);
 	}
 		
-	return (HANDLE)fd;
+	return (HANDLE)(intptr_t)fd;
 }
 
 HANDLE AVPCreateFileA(const char *file, int write, int x, int y, int flags, int flags2, int z)
@@ -78,7 +78,7 @@ int AVPWriteFile(HANDLE file, const void *data, int len, void *byteswritten, int
 	bw = (unsigned long *)byteswritten;
 	*bw = 0;
 	
-	i = write(file, data, len);
+	i = write((int)(intptr_t)file, data, len);
 	if (i == -1) {
 		return 0;
 	} else {
@@ -96,7 +96,7 @@ int AVPReadFile(HANDLE file, void *data, int len, void *bytesread, int lpOverlap
 	br = (unsigned long *)bytesread;
 	*br = 0;
 	
-	i = read(file, data, len);
+	i = read((int)(intptr_t)file, data, len);
 	if (i == -1) {
 		return 0;
 	} else {
@@ -111,7 +111,7 @@ int AVPGetFileSize(HANDLE file, int lpFileSizeHigh)
 	
 	fprintf(stderr, "GetFileSize(%d, %d)\n", file, lpFileSizeHigh);
 	
-	if (fstat(file, &buf) == -1)
+	if (fstat((int)(intptr_t)file, &buf) == -1)
 		return -1;
 	return buf.st_size;
 }
@@ -121,7 +121,7 @@ int AVPCloseHandle(HANDLE file)
 
 	fprintf(stderr, "CloseHandle(%d)\n", file);
 	
-	if (close(file) == -1) 
+	if (close((int)(intptr_t)file) == -1) 
 		return 0;
 	else
 		return 1;

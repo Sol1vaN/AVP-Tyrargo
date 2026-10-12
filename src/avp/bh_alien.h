@@ -96,6 +96,7 @@
  /*--------------------------------------------
   Alien behaviour data block
   --------------------------------------------*/
+ #include "alien_motion.h"
  typedef struct alienStatusBlock
  {
 	ALIEN_TYPE Type;
@@ -151,6 +152,8 @@
 	int timeOfLastSend;
 	VECTORCH lastFacingSent;
 	VECTORCH lastVelocitySent;
+    /* Transient only: deliberately absent from ALIEN_SAVE_BLOCK. */
+    ALIEN_MOTION_RUNTIME motion;
 
  }ALIEN_STATUS_BLOCK;
 

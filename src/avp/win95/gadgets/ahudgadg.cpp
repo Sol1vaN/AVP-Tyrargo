@@ -134,6 +134,8 @@ void AlienHUDGadget :: Render
 		pTextEntryGadg -> DontRender();
 	}
 
+    pTextReportGadg->RenderScreenshotNotice(R2Rect_Clip,FixP_Alpha);
+
 }
 
 AlienHUDGadget :: AlienHUDGadget

@@ -13,6 +13,7 @@
 #include "gamedef.h"
 
 #include "psndplat.h"
+#include "audio_latency.h"
 #define UseLocalAssert Yes
 #include "ourasert.h"
 #include "db.h"
@@ -332,7 +333,8 @@ void SoundSys_ChangeVolume(int volume)
   Functions for playing and controlling individual sounds
   ----------------------------------------------------------------------------*/
 void Sound_Play(SOUNDINDEX soundNumber, char *format, ...)
-{	
+{
+	unsigned long long latencyStart=AudioLatencyNow();
 	int newIndex;
 	int loop = 0;
 	int	*externalRef = NULL;
@@ -355,8 +357,18 @@ void Sound_Play(SOUNDINDEX soundNumber, char *format, ...)
 
 	/* check soundIndex for bounds, whether it has been loaded, and number of instances */
 	if((soundNumber<0)||(soundNumber>=SID_MAXIMUM)) return;
-	if(!(GameSounds[soundNumber].loaded)) return;
-	if(!(GameSounds[soundNumber].activeInstances<SOUND_MAXINSTANCES)) return;
+	if(!(GameSounds[soundNumber].loaded)) {AudioPlaybackDrop(soundNumber,"sample not loaded");return;}
+	if(GameSounds[soundNumber].activeInstances>=SOUND_MAXINSTANCES){
+        int i;
+        /* Finished sources must not count against same-sample polyphony
+         * until the next SoundSys_Management tick. Preserve paused loops. */
+        for(i=0;i<SOUND_MAXACTIVE;i++)
+            if(ActiveSounds[i].soundIndex==soundNumber && !ActiveSounds[i].paused &&
+               PlatSoundHasStopped(i)==1)Sound_Stop(i);
+        if(GameSounds[soundNumber].activeInstances>=SOUND_MAXINSTANCES){
+            AudioPlaybackDrop(soundNumber,"instance limit");return;
+        }
+    }
 
 	db_logf5(("About to play sound %i", soundNumber));
 
@@ -459,7 +471,7 @@ void Sound_Play(SOUNDINDEX soundNumber, char *format, ...)
 		}
 		else
 		{
-			min = SOUND_MAXACTIVE_SW + 1;
+			min = SOUND_MAXACTIVE_SW; /* upper bounds are exclusive; use every source */
 			max = Sound_MaxActive_HW;
 		}
 
@@ -488,7 +500,7 @@ void Sound_Play(SOUNDINDEX soundNumber, char *format, ...)
 			if(newIndex==SOUND_NOACTIVEINDEX)
 			{
 				db_log3("Failed to find a lower priority sound.");
-				return; /* give up */
+				AudioPlaybackDrop(soundNumber,"voice limit");return; /* give up */
 			}
 
 			/* remove it, and use it's slot */
@@ -550,6 +562,7 @@ fprintf(stderr, "PSND: Play: %d %d %s l:%d\n", newIndex, soundNumber, GameSounds
 			so just bank the sound slot */
 			ActiveSounds[newIndex] = BlankActiveSound;
 			db_log5("Error: PlatPlaySound failed.");
+            AudioPlaybackDrop(soundNumber,"platform playback error");
 			return;
 		}		
 	}	
@@ -568,6 +581,7 @@ fprintf(stderr, "PSND: Play: %d %d %s l:%d\n", newIndex, soundNumber, GameSounds
 	if (soundStartPosition)
 		fprintf(stderr, "Sound_Play: sound starts part of the way in (%d)\n", soundStartPosition);
 #endif		
+	AudioLatencyRecord(latencyStart,"Sound_Play total",soundNumber,GameSounds[soundNumber].wavName);
 }
 
 void Sound_Stop(int activeSoundNumber)
@@ -711,6 +725,12 @@ static int FindFreeActiveSound(unsigned int min, unsigned int max)
 	for(i = min; (i < max); i++) 
 	{
 		if(ActiveSounds[i].soundIndex == SID_NOSOUND) return i;
+    }
+    /* Query OpenAL only when the pool is exhausted, not for every new SFX. */
+    for(i=min;i<max;i++){
+        if(!ActiveSounds[i].paused && PlatSoundHasStopped(i)==1){
+            Sound_Stop(i);return i;
+        }
 	}
 	return SOUND_NOACTIVEINDEX;
 }

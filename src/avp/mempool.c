@@ -73,6 +73,7 @@ void* PoolAllocateMem(unsigned int amount)
 
 void ClearMemoryPool()
 {
+ extern void ParticleCollisionCacheReset(void);ParticleCollisionCacheReset();
 	int i;
 
 #if !defined(NDEBUG)

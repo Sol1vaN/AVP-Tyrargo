@@ -242,7 +242,7 @@ void IndexedFont_Proportional :: RenderString_Clipped
 						R2Pos_Cursor . y,
 						"%c", ProjCh
 					);
-					R2Pos_Cursor . x += 1+GetWidth(ProjCh);
+					R2Pos_Cursor . x += D3D_ScaleActiveConsoleTextDimension(1+GetWidth(ProjCh));
 					#endif
 					// appears to return the width of the character...
 				}
@@ -312,7 +312,7 @@ void IndexedFont_Proportional :: RenderString_Unclipped
 						R2Pos_Cursor . y,
 						"%c", ProjCh
 					);
-					R2Pos_Cursor . x += 1+GetWidth(ProjCh);
+					R2Pos_Cursor . x += D3D_ScaleActiveConsoleTextDimension(1+GetWidth(ProjCh));
 					#endif
 				#endif
 
@@ -927,7 +927,7 @@ void IndexedFont_Proportional_PF :: RenderChar_Clipped
 					R2Pos_Cursor . y,
 					"%c", ProjCh
 				);
-				R2Pos_Cursor . x += 1+GetWidth(ProjCh);
+				R2Pos_Cursor . x += D3D_ScaleActiveConsoleTextDimension(1+GetWidth(ProjCh));
 				#endif				
 			}
 			else
@@ -1123,7 +1123,7 @@ void IndexedFont_HUD :: RenderString_Clipped
 
 		if (R2Pos_Cursor . y<=0)
 		{
-			D3D_RenderHUDString_Clipped(pProjChar_I,R2Pos_Cursor.x,R2Pos_Cursor.y,(255<<24)+(192<<16)+(192<<8)+(192));
+			D3D_RenderHUDString_Clipped(pProjChar_I,R2Pos_Cursor.x,R2Pos_Cursor.y,(255u<<24)|SCStr.NotificationRGB);
 		}
 		else
 		#if 0
@@ -1144,12 +1144,12 @@ void IndexedFont_HUD :: RenderString_Clipped
 				charDesc.X = R2Pos_Cursor . x;			
 				D3D_DrawHUDFontCharacter(&charDesc);
 		
-				R2Pos_Cursor . x += 1+GetWidth(ProjCh);
+				R2Pos_Cursor . x += D3D_ScaleActiveConsoleTextDimension(1+GetWidth(ProjCh));
 				pProjChar_I++;
 			}
 		}
 		#else
-		D3D_RenderHUDString(pProjChar_I,R2Pos_Cursor.x,R2Pos_Cursor.y,(255<<24)+(192<<16)+(192<<8)+(192));
+		D3D_RenderHUDString(pProjChar_I,R2Pos_Cursor.x,R2Pos_Cursor.y,(255u<<24)|SCStr.NotificationRGB);
 		#endif
 	}
 }
@@ -1256,7 +1256,7 @@ void IndexedFont_HUD :: RenderChar_Clipped
 	charDesc.Character=ProjCh;
 	charDesc.X = R2Pos_Cursor . x;			
 	D3D_DrawHUDFontCharacter(&charDesc);
-	R2Pos_Cursor . x += GetWidth(ProjCh);
+	R2Pos_Cursor . x += D3D_ScaleActiveConsoleTextDimension(GetWidth(ProjCh));
 }
 
 void IndexedFont_HUD :: RenderChar_Unclipped
@@ -1296,7 +1296,7 @@ void IndexedFont_HUD :: RenderChar_Unclipped
 
 				D3D_DrawHUDFontCharacter(&charDesc);
 
-				R2Pos_Cursor . x += 1+GetWidth(ProjCh);
+				R2Pos_Cursor . x += D3D_ScaleActiveConsoleTextDimension(1+GetWidth(ProjCh));
 			}
 			#if 0
 			else

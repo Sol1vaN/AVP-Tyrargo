@@ -3,6 +3,8 @@
 ****************************************************************************************KJL*/
 
 #include "3dc.h"
+#include "projection.h"
+#include "player_fov.h"
 #include "module.h"
 #include "inline.h"
 #include "stratdef.h"
@@ -69,8 +71,8 @@ void SetupVision(void)
 
 		/* change clipping planes for new field of view */
 		/* KJL 12:00:54 07/04/97 - new projection angles */
-		VDBPtr->VDB_ProjX = ScreenDescriptorBlock.SDB_Width/4;
-		VDBPtr->VDB_ProjY = (ScreenDescriptorBlock.SDB_Height)/4;
+		ClampPlayerFOVForCurrentSpecies();
+		AvpSetViewFOV(VDBPtr,PlayerFOV);
 
 		/* KJL 17:37:51 7/17/97 - frustrum setup */
 		SetFrustrumType(FRUSTRUM_TYPE_WIDE);
@@ -85,8 +87,8 @@ void SetupVision(void)
 		LOCALASSERT(VDBPtr);
 
 		/* change clipping planes for new field of view */
-		VDBPtr->VDB_ProjX = ScreenDescriptorBlock.SDB_Width/2;
-		VDBPtr->VDB_ProjY = (ScreenDescriptorBlock.SDB_Height)/2;
+		ClampPlayerFOVForCurrentSpecies();
+		AvpSetViewFOV(VDBPtr,PlayerFOV);
 		
 		SetupPredOVision();
 		/* KJL 17:37:51 7/17/97 - frustrum setup */
@@ -102,8 +104,8 @@ void SetupVision(void)
 		LOCALASSERT(VDBPtr);
 
 		/* change clipping planes for new field of view */
-		VDBPtr->VDB_ProjX = ScreenDescriptorBlock.SDB_Width/2;
-		VDBPtr->VDB_ProjY = (ScreenDescriptorBlock.SDB_Height)/2;
+		ClampPlayerFOVForCurrentSpecies();
+		AvpSetViewFOV(VDBPtr,PlayerFOV);
 		
 		SetupMarineOVision();
 		/* KJL 17:37:51 7/17/97 - frustrum setup */
@@ -193,6 +195,20 @@ void HandlePredOVision(void)
 		}
 	}
 
+}
+
+extern void PreviousPredatorVisionMode(void)
+{
+    switch(CurrentVisionMode)
+    {
+        case VISION_MODE_NORMAL: CurrentVisionMode=VISION_MODE_PRED_SEEPREDTECH; break;
+        case VISION_MODE_PRED_THERMAL: CurrentVisionMode=VISION_MODE_NORMAL; break;
+        case VISION_MODE_PRED_SEEALIENS: CurrentVisionMode=VISION_MODE_PRED_THERMAL; break;
+        case VISION_MODE_PRED_SEEPREDTECH: CurrentVisionMode=VISION_MODE_PRED_SEEALIENS; break;
+        default: return;
+    }
+    Sound_Play(SID_VISION_ON,"h");
+    PredatorVisionChangeCounter=ONE_FIXED;
 }
 
 extern void ChangePredatorVisionMode(void)

@@ -1,3 +1,5 @@
+#include "campaign_state.h"
+#include "event_latency.h"
 /* inits the system and controls environment and player loading */
 
 #include "3dc.h"
@@ -6,6 +8,7 @@
 #include "gamedef.h"
 #include "bh_types.h"
 #include "bh_marin.h"
+#include "npc_support.h"
 #include "game.h"
 #include "gameplat.h"
 #include "lighting.h"
@@ -493,6 +496,11 @@ extern void AssignAllSBNames();
 
 void RestartLevel()
 {
+    /* Sound handles can point into actor or level-pool data. Finish them
+       while their owners are still alive, before destroying strategies. */
+    SoundSys_StopAll();
+    EventLatencyLoadCheckpoint("restart begin",NumActiveStBlocks);
+    CampaignArmRestart();
 	//get the cd to start again at the beginning of the play list.
 	ResetCDPlayForLevel();
 	
@@ -510,7 +518,12 @@ void RestartLevel()
 		int i ;
 
 		i = maxstblocks;
+		EventLatencyLoadCheckpoint("restart destroy strategies",NumActiveStBlocks);
 		DestroyAllStrategyBlocks();
+        /* Runtime squad destinations and supply ownership belong to this
+           population only, even when a restart reuses the same map memory. */
+        NPCSupportReset();
+		EventLatencyLoadCheckpoint("restart strategies destroyed",NumActiveStBlocks);
 		while(i--)
 			ActiveStBlockList[i] = NULL;
 
@@ -542,9 +555,11 @@ void RestartLevel()
 // 	InitialiseEquipment();
 //	InitHUD();
 	
+	EventLatencyLoadCheckpoint("restart create objects",0);
 	ProcessSystemObjects();
 	
 	create_strategies_from_list ();
+	EventLatencyLoadCheckpoint("restart objects created",NumActiveStBlocks);
 	AssignAllSBNames();
 	
 	SetupVision();
@@ -561,7 +576,9 @@ void RestartLevel()
 	InitialiseSfxBlocks();
 	InitialiseLightElementSystem();
 	CreateRubberDucks();
+	EventLatencyLoadCheckpoint("restart FMVs",0);
 	InitialiseTriggeredFMVs();
+	EventLatencyLoadCheckpoint("restart FMVs initialized",0);
 
 	CheckCDStatus();
 
@@ -583,6 +600,7 @@ void RestartLevel()
 		AllNewModuleHandler();
 		DoObjectVisibilities();
 	}
+	EventLatencyLoadCheckpoint("restart complete",NumActiveStBlocks);
 }
 
 static ELO JunkEnv; /* This is not needed */
@@ -647,7 +665,7 @@ void ProcessSystemObjects()
 
 static int ReadModuleMapList(MODULEMAPBLOCK *mmbptr)
 {
-	MODULE m_temp;
+	MODULE m_temp = {0};
 
 	DISPLAYBLOCK *dptr;
 	STRATEGYBLOCK *sbptr;
@@ -694,8 +712,11 @@ void ChangeEnvironmentToEnv(I_AVP_ENVIRONMENTS env_to_load)
 	CDDA_Stop();
 
 	// Loading functions
+	Probe113_BeginMapTrace("ChangeEnvironmentToEnv");
+	Probe113_RenderTracef("ENV_CHANGE begin from=%d to=%d", AvP.CurrentEnv, env_to_load);
 	AvP.CurrentEnv = env_to_load;
 	LoadRifFile();
+	Probe113_RenderTracef("ENV_CHANGE rif_complete env=%d", AvP.CurrentEnv);
 
 }
 
@@ -746,6 +767,8 @@ const char FileNameExtension[5] =  {".rif"};
  
 void LoadRifFile()
 {
+	Probe113_BeginMapTrace("LoadRifFile");
+	Probe113_RenderTracef("RIF_LOAD begin env=%d", AvP.CurrentEnv);
 	
 	char file_and_path[100];
 	int i = 0;
@@ -767,7 +790,9 @@ void LoadRifFile()
 	catpathandextension(&file_and_path[0], Env_List[AvP.CurrentEnv]->main); /* root of the file name,smae as dir*/
 	catpathandextension(&file_and_path[0], (char *)&FileNameExtension[0]);	/* extension*/
 	
+	Probe113_RenderTracef("RIF_LOAD open path=%s", file_and_path);
 	env_rif = avp_load_rif((const char*)&file_and_path[0]);
+	Probe113_RenderTracef("RIF_LOAD opened handle=%p", (void*)env_rif);
 	Set_Progress_Bar_Position(PBAR_LEVEL_START+PBAR_LEVEL_INTERVAL*.4);
 	
 	if(INVALID_RIFFHANDLE == env_rif)
@@ -781,11 +806,15 @@ void LoadRifFile()
 	SetCurrentImageGroup(2); // FOR ENV
 	#endif
 	copy_rif_data(env_rif,CCF_ENVIRONMENT,PBAR_LEVEL_START+PBAR_LEVEL_INTERVAL*.4,PBAR_LEVEL_INTERVAL*.6);
+	Probe113_RenderTracef("RIF_LOAD after_copy env=%d", AvP.CurrentEnv);
 	//setup_shading_tables();
 }
 
 int Destroy_CurrentEnvironment(void)
 {
+    /* Clear external sound references before actors and the level pool are
+       released. Stopping them after ClearMemoryPool writes to freed memory. */
+    SoundSys_StopAll();
 	// RWH destroys all en specific data
 
 	// function to change environment when we 
@@ -806,6 +835,9 @@ int Destroy_CurrentEnvironment(void)
 
 		i = maxstblocks;
 		DestroyAllStrategyBlocks();
+        /* Runtime squad destinations and supply ownership belong to this
+           population only, even when a restart reuses the same map memory. */
+        NPCSupportReset();
 		while(i--)
 			ActiveStBlockList[i] = NULL;
 
@@ -878,6 +910,9 @@ void InitEnvironmentFromLoad(void)
 	Destroy_CurrentEnvironment();
 	// then the REST
 	DestroyAllStrategyBlocks();
+        /* Runtime squad destinations and supply ownership belong to this
+           population only, even when a restart reuses the same map memory. */
+        NPCSupportReset();
 	#if MaxImageGroups>1
 	SetCurrentImageGroup(0); // FOR ENV
 	DeallocateCurrentImages();

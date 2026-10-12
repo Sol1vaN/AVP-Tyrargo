@@ -268,7 +268,7 @@ void MakeSentrygunNear(STRATEGYBLOCK *sbPtr)
 {
 	extern MODULEMAPBLOCK AlienDefaultMap;
 
-	MODULE tempModule;
+	MODULE tempModule = {0};
 	DISPLAYBLOCK *dPtr;
 	DYNAMICSBLOCK *dynPtr;
 	AUTOGUN_STATUS_BLOCK *agunStatusPointer;    

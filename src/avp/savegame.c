@@ -1,3 +1,7 @@
+#include "campaign_state.h"
+#include "event_latency.h"
+#include "optimized_ammo.h"
+#include "molecular_acid.h"
 #include "3dc.h"
 
 #include "inline.h"
@@ -34,7 +38,10 @@
 
 #include "savegame.h"
 #include "huffman.hpp"
+#include "inventory_wire.h"
 
+#include "savegame.h"
+#include "npc_support.h"
 #define UseLocalAssert Yes
 #include "ourasert.h"
 
@@ -60,6 +67,8 @@ static struct
 
 int LoadGameRequest = SAVELOAD_REQUEST_NONE; //slot number of game to be loaded
 int SaveGameRequest = SAVELOAD_REQUEST_NONE; //slot number of game to be saved
+/* Set only by RequestQuickSave; rejects accidental/manual writes to _51.sav. */
+static int QuickSaveWriteAuthorised = 0;
 
 
 #define NUM_SAVES_FOR_EASY_MODE 99
@@ -67,6 +76,8 @@ int SaveGameRequest = SAVELOAD_REQUEST_NONE; //slot number of game to be saved
 #define NUM_SAVES_FOR_HARD_MODE 2
 
 int NumberOfSavesLeft;
+/* Profile-controlled bypass for the single-player difficulty save quota. */
+int UnlimitedSaveGames;
 
 
 
@@ -358,6 +369,10 @@ static BOOL SaveGameAllowed()
 		return FALSE;
 	}
 
+	/* This affects only the difficulty quota; the normal safety and cheat
+	   restrictions above still apply. */
+	if (UnlimitedSaveGames) return TRUE;
+
 	//now check the number of saves left
 	//first some validation
 	
@@ -396,6 +411,11 @@ static BOOL SaveGameAllowed()
 
 }
 
+void RequestQuickSave()
+{
+	QuickSaveWriteAuthorised = 1;
+	SaveGameRequest = QUICK_SAVE_SLOT;
+}
 void SaveGame()
 {
 	char filename[100];
@@ -403,23 +423,35 @@ void SaveGame()
 	int headerLength;
 	HuffmanPackage *packagePtr;
 
-	//make sure there is a save request
-	if(SaveGameRequest ==  SAVELOAD_REQUEST_NONE) return;
-
-	if(SaveGameRequest<0 || SaveGameRequest>=NUMBER_OF_SAVE_SLOTS)
+	// Make sure there is a save request, and consume any stale quick-save authority.
+	if(SaveGameRequest == SAVELOAD_REQUEST_NONE)
 	{
-		SaveGameRequest = SAVELOAD_REQUEST_NONE;		
+		QuickSaveWriteAuthorised = 0;
 		return;
 	}
 
-	//check that we are allowed to save at this point
-	if(!SaveGameAllowed())
+	/* _51.sav is private: only RequestQuickSave may authorize a write. */
+	if(SaveGameRequest == QUICK_SAVE_SLOT && !QuickSaveWriteAuthorised)
 	{
-		//cancel request
 		SaveGameRequest = SAVELOAD_REQUEST_NONE;
-		return;	
+		return;
 	}
 
+	if(SaveGameRequest<0 || SaveGameRequest>=NUMBER_OF_SAVE_SLOTS)
+	{
+		QuickSaveWriteAuthorised = 0;
+		SaveGameRequest = SAVELOAD_REQUEST_NONE;
+		return;
+	}
+
+	// Check that we are allowed to save at this point.
+	if(!SaveGameAllowed())
+	{
+		// Cancel request and do not leak quick-save authority to a later manual save.
+		QuickSaveWriteAuthorised = 0;
+		SaveGameRequest = SAVELOAD_REQUEST_NONE;
+		return;
+	}
 	InitSaveGame();
 
 	SaveLevelHeader();
@@ -429,6 +461,7 @@ void SaveGame()
 	SaveDeadStrategies();
 
 	SaveStrategies();
+    NPCSupportSave();
 
 	SaveHiveSettings();
 
@@ -448,6 +481,23 @@ void SaveGame()
 	Save_MessageHistory();
 
 	Save_WeaponsCGlobals();
+    if(CampaignHasEntry()){
+        int payloadSize=CampaignEntryPayloadSize();
+        SAVE_BLOCK_HEADER *entry=GetPointerForSaveBlock(sizeof(*entry)+payloadSize);
+        entry->type=SaveBlock_CampaignEntry;entry->size=sizeof(*entry)+payloadSize;
+        CampaignExportEntry(entry+1,payloadSize);
+    }
+    if(OptimizedAmmoHasResiduals()){
+        struct {SAVE_BLOCK_HEADER header;unsigned int deficit[OPTIMIZED_AMMO_CHANNELS];} *ammo;
+        ammo=GetPointerForSaveBlock(sizeof(*ammo));ammo->header.type=SaveBlock_OptimizedAmmo;ammo->header.size=sizeof(*ammo);
+        memcpy(ammo->deficit,OptimizedAmmoDeficit,sizeof OptimizedAmmoDeficit);
+    }
+    if(AcidActive()){
+        struct {SAVE_BLOCK_HEADER header;ACID_INVENTORY_PAYLOAD inventory;} *acid;
+        acid=GetPointerForSaveBlock(sizeof(*acid));acid->header.type=SaveBlock_MolecularAcid;acid->header.size=sizeof(*acid);
+        InventoryExportAcid(&acid->inventory,(PLAYER_STATUS*)Player->ObStrategyBlock->SBdataptr);
+    }
+
 
 
 	//get the filename
@@ -455,6 +505,7 @@ void SaveGame()
 	
 	//clear the save request
 	SaveGameRequest = SAVELOAD_REQUEST_NONE;
+	QuickSaveWriteAuthorised = 0;
 
 	//write the file
  	file = OpenGameFile(filename, FILEMODE_WRITEONLY, FILETYPE_CONFIG);
@@ -544,7 +595,9 @@ void LoadSavedGame()
 	save_slot = &SaveGameSlot[LoadGameRequest];
 
 	//make sure the slot is being used
+	EventLatencyLoadCheckpoint("saved game scan slots",LoadGameRequest);
 	ScanSaveSlots();
+	EventLatencyLoadCheckpoint("saved game slots scanned",save_slot->SlotUsed);
 	if(!save_slot->SlotUsed) return;
 
 	///make sure we're on the right level etc.
@@ -559,7 +612,11 @@ void LoadSavedGame()
 	}
 	//set the difficulty level and restart the level
 	AvP.Difficulty = save_slot->Difficulty;
+    AcidSetTier(save_slot->AcidTier);
+    CampaignPrepareSavedGame();
+	EventLatencyLoadCheckpoint("saved game begin",LoadGameRequest);
 	RestartLevel();
+	EventLatencyLoadCheckpoint("saved game restart complete",LoadGameRequest);
 
 	//get the filename for the save slot
 	GetFilenameForSaveSlot(LoadGameRequest,filename);
@@ -568,11 +625,13 @@ void LoadSavedGame()
 	LoadGameRequest = SAVELOAD_REQUEST_NONE;
 
 	//load the file
+	EventLatencyLoadCheckpoint("saved game read",0);
 	file = OpenGameFile(filename, FILEMODE_READONLY, FILETYPE_CONFIG);
 
 	if(file==NULL)
 	{
 		//failed to load
+		CampaignFinishSavedGame(0);
 		EndLoadGame();
 		return;
 	}
@@ -581,17 +640,26 @@ void LoadSavedGame()
 	LoadInfo.BufferSize = ftell(file);
 	rewind(file);
 	
-   	if(!LoadInfo.BufferSize)
+   	if(LoadInfo.BufferSize < (int)sizeof(LEVEL_SAVE_BLOCK))
 	{
 		fclose(file);
+		CampaignFinishSavedGame(0);
 		EndLoadGame();
 		return;
 	}
 
 	//allocate buffer , and read file into memory
 	LoadInfo.BufferStart = (char*) AllocateMem(LoadInfo.BufferSize);
-	fread(LoadInfo.BufferStart, LoadInfo.BufferSize, 1, file);
+	if(!LoadInfo.BufferStart || fread(LoadInfo.BufferStart, LoadInfo.BufferSize, 1, file)!=1)
+	{
+		fclose(file);
+		EventLatencyLoadCheckpoint("saved game read failed",LoadInfo.BufferSize);
+		CampaignFinishSavedGame(0);
+		EndLoadGame();
+		return;
+	}
 	fclose(file);
+	EventLatencyLoadCheckpoint("saved game read complete",LoadInfo.BufferSize);
 
 	
 	LoadInfo.BufferPos = LoadInfo.BufferStart;
@@ -602,7 +670,7 @@ void LoadSavedGame()
 		//read the next header
 		SAVE_BLOCK_HEADER* header = (SAVE_BLOCK_HEADER*) LoadInfo.BufferPos;
 
-		if(header->size>LoadInfo.BufferSpaceLeft)
+		if(header->size < (int)sizeof(LEVEL_SAVE_BLOCK) || header->size>LoadInfo.BufferSpaceLeft)
 		{
 			//oh dear, dodgy file
 			GLOBALASSERT("Invalid save game header size"==0);
@@ -629,13 +697,16 @@ void LoadSavedGame()
 	
 	if (!terminal_error)
 	{
-		if (!strncmp (LoadInfo.BufferPos, "REBCRIF1", 8))
+		EventLatencyLoadCheckpoint("saved game decompress",LoadInfo.BufferSpaceLeft);
+		if (LoadInfo.BufferSpaceLeft >= (int)sizeof(HuffmanPackage) &&
+		    !strncmp (LoadInfo.BufferPos, "REBCRIF1", 8))
 		{
 			char *uncompressedBufferPtr = (char*)HuffmanDecompress((HuffmanPackage*)(LoadInfo.BufferPos)); 		
 			LoadInfo.BufferSpaceLeft = ((HuffmanPackage*)LoadInfo.BufferPos)->UncompressedDataSize;
 			DeallocateMem(LoadInfo.BufferStart);
 			LoadInfo.BufferStart=uncompressedBufferPtr;
 			LoadInfo.BufferPos = LoadInfo.BufferStart;
+			if(!uncompressedBufferPtr)terminal_error=TRUE;
 		}
 		else
 		{
@@ -644,13 +715,18 @@ void LoadSavedGame()
 		
 	}
 
+	EventLatencyLoadCheckpoint("saved game restore blocks",terminal_error ? -1 : LoadInfo.BufferSpaceLeft);
+    if(!terminal_error){OptimizedAmmoReset();NPCSupportReset();
+        for(int i=0;i<NumActiveStBlocks;i++){STRATEGYBLOCK*s=ActiveStBlockList[i];s->supportFollow=s->supportKillsPending=s->combatKillReported=s->supportSentryTimer=0;memset(s->combatOwner,0,SB_NAME_LENGTH);memset(s->combatBurnOwner,0,SB_NAME_LENGTH);}
+    } /* Old saves contain only full reserve magazines. */
 	//go through loading things
 	while(LoadInfo.BufferSpaceLeft && !terminal_error)
 	{
 		//read the next header
 		SAVE_BLOCK_HEADER* header = (SAVE_BLOCK_HEADER*) LoadInfo.BufferPos;
 
-		if(header->size>LoadInfo.BufferSpaceLeft)
+		if(LoadInfo.BufferSpaceLeft < (int)sizeof(*header) ||
+		   header->size < (int)sizeof(*header) || header->size>LoadInfo.BufferSpaceLeft)
 		{
 			//oh dear, dodgy file
 			GLOBALASSERT("Invalid save game header size"==0);
@@ -747,6 +823,25 @@ void LoadSavedGame()
 				Load_WeaponsCGlobals(header);
 				break;
 
+            case SaveBlock_CampaignEntry:
+                CampaignImportEntry(header+1,header->size-sizeof(*header));
+                break;
+            case SaveBlock_OptimizedAmmo:
+                if(header->size==sizeof(SAVE_BLOCK_HEADER)+sizeof OptimizedAmmoDeficit)
+                    memcpy(OptimizedAmmoDeficit,header+1,sizeof OptimizedAmmoDeficit);
+                else terminal_error=TRUE;
+                break;
+            case SaveBlock_MolecularAcid:
+                if(AcidActive() && (header->size==sizeof(SAVE_BLOCK_HEADER)+sizeof AcidPickupRemainders ||
+                    header->size==sizeof(SAVE_BLOCK_HEADER)+sizeof(ACID_INVENTORY_PAYLOAD))){
+                    int *values=(int*)(header+1);
+                    for(int n=0;n<ACID_PICKUP_CHANNELS;n++)AcidPickupRemainders[n]=(values[n]>=0&&values[n]<10)?values[n]:0;
+                    if(header->size==sizeof(SAVE_BLOCK_HEADER)+sizeof(ACID_INVENTORY_PAYLOAD))
+                        InventoryImportAcid((ACID_INVENTORY_PAYLOAD*)(header+1),(PLAYER_STATUS*)Player->ObStrategyBlock->SBdataptr);
+                }
+                break;
+            case SaveBlock_NPCSupport:
+                NPCSupportLoad(header);break;
 			case SaveBlock_SoundState :
 				Load_SoundState_NoRef(header);
 				break;
@@ -768,8 +863,10 @@ void LoadSavedGame()
 		NewOnScreenMessage(GetTextString(TEXTSTRING_SAVEGAME_ERRORLOADING));
 	}
 
+	CampaignFinishSavedGame(!terminal_error);
 	EndLoadGame();
 
+	EventLatencyLoadCheckpoint("saved game restored",terminal_error);
 	RemoveDestroyedStrategyBlocks();
 
 	//make sure all the containing modules are set properly
@@ -806,6 +903,7 @@ void LoadSavedGame()
 		NewOnScreenMessage(GetTextString(TEXTSTRING_SAVEGAME_GAMELOADED));
 		DisplaySavesLeft();
 	}
+	EventLatencyLoadCheckpoint("saved game complete",terminal_error);
 
 }
 
@@ -815,7 +913,7 @@ SAVE_BLOCK_HEADER* GetNextBlockIfOfType(SAVE_BLOCK_TYPE type)
 
 	GLOBALASSERT(LoadInfo.BufferPos);
 
-	if(LoadInfo.BufferSpaceLeft==0)
+	if(LoadInfo.BufferSpaceLeft < (int)sizeof(SAVE_BLOCK_HEADER))
 	{
 		//no more blocks left
 		return 0;
@@ -823,10 +921,9 @@ SAVE_BLOCK_HEADER* GetNextBlockIfOfType(SAVE_BLOCK_TYPE type)
 	
 	//look at the next header in the buffer
 	header = (SAVE_BLOCK_HEADER*) LoadInfo.BufferPos;
-	if(header->size>LoadInfo.BufferSpaceLeft)
+	if(header->size < (int)sizeof(*header) || header->size>LoadInfo.BufferSpaceLeft)
 	{
 		//oh dear, dodgy file
-		GLOBALASSERT("Invalid save game header size"==0);
 		return 0;
 	}
 

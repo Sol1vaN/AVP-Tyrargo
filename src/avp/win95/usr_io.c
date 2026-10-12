@@ -20,6 +20,7 @@
 
 #include "pmove.h"
 #include "usr_io.h"
+#include "dev_viewmodel.h"
 #include "hud.h"
 #include "messagehistory.h"
 
@@ -28,14 +29,32 @@
 #include "paintball.h"
 #include "ahudgadg.hpp"
 #include "avp_menus.h"
+#include "psndproj.h"
+#include <stdint.h>
+#include <limits.h>
+
+/* Profile preference per species: false = walk, modifier held = run.
+ * True = run, modifier held = walk. No speed, acceleration or physics changes. */
+int AlwaysRunBySpecies[3]={0,0,0};
+int PlayerWantsToRun(int species,int modifierHeld)
+{
+    int alwaysRun=(species>=I_Marine && species<=I_Alien) ? AlwaysRunBySpecies[species]==1 : 0;
+    return alwaysRun != (modifierHeld!=0);
+}
 
 extern int InGameMenusAreRunning(void);
 extern void AvP_TriggerInGameMenus(void);
+extern void AvP_OpenInGameSaveMenu(void);
+extern void AvP_OpenInGameLoadMenu(void);
+extern void QuickSave(void);
+extern void QuickLoad(void);
+extern void RequestScreenShot(void);
 extern void Recall_Disc(void);
 extern void ShowMultiplayerScores(void);
 
 
 extern int NormalFrameTime;
+extern unsigned char DebouncedKeyboardInput[];
 
 FIXED_INPUT_CONFIGURATION FixedInputConfig =
 {
@@ -53,6 +72,27 @@ FIXED_INPUT_CONFIGURATION FixedInputConfig =
 
 };
 
+GLOBAL_COMMAND_INPUT_CONFIGURATION GlobalCommandPrimaryConfig =
+{ 102, 95, 98, 92, 93 };
+GLOBAL_COMMAND_INPUT_CONFIGURATION GlobalCommandSecondaryConfig =
+{ 255, 255, 255, 255, 255 };
+const GLOBAL_COMMAND_INPUT_CONFIGURATION DefaultGlobalCommandPrimaryConfig =
+{ 102, 95, 98, 92, 93 };
+const GLOBAL_COMMAND_INPUT_CONFIGURATION DefaultGlobalCommandSecondaryConfig =
+{ 255, 255, 255, 255, 255 };
+
+static int GlobalCommandPressed(unsigned char primary, unsigned char secondary)
+{
+	return ((primary != KEY_VOID && DebouncedKeyboardInput[primary])
+		|| (secondary != KEY_VOID && DebouncedKeyboardInput[secondary]));
+}
+void CheckScreenshotInput(void)
+{
+    if(GlobalCommandPressed(GlobalCommandPrimaryConfig.Screenshot,GlobalCommandSecondaryConfig.Screenshot))
+        RequestScreenShot();
+}
+
+
 PLAYER_INPUT_CONFIGURATION MarineInputPrimaryConfig;
 PLAYER_INPUT_CONFIGURATION MarineInputSecondaryConfig;
 PLAYER_INPUT_CONFIGURATION PredatorInputPrimaryConfig;
@@ -60,116 +100,38 @@ PLAYER_INPUT_CONFIGURATION PredatorInputSecondaryConfig;
 PLAYER_INPUT_CONFIGURATION AlienInputPrimaryConfig;
 PLAYER_INPUT_CONFIGURATION AlienInputSecondaryConfig;
 
+/* Per-species, rebindable direct weapon slots. The first ten retain the
+   historical 1..0 defaults; the Marine-only eleventh slot starts unbound. */
+WEAPON_INPUT_CONFIGURATION MarineWeaponPrimaryConfig;
+WEAPON_INPUT_CONFIGURATION MarineWeaponSecondaryConfig;
+WEAPON_INPUT_CONFIGURATION PredatorWeaponPrimaryConfig;
+WEAPON_INPUT_CONFIGURATION PredatorWeaponSecondaryConfig;
+WEAPON_INPUT_CONFIGURATION AlienWeaponPrimaryConfig;
+WEAPON_INPUT_CONFIGURATION AlienWeaponSecondaryConfig;
+
+WEAPON_INPUT_CONFIGURATION DefaultMarineWeaponPrimaryConfig = {{4, 5, 7, 9, 8, 6, 10, 2, 3, 255, 255}};
+WEAPON_INPUT_CONFIGURATION DefaultMarineWeaponSecondaryConfig = {{255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255}};
+WEAPON_INPUT_CONFIGURATION DefaultPredatorWeaponPrimaryConfig = {{2, 3, 4, 7, 6, 5, 255, 255, 255, 255, 255}};
+WEAPON_INPUT_CONFIGURATION DefaultPredatorWeaponSecondaryConfig = {{255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255}};
+WEAPON_INPUT_CONFIGURATION DefaultAlienWeaponPrimaryConfig = {{KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0, KEY_VOID}};
+WEAPON_INPUT_CONFIGURATION DefaultAlienWeaponSecondaryConfig = {{KEY_VOID, KEY_VOID, KEY_VOID, KEY_VOID, KEY_VOID, KEY_VOID, KEY_VOID, KEY_VOID, KEY_VOID, KEY_VOID, KEY_VOID}};
 
 #if 1 // English
 PLAYER_INPUT_CONFIGURATION DefaultMarineInputPrimaryConfig =
 {
-	KEY_W,				// Forward;
-	KEY_S,			    // Backward;
-	KEY_NUMPAD4, 		// Left;
-	KEY_NUMPAD6, 		// Right;
-
-	KEY_RIGHTALT,		// Strafe;
-	KEY_A,	 		    // StrafeLeft;
-	KEY_D,	 		    // StrafeRight;
-
-	KEY_Q, 				// LookUp;
-	KEY_Z, 				// LookDown;
-	KEY_G,				// CentreView;
-
-	KEY_LEFTSHIFT,		// Walk;
-	KEY_RIGHTCTRL, 		// Crouch;
-	KEY_RIGHTSHIFT,		// Jump;
-
-	KEY_SPACE,			// Operate;
-
-	KEY_LMOUSE, 		// FirePrimaryWeapon;
-	KEY_RMOUSE, 		// FireSecondaryWeapon;
-
-    {KEY_RBRACKET},  	// NextWeapon;
-    {KEY_LBRACKET},  	// PreviousWeapon;
-    {KEY_BACKSPACE},	// FlashbackWeapon;
-
-    {KEY_SLASH},	  	// ImageIntensifier;
-    {KEY_FSTOP},    	// ThrowFlare;
-    {KEY_APOSTROPHE},  	// Jetpack;
-    {KEY_SEMICOLON},	// Taunt
-    {KEY_F1},
-    {KEY_F11},
-    {KEY_F12},
-    {KEY_TAB}
+ /* Bindings calibrated in user test; no profile option metadata. */
+ 33, 29, 255, 255, 255, 11, 14, 255, 255, 255, 53, 55, 52, 16, 119, 121, {15}, {27}, {255}, {124}, {123}, {59}, {120}, {91}, {30}, {35}, {42}, 255, 255, 255, 28, 167
 };
 PLAYER_INPUT_CONFIGURATION DefaultPredatorInputPrimaryConfig =
 {
-    KEY_W,              // Forward;
-    KEY_S,              // Backward;
-    KEY_NUMPAD4,        // Left;
-    KEY_NUMPAD6,        // Right;
-
-    KEY_RIGHTALT,       // Strafe;
-    KEY_A,              // StrafeLeft;
-    KEY_D,              // StrafeRight;
-
-    KEY_Q,              // LookUp;
-    KEY_Z,              // LookDown;
-    KEY_G,              // CentreView;
-
-	KEY_LEFTSHIFT,		// Walk;
-	KEY_RIGHTCTRL, 		// Crouch;
-	KEY_RIGHTSHIFT,		// Jump;
-
-	KEY_SPACE,			// Operate;
-
-	KEY_LMOUSE, 		// FirePrimaryWeapon;
-	KEY_RMOUSE, 		// FireSecondaryWeapon;
-	
-    {KEY_RBRACKET},		// NextWeapon;
-    {KEY_LBRACKET}, 	// PreviousWeapon;
-    {KEY_BACKSPACE},	// FlashbackWeapon;
-	
-    {KEY_FSTOP},	 	// Cloak;
-    {KEY_SLASH},	 	// CycleVisionMode;
-    {KEY_PAGEUP},		// ZoomIn;
-    {KEY_PAGEDOWN},		// ZoomOut;
-    {KEY_APOSTROPHE},  	// GrapplingHook
-    {KEY_COMMA},		// RecallDisk
-    {KEY_SEMICOLON},	// Taunt
-    {KEY_F1},
-    KEY_F11,
-    KEY_F12,
-    KEY_TAB
+ /* Bindings calibrated in user test; no profile option metadata. */
+ 33, 29, 255, 255, 255, 11, 14, 255, 255, 255, 53, 55, 52, 16, 119, 121, {15}, {27}, {255}, {KEY_Z}, {KEY_C}, {123}, {124}, {255}, {28}, {120}, {91}, 30, 35, 42, 255, 167
 };
 
 PLAYER_INPUT_CONFIGURATION DefaultAlienInputPrimaryConfig =
 {
-    KEY_W,              // Forward;
-    KEY_S,              // Backward;
-    KEY_NUMPAD4,        // Left;
-    KEY_NUMPAD6,        // Right;
-
-    KEY_RIGHTALT,       // Strafe;
-    KEY_A,              // StrafeLeft;
-    KEY_D,              // StrafeRight;
-
-    KEY_Q,              // LookUp;
-    KEY_Z,              // LookDown;
-    KEY_G,              // CentreView;
-
-	KEY_LEFTSHIFT,		// Walk;
-	KEY_RIGHTCTRL, 		// Crouch;
-	KEY_RIGHTSHIFT,		// Jump;
-
-	KEY_SPACE,			// Operate;
-
-	KEY_LMOUSE, 		// FirePrimaryWeapon;
-	KEY_RMOUSE, 		// FireSecondaryWeapon;
-
-    {KEY_SLASH},		// AlternateVision;
-    {KEY_FSTOP},		// Taunt;
-    {KEY_F1},
-    {KEY_F11},
-    {KEY_F12},
-    {KEY_TAB}
+ /* Bindings calibrated in user test; no profile option metadata. */
+ 33, 29, 255, 255, 255, 11, 14, 255, 255, 255, 53, 55, 52, 16, 119, 121, {124}, {120}, {91}, {30}, {35}, {42}, {255}, {255}, {255}, {255}, {255}, 255, 255, 255, 255, 167
 };
 #elif 0	// Dutch
 PLAYER_INPUT_CONFIGURATION DefaultMarineInputPrimaryConfig =
@@ -614,41 +576,8 @@ PLAYER_INPUT_CONFIGURATION DefaultAlienInputPrimaryConfig =
 #endif
 PLAYER_INPUT_CONFIGURATION DefaultMarineInputSecondaryConfig =
 {
-	KEY_VOID,			// Forward;
-	KEY_VOID,			// Backward;
-	KEY_VOID, 			// Left;
-	KEY_VOID, 			// Right;
-
-	KEY_VOID,			// Strafe;
-	KEY_VOID,	 		// StrafeLeft;
-	KEY_VOID,	 		// StrafeRight;
-
-	KEY_NUMPAD8,		// LookUp;
-	KEY_NUMPAD2,		// LookDown;
-	KEY_NUMPAD5,		// CentreView;
-
-	KEY_VOID,		// Walk;
-	KEY_VOID, 		// Crouch;
-	KEY_MMOUSE,			// Jump;
-
-	KEY_CR,				// Operate;
-
-	KEY_NUMPAD0, 		// FirePrimaryWeapon;
-	KEY_NUMPADDEL, 		// FireSecondaryWeapon;
-
-    {KEY_MOUSEWHEELUP},  	// NextWeapon;
-    {KEY_MOUSEWHEELDOWN},	// PreviousWeapon;
-    {KEY_VOID},			// FlashbackWeapon;
-
-    {KEY_VOID},			// ImageIntensifier;
-    {KEY_VOID}, 		// ThrowFlare;
-    {KEY_VOID}, 		// Jetpack;
-    {KEY_VOID},			// Taunt
-
-    {KEY_VOID},
-    {KEY_VOID},
-    {KEY_VOID},
-    {KEY_VOID}
+ /* Bindings calibrated in user test; no profile option metadata. */
+ 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, {255}, {255}, {255}, {255}, {255}, {255}, {255}, {255}, {255}, {255}, {255}, 255, 255, 255, 255, 167
 };
 
 
@@ -656,77 +585,14 @@ PLAYER_INPUT_CONFIGURATION DefaultMarineInputSecondaryConfig =
 
 PLAYER_INPUT_CONFIGURATION DefaultPredatorInputSecondaryConfig =
 {
-	KEY_VOID,			// Forward;
-	KEY_VOID,			// Backward;
-	KEY_VOID, 			// Left;
-	KEY_VOID, 			// Right;
-
-	KEY_VOID,			// Strafe;
-	KEY_VOID,	 		// StrafeLeft;
-	KEY_VOID,	 		// StrafeRight;
-
-	KEY_NUMPAD8,		// LookUp;
-	KEY_NUMPAD2,		// LookDown;
-	KEY_NUMPAD5,		// CentreView;
-
-	KEY_VOID,		// Walk;
-	KEY_VOID, 		// Crouch;
-	KEY_MMOUSE,			// Jump;
-
-	KEY_CR,				// Operate;
-
-	KEY_NUMPAD0, 		// FirePrimaryWeapon;
-	KEY_NUMPADDEL, 		// FireSecondaryWeapon;
-
-    {KEY_VOID},			// NextWeapon;
-    {KEY_VOID}, 		// PreviousWeapon;
-    {KEY_VOID},			// FlashbackWeapon;
-	
-    {KEY_VOID},	 		// Cloak;
-    {KEY_VOID},	 		// CycleVisionMode;
-    {KEY_MOUSEWHEELUP},	// ZoomIn;
-    {KEY_MOUSEWHEELDOWN},	// ZoomOut;
-    {KEY_VOID},	 		// GrapplingHook;
-    {KEY_VOID},			// RecallDisk
-    {KEY_VOID},			// Taunt
-	
-    {KEY_VOID},
-    KEY_VOID,
-    KEY_VOID,
-    KEY_VOID
-
+ /* Bindings calibrated in user test; no profile option metadata. */
+ 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, {255}, {255}, {255}, {255}, {255}, {255}, {255}, {255}, {255}, {255}, {255}, 255, 255, 255, 255, 167
 };
 
 PLAYER_INPUT_CONFIGURATION DefaultAlienInputSecondaryConfig =
 {
-	KEY_VOID,				// Forward;
-	KEY_VOID,			// Backward;
-	KEY_VOID, 		// Left;
-	KEY_VOID, 		// Right;
-
-	KEY_VOID,		// Strafe;
-	KEY_VOID,	 		// StrafeLeft;
-	KEY_VOID,	 		// StrafeRight;
-
-	KEY_NUMPAD8,		// LookUp;
-	KEY_NUMPAD2,		// LookDown;
-	KEY_NUMPAD5,		// CentreView;
-
-	KEY_VOID,			// Walk;
-	KEY_VOID, 			// Crouch;
-	KEY_MMOUSE,			// Jump;
-
-	KEY_CR,				// Operate;
-
-	KEY_NUMPAD0, 		// FirePrimaryWeapon;
-	KEY_NUMPADDEL, 		// FireSecondaryWeapon;
-	
-    {KEY_VOID}, 		// AlternateVision;
-    {KEY_VOID},	 		// Taunt;
-    {KEY_VOID},
-    {KEY_VOID},
-    {KEY_VOID},
-    {KEY_VOID}
+ /* Bindings calibrated in user test; no profile option metadata. */
+ 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, {255}, {255}, {255}, {255}, {255}, {255}, {255}, {255}, {255}, {255}, {255}, 255, 255, 255, 255, 167
 };
 
 
@@ -805,8 +671,53 @@ JOYSTICK_CONTROL_METHODS DefaultJoystickControlMethods =
 /* Extern for global keyboard buffer */
 extern unsigned char KeyboardInput[];
 extern unsigned char DebouncedKeyboardInput[];
+int SmartJetpackEnabled;
+int SmartZoomEnabled;
+unsigned char PredatorPreviousVisionBindings[2]={KEY_X,KEY_VOID};
+int PredatorVisionCycleDirection=1;
+static int SmartJetpackToggleOn;
+/* Edge state for one notification per press/release of Zoom holding. */
+static int SmartZoomHoldingNotified;
 extern int GotJoystick;
 extern int GotMouse;
+extern float MouseRawDeltaX;
+extern float MouseRawDeltaY;
+
+int64_t MouseRawYawDelta;
+int64_t MouseRawPitchDelta;
+
+/* Extra user multiplier for FOV-scaled raw camera input, in tenths. */
+int MouseZoomSensitivityTenths = DEFAULT_MOUSE_ZOOM_SENSITIVITY_TENTHS;
+
+/* Return the requested zoom direction for one of the four Smart Zoom actions.
+   Debounced input preserves the native one-step-per-press zoom behaviour. */
+static int PredatorSmartZoomDirectionForBinding(unsigned char binding, PLAYER_INPUT_CONFIGURATION *primaryInput, PLAYER_INPUT_CONFIGURATION *secondaryInput, int useDebouncedInput)
+{
+	int zoomInMatch;
+	int zoomOutMatch;
+	int bindingIsActive;
+
+	if (binding==KEY_VOID) return 0;
+	bindingIsActive = useDebouncedInput ? DebouncedKeyboardInput[binding] : KeyboardInput[binding];
+	if (!bindingIsActive) return 0;
+	zoomInMatch = (binding==primaryInput->f.ZoomIn || binding==secondaryInput->f.ZoomIn);
+	zoomOutMatch = (binding==primaryInput->g.ZoomOut || binding==secondaryInput->g.ZoomOut);
+	/* A key assigned to both directions is ambiguous, so retain its normal action. */
+	if (zoomInMatch==zoomOutMatch) return 0;
+	return zoomInMatch ? 1 : -1;
+}
+
+/* Convert an SDL relative count directly to the engine's 16.16 angle unit.
+ * This deliberately does not divide by frame time: camera travel depends on
+ * physical mouse distance, as in Quake 3's direct mouse path. */
+static int64_t MouseCountsToAngleFixed(float counts, float sensitivity)
+{
+	const double result = (double)counts * (double)sensitivity * 2000.0;
+
+	if (result >= (double)INT64_MAX) return INT64_MAX;
+	if (result <= (double)INT64_MIN) return INT64_MIN;
+	return (result >= 0.0) ? (int64_t)(result + 0.5) : (int64_t)(result - 0.5);
+}
 
 /* initialise the player input structure(s) in the player_status block */
 void InitPlayerGameInput(STRATEGYBLOCK* sbPtr)
@@ -830,21 +741,61 @@ void InitPlayerGameInput(STRATEGYBLOCK* sbPtr)
 	playerStatusPtr->Mvt_InputRequests.Mask = 0;
 	playerStatusPtr->Mvt_InputRequests.Mask2 = 0;
 
-	/* KJL 14:23:54 8/7/97 - default to run */
-	playerStatusPtr->Mvt_InputRequests.Flags.Rqst_Faster = 1;
+	/* Use the species preference, also when no gameplay input is accepted. */
+	playerStatusPtr->Mvt_InputRequests.Flags.Rqst_Faster = PlayerWantsToRun(AvP.PlayerType,0);
 
 }
 
 
+/* Only slots published by the species' bind menu may request direct selection.
+   Legacy/internal slots must not overwrite a valid user weapon binding. */
+static int DirectWeaponSlotIsPublishedForPlayer(int playerType, int weaponSlot)
+{
+	switch (playerType)
+	{
+		case I_Marine:
+			return (weaponSlot >= 0 && weaponSlot <= 8);
+
+		case I_Predator:
+			return (weaponSlot >= 0 && weaponSlot <= 5);
+
+		case I_Alien:
+			return 0;
+
+		default:
+			return 0;
+	}
+}
 /* This function maps raw inputs onto the players movement attributes in
    the player_status block.  It is called from the ExecuteFreeMovement
    function.
    NB Currently, only keyboard input is supported. */
 void ReadPlayerGameInput(STRATEGYBLOCK* sbPtr)
 {
+    int devEditKeys = 0;
+    unsigned char devSavedKeys[6],flameSavedKeys[12];
+    int flameKeysActive=0;
+    const int flameKeys[6]={KEY_W,KEY_S,KEY_A,KEY_D,KEY_Q,KEY_E};
+
 	PLAYER_INPUT_CONFIGURATION *primaryInput;
 	PLAYER_INPUT_CONFIGURATION *secondaryInput;
+	WEAPON_INPUT_CONFIGURATION *primaryWeaponInput;
+	WEAPON_INPUT_CONFIGURATION *secondaryWeaponInput;
 	PLAYER_STATUS *playerStatusPtr;
+	int smartJetpackJumpHeld;
+	int smartJetpackTogglePressed;
+	int smartJetpackAvailable;
+	int smartPredatorZoomHolding;
+	int smartPredatorZoomInPressed;
+	int smartPredatorZoomOutPressed;
+	int smartPredatorNextZoomDirection;
+	int smartPredatorPreviousZoomDirection;
+	int smartPredatorVisionZoomDirection;
+	int smartPredatorFlareZoomDirection;
+	int smartPredatorSuppressNext;
+	int smartPredatorSuppressPrevious;
+	int smartPredatorSuppressVision;
+	int smartPredatorSuppressFlare;
 
     /* get the player status block ... */
     playerStatusPtr = (PLAYER_STATUS *) (sbPtr->SBdataptr);
@@ -852,6 +803,9 @@ void ReadPlayerGameInput(STRATEGYBLOCK* sbPtr)
 	
 	/* start off by initialising the inputs */
 	InitPlayerGameInput(sbPtr);
+    PredatorVisionCycleDirection=1;
+	MouseRawYawDelta = 0;
+	MouseRawPitchDelta = 0;
 
 	switch (AvP.PlayerType)
 	{
@@ -860,24 +814,119 @@ void ReadPlayerGameInput(STRATEGYBLOCK* sbPtr)
 		{
 			primaryInput = &MarineInputPrimaryConfig;
 			secondaryInput = &MarineInputSecondaryConfig;
+			primaryWeaponInput = &MarineWeaponPrimaryConfig;
+			secondaryWeaponInput = &MarineWeaponSecondaryConfig;
 			break;
 		}
 		case I_Predator:
 		{
 			primaryInput = &PredatorInputPrimaryConfig;
 			secondaryInput = &PredatorInputSecondaryConfig;
+			primaryWeaponInput = &PredatorWeaponPrimaryConfig;
+			secondaryWeaponInput = &PredatorWeaponSecondaryConfig;
 			break;
 		}
 		case I_Alien:
 		{
 			primaryInput = &AlienInputPrimaryConfig;
 			secondaryInput = &AlienInputSecondaryConfig;
+			primaryWeaponInput = &AlienWeaponPrimaryConfig;
+			secondaryWeaponInput = &AlienWeaponSecondaryConfig;
 			break;
 		}
 	}
 
+	/* Turning Smart Zoom off must make its modifier inert immediately, without
+	 * emitting a stale release notification. */
+	if (AvP.PlayerType!=I_Predator || !SmartZoomEnabled)
+		SmartZoomHoldingNotified=0;
+
 	if ( IOFOCUS_AcceptControls() && !InGameMenusAreRunning())
 	{
+        if(playerStatusPtr->IsAlive && AvP.PlayerType==I_Marine &&
+           playerStatusPtr->WeaponSlot[playerStatusPtr->SelectedWeaponSlot].WeaponIDNumber==WEAPON_FLAMETHROWER && DevFlameEditing()){
+            flameKeysActive=1;
+            DevFlameKeys(KeyboardInput[KEY_W],KeyboardInput[KEY_S],KeyboardInput[KEY_A],KeyboardInput[KEY_D],KeyboardInput[KEY_Q],KeyboardInput[KEY_E],NormalFrameTime);
+            for(int i=0;i<6;i++){flameSavedKeys[i]=KeyboardInput[flameKeys[i]];flameSavedKeys[6+i]=DebouncedKeyboardInput[flameKeys[i]];KeyboardInput[flameKeys[i]]=DebouncedKeyboardInput[flameKeys[i]]=0;}
+        }
+        if (playerStatusPtr->IsAlive && DevViewmodelHandleKeys(AvP.PlayerType,
+            playerStatusPtr->WeaponSlot[playerStatusPtr->SelectedWeaponSlot].WeaponIDNumber,
+            KeyboardInput[KEY_W],KeyboardInput[KEY_S],DebouncedKeyboardInput[KEY_Z],NormalFrameTime)) {
+            devEditKeys=1;
+            devSavedKeys[0]=KeyboardInput[KEY_W];devSavedKeys[1]=KeyboardInput[KEY_S];devSavedKeys[2]=KeyboardInput[KEY_Z];
+            devSavedKeys[3]=DebouncedKeyboardInput[KEY_W];devSavedKeys[4]=DebouncedKeyboardInput[KEY_S];devSavedKeys[5]=DebouncedKeyboardInput[KEY_Z];
+            KeyboardInput[KEY_W]=KeyboardInput[KEY_S]=KeyboardInput[KEY_Z]=0;
+            DebouncedKeyboardInput[KEY_W]=DebouncedKeyboardInput[KEY_S]=DebouncedKeyboardInput[KEY_Z]=0;
+        }
+
+		smartJetpackJumpHeld = (KeyboardInput[primaryInput->Jump]
+			|| KeyboardInput[secondaryInput->Jump]);
+		smartJetpackTogglePressed = 0;
+		/* A map grants the actual capability through StartingEquipment.
+		   Smart Jetpack must remain completely inert without that equipment. */
+		smartJetpackAvailable = (AvP.PlayerType==I_Marine
+			&& SmartJetpackEnabled
+			&& playerStatusPtr->JetpackEnabled);
+		if (smartJetpackAvailable)
+		{
+			/* Only the dedicated Jetpack bind changes mode.  Jump is deliberately
+			   excluded so intermittent Jump taps can never toggle the jetpack. */
+			smartJetpackTogglePressed = (DebouncedKeyboardInput[primaryInput->f.Jetpack]
+				|| DebouncedKeyboardInput[secondaryInput->f.Jetpack]);
+			if (smartJetpackTogglePressed)
+			{
+				SmartJetpackToggleOn = !SmartJetpackToggleOn;
+				PlaySmartJetpackToggleSound(SmartJetpackToggleOn);
+				GADGET_NewOnScreenMessage(GetTextString(SmartJetpackToggleOn ? TEXTSTRING_SMART_JETPACK_MODE_ON_NEW : TEXTSTRING_SMART_JETPACK_MODE_OFF_NEW));
+			}
+		}
+		else
+		{
+			SmartJetpackToggleOn = 0;
+		}
+
+		smartPredatorZoomHolding = 0;
+		smartPredatorZoomInPressed = 0;
+		smartPredatorZoomOutPressed = 0;
+		smartPredatorNextZoomDirection = 0;
+		smartPredatorPreviousZoomDirection = 0;
+		smartPredatorVisionZoomDirection = 0;
+		smartPredatorFlareZoomDirection = 0;
+		smartPredatorSuppressNext = 0;
+		smartPredatorSuppressPrevious = 0;
+		smartPredatorSuppressVision = 0;
+		smartPredatorSuppressFlare = 0;
+		if (AvP.PlayerType==I_Predator && SmartZoomEnabled)
+		{
+			smartPredatorZoomHolding = (PREDATOR_ZOOM_HOLD_BIND(primaryInput)!=KEY_VOID && KeyboardInput[PREDATOR_ZOOM_HOLD_BIND(primaryInput)])
+				|| (PREDATOR_ZOOM_HOLD_BIND(secondaryInput)!=KEY_VOID && KeyboardInput[PREDATOR_ZOOM_HOLD_BIND(secondaryInput)]);
+			if (smartPredatorZoomHolding!=SmartZoomHoldingNotified)
+			{
+				GADGET_NewOnScreenMessage(GetTextString(smartPredatorZoomHolding
+					? TEXTSTRING_SMART_ZOOM_ACTIVATED_NEW
+					: TEXTSTRING_SMART_ZOOM_DEACTIVATED_NEW));
+				SmartZoomHoldingNotified=smartPredatorZoomHolding;
+			}
+			if (smartPredatorZoomHolding)
+			{
+				/* Smart Zoom overlays only these four published Predator actions. */
+				smartPredatorNextZoomDirection = PredatorSmartZoomDirectionForBinding(primaryInput->a.NextWeapon,primaryInput,secondaryInput,0);
+				if (!smartPredatorNextZoomDirection) smartPredatorNextZoomDirection = PredatorSmartZoomDirectionForBinding(secondaryInput->a.NextWeapon,primaryInput,secondaryInput,0);
+				smartPredatorPreviousZoomDirection = PredatorSmartZoomDirectionForBinding(primaryInput->b.PreviousWeapon,primaryInput,secondaryInput,0);
+				if (!smartPredatorPreviousZoomDirection) smartPredatorPreviousZoomDirection = PredatorSmartZoomDirectionForBinding(secondaryInput->b.PreviousWeapon,primaryInput,secondaryInput,0);
+				smartPredatorVisionZoomDirection = PredatorSmartZoomDirectionForBinding(primaryInput->d.Cloak,primaryInput,secondaryInput,0);
+				if (!smartPredatorVisionZoomDirection) smartPredatorVisionZoomDirection = PredatorSmartZoomDirectionForBinding(secondaryInput->d.Cloak,primaryInput,secondaryInput,0);
+				smartPredatorFlareZoomDirection = PredatorSmartZoomDirectionForBinding(primaryInput->e.CycleVisionMode,primaryInput,secondaryInput,0);
+				if (!smartPredatorFlareZoomDirection) smartPredatorFlareZoomDirection = PredatorSmartZoomDirectionForBinding(secondaryInput->e.CycleVisionMode,primaryInput,secondaryInput,0);
+
+				smartPredatorZoomInPressed = (PredatorSmartZoomDirectionForBinding(primaryInput->a.NextWeapon,primaryInput,secondaryInput,1)>0 || PredatorSmartZoomDirectionForBinding(secondaryInput->a.NextWeapon,primaryInput,secondaryInput,1)>0 || PredatorSmartZoomDirectionForBinding(primaryInput->b.PreviousWeapon,primaryInput,secondaryInput,1)>0 || PredatorSmartZoomDirectionForBinding(secondaryInput->b.PreviousWeapon,primaryInput,secondaryInput,1)>0 || PredatorSmartZoomDirectionForBinding(primaryInput->d.Cloak,primaryInput,secondaryInput,1)>0 || PredatorSmartZoomDirectionForBinding(secondaryInput->d.Cloak,primaryInput,secondaryInput,1)>0 || PredatorSmartZoomDirectionForBinding(primaryInput->e.CycleVisionMode,primaryInput,secondaryInput,1)>0 || PredatorSmartZoomDirectionForBinding(secondaryInput->e.CycleVisionMode,primaryInput,secondaryInput,1)>0);
+				smartPredatorZoomOutPressed = (PredatorSmartZoomDirectionForBinding(primaryInput->a.NextWeapon,primaryInput,secondaryInput,1)<0 || PredatorSmartZoomDirectionForBinding(secondaryInput->a.NextWeapon,primaryInput,secondaryInput,1)<0 || PredatorSmartZoomDirectionForBinding(primaryInput->b.PreviousWeapon,primaryInput,secondaryInput,1)<0 || PredatorSmartZoomDirectionForBinding(secondaryInput->b.PreviousWeapon,primaryInput,secondaryInput,1)<0 || PredatorSmartZoomDirectionForBinding(primaryInput->d.Cloak,primaryInput,secondaryInput,1)<0 || PredatorSmartZoomDirectionForBinding(secondaryInput->d.Cloak,primaryInput,secondaryInput,1)<0 || PredatorSmartZoomDirectionForBinding(primaryInput->e.CycleVisionMode,primaryInput,secondaryInput,1)<0 || PredatorSmartZoomDirectionForBinding(secondaryInput->e.CycleVisionMode,primaryInput,secondaryInput,1)<0);
+				smartPredatorSuppressNext = (smartPredatorNextZoomDirection!=0);
+				smartPredatorSuppressPrevious = (smartPredatorPreviousZoomDirection!=0);
+				smartPredatorSuppressVision = (smartPredatorVisionZoomDirection!=0);
+				smartPredatorSuppressFlare = (smartPredatorFlareZoomDirection!=0);
+			}
+		}
 		/* now do forward,backward,left,right,up and down 
 		   IMPORTANT:  The request flag and the movement 
 		   increment must BOTH be set!
@@ -919,9 +968,9 @@ void ReadPlayerGameInput(STRATEGYBLOCK* sbPtr)
 			playerStatusPtr->Mvt_InputRequests.Flags.Rqst_SideStepRight = 1;
 			playerStatusPtr->Mvt_SideStepIncrement = ONE_FIXED;
 		}
-		if(KeyboardInput[primaryInput->Walk]
-		 ||KeyboardInput[secondaryInput->Walk])
-			playerStatusPtr->Mvt_InputRequests.Flags.Rqst_Faster = 0;
+        playerStatusPtr->Mvt_InputRequests.Flags.Rqst_Faster = PlayerWantsToRun(AvP.PlayerType,
+            (primaryInput->Walk!=KEY_VOID && KeyboardInput[primaryInput->Walk]) ||
+            (secondaryInput->Walk!=KEY_VOID && KeyboardInput[secondaryInput->Walk]));
 		
 		if(KeyboardInput[primaryInput->Strafe]
 		 ||KeyboardInput[secondaryInput->Strafe])
@@ -931,8 +980,8 @@ void ReadPlayerGameInput(STRATEGYBLOCK* sbPtr)
 		 ||KeyboardInput[secondaryInput->Crouch])
 			playerStatusPtr->Mvt_InputRequests.Flags.Rqst_Crouch = 1;
 		
-		if(KeyboardInput[primaryInput->Jump]
-		 ||KeyboardInput[secondaryInput->Jump])
+		if(smartJetpackJumpHeld
+		 && !(smartJetpackAvailable && SmartJetpackToggleOn))
 			playerStatusPtr->Mvt_InputRequests.Flags.Rqst_Jump = 1;
 
 		if(KeyboardInput[primaryInput->Operate]
@@ -954,8 +1003,16 @@ void ReadPlayerGameInput(STRATEGYBLOCK* sbPtr)
 					ThrowAFlare();
 
 				#if !(MARINE_DEMO||DEATHMATCH_DEMO)
-				if(KeyboardInput[primaryInput->f.Jetpack]
-				 ||KeyboardInput[secondaryInput->f.Jetpack])
+				if (smartJetpackAvailable)
+				{
+					/* A tap of Jetpack selects the mode; holding Jump supplies thrust. */
+					if (SmartJetpackToggleOn && smartJetpackJumpHeld)
+						playerStatusPtr->Mvt_InputRequests.Flags.Rqst_Jetpack = 1;
+				}
+				/* In Smart mode without equipment, the dedicated Jetpack bind is null.
+				   With Smart mode disabled, preserve the original vanilla key path. */
+				else if (!SmartJetpackEnabled && (KeyboardInput[primaryInput->f.Jetpack]
+				 ||KeyboardInput[secondaryInput->f.Jetpack]))
 					playerStatusPtr->Mvt_InputRequests.Flags.Rqst_Jetpack = 1;
 				#endif
 				
@@ -986,13 +1043,24 @@ void ReadPlayerGameInput(STRATEGYBLOCK* sbPtr)
 			{
 				extern int CameraZoomLevel;
 				
-				if(KeyboardInput[primaryInput->d.Cloak]
-				 ||KeyboardInput[secondaryInput->d.Cloak])
+				if(!smartPredatorSuppressVision && (KeyboardInput[primaryInput->d.Cloak]
+				
+				 ||KeyboardInput[secondaryInput->d.Cloak]))
 					playerStatusPtr->Mvt_InputRequests.Flags.Rqst_ChangeVision = 1;
 				
-				if(DebouncedKeyboardInput[primaryInput->e.CycleVisionMode]
-				 ||DebouncedKeyboardInput[secondaryInput->e.CycleVisionMode])
-					playerStatusPtr->Mvt_InputRequests.Flags.Rqst_CycleVisionMode = 1;
+				if(!smartPredatorSuppressFlare && (DebouncedKeyboardInput[primaryInput->e.CycleVisionMode]
+				
+				 ||DebouncedKeyboardInput[secondaryInput->e.CycleVisionMode]))
+                    playerStatusPtr->Mvt_InputRequests.Flags.Rqst_CycleVisionMode = 1;
+                /* Separate debounced action: one step/sound per press. The
+                   existing forward action wins if both are pressed together. */
+                if (!playerStatusPtr->Mvt_InputRequests.Flags.Rqst_CycleVisionMode &&
+                    ((PredatorPreviousVisionBindings[0]!=KEY_VOID && DebouncedKeyboardInput[PredatorPreviousVisionBindings[0]]) ||
+                     (PredatorPreviousVisionBindings[1]!=KEY_VOID && DebouncedKeyboardInput[PredatorPreviousVisionBindings[1]])))
+                {
+                    PredatorVisionCycleDirection=-1;
+                    playerStatusPtr->Mvt_InputRequests.Flags.Rqst_CycleVisionMode=1;
+                }
 
 				#if !(PREDATOR_DEMO||DEATHMATCH_DEMO)
 				if(DebouncedKeyboardInput[primaryInput->h.GrapplingHook]
@@ -1000,15 +1068,28 @@ void ReadPlayerGameInput(STRATEGYBLOCK* sbPtr)
 					playerStatusPtr->Mvt_InputRequests.Flags.Rqst_GrapplingHook = 1;
 				#endif
 
-				if(DebouncedKeyboardInput[primaryInput->f.ZoomIn]
-				 ||DebouncedKeyboardInput[secondaryInput->f.ZoomIn])
+				if (SmartZoomEnabled)
 				{
-					if (CameraZoomLevel<3) CameraZoomLevel++;
+					/* Preserve native zoom steps: one shared-action press changes one
+					   level while its Smart Zoom modifier is held. */
+					if (smartPredatorZoomHolding)
+					{
+						if (smartPredatorZoomInPressed && !smartPredatorZoomOutPressed && CameraZoomLevel<3) CameraZoomLevel++;
+						else if (smartPredatorZoomOutPressed && !smartPredatorZoomInPressed && CameraZoomLevel>0) CameraZoomLevel--;
+					}
 				}
-				if(DebouncedKeyboardInput[primaryInput->g.ZoomOut]
-				 ||DebouncedKeyboardInput[secondaryInput->g.ZoomOut])
+				else
 				{
-					if (CameraZoomLevel>0) CameraZoomLevel--;
+					if(DebouncedKeyboardInput[primaryInput->f.ZoomIn]
+					 ||DebouncedKeyboardInput[secondaryInput->f.ZoomIn])
+					{
+						if (CameraZoomLevel<3) CameraZoomLevel++;
+					}
+					if(DebouncedKeyboardInput[primaryInput->g.ZoomOut]
+					 ||DebouncedKeyboardInput[secondaryInput->g.ZoomOut])
+					{
+						if (CameraZoomLevel>0) CameraZoomLevel--;
+					}
 				}
 				
 				MaintainZoomingLevel();
@@ -1072,6 +1153,16 @@ void ReadPlayerGameInput(STRATEGYBLOCK* sbPtr)
 		
 		if(DebouncedKeyboardInput[FixedInputConfig.PauseGame])
 			AvP_TriggerInGameMenus();
+
+		/* Global utility binds are edge-triggered and species-independent. */
+
+		if (AvP.Network == I_No_Network)
+		{
+			if (GlobalCommandPressed(GlobalCommandPrimaryConfig.QuickSave,GlobalCommandSecondaryConfig.QuickSave)) QuickSave();
+			if (GlobalCommandPressed(GlobalCommandPrimaryConfig.QuickLoad,GlobalCommandSecondaryConfig.QuickLoad)) QuickLoad();
+			if (GlobalCommandPressed(GlobalCommandPrimaryConfig.SaveGameMenu,GlobalCommandSecondaryConfig.SaveGameMenu)) AvP_OpenInGameSaveMenu();
+			else if (GlobalCommandPressed(GlobalCommandPrimaryConfig.LoadGameMenu,GlobalCommandSecondaryConfig.LoadGameMenu)) AvP_OpenInGameLoadMenu();
+		}
 	//		playerStatusPtr->Mvt_InputRequests.Flags.Rqst_QuitGame = 1;
 //			playerStatusPtr->Mvt_InputRequests.Flags.Rqst_PauseGame = 1;
 
@@ -1098,12 +1189,14 @@ void ReadPlayerGameInput(STRATEGYBLOCK* sbPtr)
 			 ||KeyboardInput[secondaryInput->CentreView])
 				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_CentreView = 1;
 
-			if(KeyboardInput[primaryInput->a.NextWeapon]
-			 ||KeyboardInput[secondaryInput->a.NextWeapon])
+			if(!smartPredatorSuppressNext && (KeyboardInput[primaryInput->a.NextWeapon]
+
+			 ||KeyboardInput[secondaryInput->a.NextWeapon]))
 				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_NextWeapon = 1;
 			
-			if(KeyboardInput[primaryInput->b.PreviousWeapon]
-			 ||KeyboardInput[secondaryInput->b.PreviousWeapon])
+			if(!smartPredatorSuppressPrevious && (KeyboardInput[primaryInput->b.PreviousWeapon]
+			
+			 ||KeyboardInput[secondaryInput->b.PreviousWeapon]))
 				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_PreviousWeapon = 1;
 
 			if(DebouncedKeyboardInput[primaryInput->c.FlashbackWeapon]
@@ -1114,62 +1207,33 @@ void ReadPlayerGameInput(STRATEGYBLOCK* sbPtr)
 					playerStatusPtr->Mvt_InputRequests.Flags.Rqst_WeaponNo = playerStatusPtr->PreviouslySelectedWeaponSlot+1;
 				}
 			}
+
+			if ((AvP.PlayerType==I_Marine)
+				&& (DebouncedKeyboardInput[primaryInput->ReloadWeapon]
+				 || DebouncedKeyboardInput[secondaryInput->ReloadWeapon]))
+			{
+				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_ReloadWeapon = 1;
+			}
 			
 			if(KeyboardInput[primaryInput->FireSecondaryWeapon]
 			 ||KeyboardInput[secondaryInput->FireSecondaryWeapon])
 				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_FireSecondaryWeapon = 1;
 			
-			/* fixed controls */
-			if(KeyboardInput[FixedInputConfig.Weapon1])
-				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_WeaponNo = 1;
+			/* Direct selection is per species and completely rebindable.
+			   Ignore unpublished internal slots so a stale KEY_0 cannot replace
+			   the user's valid weapon request with an empty slot. */
+			for (int weaponSlot=0; weaponSlot<NUMBER_OF_WEAPON_BINDINGS; weaponSlot++)
+			{
+				if (DirectWeaponSlotIsPublishedForPlayer(AvP.PlayerType, weaponSlot)
+				 && ((primaryWeaponInput->Weapon[weaponSlot] != KEY_VOID
+					  && KeyboardInput[primaryWeaponInput->Weapon[weaponSlot]])
+					 || (secondaryWeaponInput->Weapon[weaponSlot] != KEY_VOID
+					  && KeyboardInput[secondaryWeaponInput->Weapon[weaponSlot]])))
+				{
+					playerStatusPtr->Mvt_InputRequests.Flags.Rqst_WeaponNo = weaponSlot+1;
+				}
+			}
 			
-			#if !PREDATOR_DEMO
-		  	if(KeyboardInput[FixedInputConfig.Weapon2])
-				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_WeaponNo = 2;
-			#else
-		  	if(DebouncedKeyboardInput[FixedInputConfig.Weapon2])
-				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_WeaponNo = 2;
-			#endif
-			if(KeyboardInput[FixedInputConfig.Weapon3])
-				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_WeaponNo = 3;
-			
-			#if !(MARINE_DEMO)
-			if(KeyboardInput[FixedInputConfig.Weapon4])
-				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_WeaponNo = 4;
-			#else
-			if(DebouncedKeyboardInput[FixedInputConfig.Weapon4])
-				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_WeaponNo = 4;
-			#endif
-			
-			#if !(PREDATOR_DEMO||MARINE_DEMO)
-			if(KeyboardInput[FixedInputConfig.Weapon5])
-				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_WeaponNo = 5;
-			#else
-		  	if(DebouncedKeyboardInput[FixedInputConfig.Weapon5])
-				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_WeaponNo = 5;
-			#endif
-
-			#if !(MARINE_DEMO)
-			if(KeyboardInput[FixedInputConfig.Weapon6])
-				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_WeaponNo = 6;
-			#else
-			if(DebouncedKeyboardInput[FixedInputConfig.Weapon6])
-				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_WeaponNo = 6;
-			#endif
-			
-			if(KeyboardInput[FixedInputConfig.Weapon7])
-				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_WeaponNo = 7;
-			
-			if(KeyboardInput[FixedInputConfig.Weapon8])
-				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_WeaponNo = 8;
-			
-			if(KeyboardInput[FixedInputConfig.Weapon9])
-				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_WeaponNo = 9;
-			
-			if(KeyboardInput[FixedInputConfig.Weapon10])
-				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_WeaponNo = 10;
-			
-		 
 		}
 		#if !(PREDATOR_DEMO||MARINE_DEMO||ALIEN_DEMO||DEATHMATCH_DEMO)
 		else // Cool - paintball mode				`
@@ -1257,33 +1321,43 @@ void ReadPlayerGameInput(STRATEGYBLOCK* sbPtr)
 	{
 		extern int MouseVelX;
 		extern int MouseVelY;
+		extern float CameraZoomScale;
+		float mouseZoomFovScale = 1.0f;
+		int zoomSensitivityTenths = MouseZoomSensitivityTenths;
+
+		/* Q3-style: use the live FOV scale only for raw camera yaw/pitch. */
+		if (zoomSensitivityTenths < 0) zoomSensitivityTenths = 0;
+		if (zoomSensitivityTenths > 20) zoomSensitivityTenths = 20;
+		if (CameraZoomScale < 1.0f)
+		{
+			mouseZoomFovScale = CameraZoomScale * ((float)zoomSensitivityTenths / 10.0f);
+		}
 
 
 		if(ControlMethods.HAxisIsTurning)
 		{
-			if(MouseVelX<0)
+			if(MouseRawDeltaX<0.0f)
 			{
 				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_TurnLeft = 1;
 				playerStatusPtr->Mvt_AnalogueTurning = 1;
-				playerStatusPtr->Mvt_TurnIncrement = ((int)MouseVelX)*ControlMethods.MouseXSensitivity;
-			   
+				MouseRawYawDelta = MouseCountsToAngleFixed(MouseRawDeltaX, (float)ControlMethods.MouseXSensitivity * mouseZoomFovScale);
 			}
-			else if(MouseVelX>0)
+			else if(MouseRawDeltaX>0.0f)
 			{
 				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_TurnRight = 1;
 				playerStatusPtr->Mvt_AnalogueTurning = 1;
-				playerStatusPtr->Mvt_TurnIncrement = ((int)MouseVelX)*ControlMethods.MouseXSensitivity;
+				MouseRawYawDelta = MouseCountsToAngleFixed(MouseRawDeltaX, (float)ControlMethods.MouseXSensitivity * mouseZoomFovScale);
 			}
 
-			/* KJL 17:36:37 9/9/97 - cap values if strafing */
-		   	if(playerStatusPtr->Mvt_InputRequests.Flags.Rqst_Strafe)
+			/* Preserve legacy keyboard/strafe behavior. Mouse camera input now
+			 * bypasses Mvt_TurnIncrement, so this is not its flick limit. */
+			if(playerStatusPtr->Mvt_InputRequests.Flags.Rqst_Strafe)
 			{
-		   		if(playerStatusPtr->Mvt_TurnIncrement < -ONE_FIXED)
-		   			playerStatusPtr->Mvt_TurnIncrement = -ONE_FIXED;
-		   		if(playerStatusPtr->Mvt_TurnIncrement > ONE_FIXED)
-		   			playerStatusPtr->Mvt_TurnIncrement = ONE_FIXED;
+				if(playerStatusPtr->Mvt_TurnIncrement < -ONE_FIXED)
+					playerStatusPtr->Mvt_TurnIncrement = -ONE_FIXED;
+				if(playerStatusPtr->Mvt_TurnIncrement > ONE_FIXED)
+					playerStatusPtr->Mvt_TurnIncrement = ONE_FIXED;
 			}
-			
 		}
 		else // it's sidestep
 		{
@@ -1327,27 +1401,26 @@ void ReadPlayerGameInput(STRATEGYBLOCK* sbPtr)
 		}
 		else // it's looking
 		{
-			int newMouseVelY;
+			float newMouseDeltaY;
 
-			if (ControlMethods.FlipVerticalAxis) newMouseVelY = -MouseVelY;
-			else newMouseVelY = MouseVelY;
+			if (ControlMethods.FlipVerticalAxis) newMouseDeltaY = -MouseRawDeltaY;
+			else newMouseDeltaY = MouseRawDeltaY;
 
-			if(newMouseVelY<0)
+			if(newMouseDeltaY<0.0f)
 			{
 				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_LookUp = 1;
 				playerStatusPtr->Mvt_AnaloguePitching = 1;
-				playerStatusPtr->Mvt_PitchIncrement = ((int)newMouseVelY)*ControlMethods.MouseYSensitivity;
+				MouseRawPitchDelta = MouseCountsToAngleFixed(newMouseDeltaY, (float)ControlMethods.MouseYSensitivity * mouseZoomFovScale);
 			}
-			else if(newMouseVelY>0)
+			else if(newMouseDeltaY>0.0f)
 			{
 				playerStatusPtr->Mvt_InputRequests.Flags.Rqst_LookDown = 1;
 				playerStatusPtr->Mvt_AnaloguePitching = 1;
-				playerStatusPtr->Mvt_PitchIncrement = ((int)newMouseVelY)*ControlMethods.MouseYSensitivity;
+				MouseRawPitchDelta = MouseCountsToAngleFixed(newMouseDeltaY, (float)ControlMethods.MouseYSensitivity * mouseZoomFovScale);
 			}
-		}	
-								 
+		}
 	}
-	
+
 	/* KJL 18:27:34 04/29/97 - joystick control */
 	if (GotJoystick)
 	{
@@ -1620,7 +1693,19 @@ void ReadPlayerGameInput(STRATEGYBLOCK* sbPtr)
 		MessageHistory_DisplayPrevious();
 	}
 	#endif
-	if (DebouncedKeyboardInput[KEY_GRAVE]) IOFOCUS_Toggle();
+    /* The open console owns ESC: collapse it without opening pause or
+     * executing/submitting the current input line. */
+    if (DebouncedKeyboardInput[KEY_ESCAPE] && IOFOCUS_AcceptTyping()) {
+        IOFOCUS_Toggle();
+        DebouncedKeyboardInput[KEY_ESCAPE]=0;
+    }
+    else if (DebouncedKeyboardInput[KEY_GRAVE]) IOFOCUS_Toggle();
+
+    if(flameKeysActive)for(int i=0;i<6;i++){KeyboardInput[flameKeys[i]]=flameSavedKeys[i];DebouncedKeyboardInput[flameKeys[i]]=flameSavedKeys[6+i];}
+    if (devEditKeys) {
+        KeyboardInput[KEY_W]=devSavedKeys[0];KeyboardInput[KEY_S]=devSavedKeys[1];KeyboardInput[KEY_Z]=devSavedKeys[2];
+        DebouncedKeyboardInput[KEY_W]=devSavedKeys[3];DebouncedKeyboardInput[KEY_S]=devSavedKeys[4];DebouncedKeyboardInput[KEY_Z]=devSavedKeys[5];
+    }
 }
 
 void LoadKeyConfiguration(void)
@@ -1709,6 +1794,12 @@ void LoadDefaultPrimaryConfigs(void)
 	fread(&DefaultMarineInputPrimaryConfig,sizeof(PLAYER_INPUT_CONFIGURATION),1,file);
 	fread(&DefaultPredatorInputPrimaryConfig,sizeof(PLAYER_INPUT_CONFIGURATION),1,file);
 	fread(&DefaultAlienInputPrimaryConfig,sizeof(PLAYER_INPUT_CONFIGURATION),1,file);
+
+	/* default.cfg predates the reserved reload bind; migrate its unused byte. */
+	DefaultMarineInputPrimaryConfig.ReloadWeapon = KEY_VOID;
+	DefaultMarineInputPrimaryConfig.ReloadBindingProfileMarker = RELOAD_BINDING_PROFILE_MARKER;
+	DefaultPredatorInputPrimaryConfig.ReloadWeapon = KEY_VOID;
+	DefaultPredatorInputPrimaryConfig.ReloadBindingProfileMarker = RELOAD_BINDING_PROFILE_MARKER;
 
 	fclose(file);
 }

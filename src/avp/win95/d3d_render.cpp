@@ -29,6 +29,7 @@ extern "C++"{
 #include <math.h> // for sqrt
 };
 #include "HUD_layout.h"
+#include "text_encoding.h"
 #define HAVE_VISION_H 1
 #include "vision.h"
 #include "lighting.h"
@@ -40,6 +41,7 @@ extern "C++"{
 #include "bh_types.h"
 
 #include <string.h>
+#include <stdio.h>
 
 
 #define RGBLIGHT_MAKE(r,g,b) RGB_MAKE(r,g,b)
@@ -120,6 +122,7 @@ extern int RasterisationRequestMode;
 extern int SoftwareScanDrawRequestMode;
 extern SCREENDESCRIPTORBLOCK ScreenDescriptorBlock;
 extern VIEWDESCRIPTORBLOCK* Global_VDB_Ptr;
+extern DISPLAYBLOCK *Global_ODB_Ptr;
 
 
 extern IMAGEHEADER ImageHeaderArray[];
@@ -912,7 +915,7 @@ void D3D_BackdropPolygon_Output(POLYHEADER *inputPolyPtr,RENDERVERTEX *renderVer
 			float zvalue;
 
 			{
-				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
+				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
 
 				if (x<Global_VDB_Ptr->VDB_ClipLeft)
 				{
@@ -926,7 +929,7 @@ void D3D_BackdropPolygon_Output(POLYHEADER *inputPolyPtr,RENDERVERTEX *renderVer
 				vertexPtr->sx=x;
 			}
 			{
-				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
+				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
 				
 				if (y<Global_VDB_Ptr->VDB_ClipUp)
 				{
@@ -1049,6 +1052,7 @@ void D3D_ZBufferedGouraudTexturedPolygon_Output(POLYHEADER *inputPolyPtr,RENDERV
 	RecipW = (1.0f/65536.0f)/128.0f;
 	RecipH = (1.0f/65536.0f)/128.0f;
 	#endif
+
 //	RecipW = (1.0/65536.0)/(float) ImageHeaderArray[texoffset].ImageWidth;
 //	RecipH = (1.0/65536.0)/(float) ImageHeaderArray[texoffset].ImageHeight;
 
@@ -1075,7 +1079,7 @@ void D3D_ZBufferedGouraudTexturedPolygon_Output(POLYHEADER *inputPolyPtr,RENDERV
 			}	
 			
 			{
-				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
+				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
 
 				#if 1
 				if (x<Global_VDB_Ptr->VDB_ClipLeft)
@@ -1090,7 +1094,7 @@ void D3D_ZBufferedGouraudTexturedPolygon_Output(POLYHEADER *inputPolyPtr,RENDERV
 				vertexPtr->sx=x;
 			}
 			{
-				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
+				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
 				
 				#if 1
 				if (y<Global_VDB_Ptr->VDB_ClipUp)
@@ -1234,7 +1238,7 @@ void D3D_ZBufferedGouraudPolygon_Output(POLYHEADER *inputPolyPtr,RENDERVERTEX *r
 			float zvalue;
 
 			{
-				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
+				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
 				if (x<Global_VDB_Ptr->VDB_ClipLeft)
 				{
 					x=Global_VDB_Ptr->VDB_ClipLeft;
@@ -1247,7 +1251,7 @@ void D3D_ZBufferedGouraudPolygon_Output(POLYHEADER *inputPolyPtr,RENDERVERTEX *r
 				vertexPtr->sx=x;
 			}
 			{
-				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
+				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
 				if (y<Global_VDB_Ptr->VDB_ClipUp)
 				{
 					y=Global_VDB_Ptr->VDB_ClipUp;
@@ -1320,7 +1324,7 @@ void D3D_PredatorThermalVisionPolygon_Output(POLYHEADER *inputPolyPtr,RENDERVERT
 			float zvalue;
 
 			{
-				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
+				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
 				if (x<Global_VDB_Ptr->VDB_ClipLeft)
 				{
 					x=Global_VDB_Ptr->VDB_ClipLeft;
@@ -1333,7 +1337,7 @@ void D3D_PredatorThermalVisionPolygon_Output(POLYHEADER *inputPolyPtr,RENDERVERT
 				vertexPtr->sx=x;
 			}
 			{
-				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
+				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
 				if (y<Global_VDB_Ptr->VDB_ClipUp)
 				{
 					y=Global_VDB_Ptr->VDB_ClipUp;
@@ -1398,7 +1402,7 @@ void D3D_PredatorSeeAliensVisionPolygon_Output(POLYHEADER *inputPolyPtr,RENDERVE
 			float zvalue;
 
 			{
-				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
+				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
 				if (x<Global_VDB_Ptr->VDB_ClipLeft)
 				{
 					x=Global_VDB_Ptr->VDB_ClipLeft;
@@ -1411,7 +1415,7 @@ void D3D_PredatorSeeAliensVisionPolygon_Output(POLYHEADER *inputPolyPtr,RENDERVE
 				vertexPtr->sx=x;
 			}
 			{
-				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
+				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
 				if (y<Global_VDB_Ptr->VDB_ClipUp)
 				{
 					y=Global_VDB_Ptr->VDB_ClipUp;
@@ -1516,7 +1520,7 @@ void D3D_ZBufferedCloakedPolygon_Output(POLYHEADER *inputPolyPtr,RENDERVERTEX *r
 			float zvalue;
 
 			{
-				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
+				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
 				if (x<Global_VDB_Ptr->VDB_ClipLeft)
 				{
 					x=Global_VDB_Ptr->VDB_ClipLeft;
@@ -1529,7 +1533,7 @@ void D3D_ZBufferedCloakedPolygon_Output(POLYHEADER *inputPolyPtr,RENDERVERTEX *r
 				vertexPtr->sx=x;
 			}
 			{
-				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
+				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
 				if (y<Global_VDB_Ptr->VDB_ClipUp)
 				{
 					y=Global_VDB_Ptr->VDB_ClipUp;
@@ -1662,7 +1666,7 @@ void D3D_CloakedPredatorPolygon_Output(POLYHEADER *inputPolyPtr,RENDERVERTEX *re
 			}	
 			
 			{
-				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
+				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
 
 				#if 1
 				if (x<Global_VDB_Ptr->VDB_ClipLeft)
@@ -1677,7 +1681,7 @@ void D3D_CloakedPredatorPolygon_Output(POLYHEADER *inputPolyPtr,RENDERVERTEX *re
 				vertexPtr->sx=x;
 			}
 			{
-				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
+				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
 				
 				#if 1
 				if (y<Global_VDB_Ptr->VDB_ClipUp)
@@ -1813,7 +1817,7 @@ void D3D_ZBufferedTexturedPolygon_Output(POLYHEADER *inputPolyPtr,RENDERVERTEX *
 			float zvalue;
 
 			{
-				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
+				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
 				if (x<Global_VDB_Ptr->VDB_ClipLeft)
 				{
 					x=Global_VDB_Ptr->VDB_ClipLeft;
@@ -1826,7 +1830,7 @@ void D3D_ZBufferedTexturedPolygon_Output(POLYHEADER *inputPolyPtr,RENDERVERTEX *
 				vertexPtr->sx=x;
 			}
 			{
-				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
+				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
 				if (y<Global_VDB_Ptr->VDB_ClipUp)
 				{
 					y=Global_VDB_Ptr->VDB_ClipUp;
@@ -2627,7 +2631,7 @@ void D3D_Decal_Output(DECAL *decalPtr,RENDERVERTEX *renderVerticesPtr)
 			float zvalue;
 
 			{
-				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
+				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
 
 				if (x<Global_VDB_Ptr->VDB_ClipLeft)
 				{
@@ -2641,7 +2645,7 @@ void D3D_Decal_Output(DECAL *decalPtr,RENDERVERTEX *renderVerticesPtr)
 				vertexPtr->sx=x;
 			}
 			{
-				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
+				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
 				
 				if (y<Global_VDB_Ptr->VDB_ClipUp)
 				{
@@ -2784,7 +2788,7 @@ void D3D_Particle_Output(PARTICLE *particlePtr,RENDERVERTEX *renderVerticesPtr)
 				float zvalue;
 
 				{
-					int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
+					int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
 
 					if (x<Global_VDB_Ptr->VDB_ClipLeft)
 					{
@@ -2798,7 +2802,7 @@ void D3D_Particle_Output(PARTICLE *particlePtr,RENDERVERTEX *renderVerticesPtr)
 					vertexPtr->sx=x;
 				}
 				{
-					int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
+					int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
 					
 					if (y<Global_VDB_Ptr->VDB_ClipUp)
 					{
@@ -2886,7 +2890,7 @@ void D3D_FMVParticle_Output(RENDERVERTEX *renderVerticesPtr)
 				float zvalue;
 
 				{
-					int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
+					int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
 
 					if (x<Global_VDB_Ptr->VDB_ClipLeft)
 					{
@@ -2900,7 +2904,7 @@ void D3D_FMVParticle_Output(RENDERVERTEX *renderVerticesPtr)
 					vertexPtr->sx=x;
 				}
 				{
-					int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
+					int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
 					
 					if (y<Global_VDB_Ptr->VDB_ClipUp)
 					{
@@ -5850,7 +5854,7 @@ void D3D_SkyPolygon_Output(POLYHEADER *inputPolyPtr,RENDERVERTEX *renderVertices
 			}	
 			
 			{
-				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
+				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
 
 				#if 1
 				if (x<Global_VDB_Ptr->VDB_ClipLeft)
@@ -5865,7 +5869,7 @@ void D3D_SkyPolygon_Output(POLYHEADER *inputPolyPtr,RENDERVERTEX *renderVertices
 				vertexPtr->sx=x;
 			}
 			{
-				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
+				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
 				
 				#if 1
 				if (y<Global_VDB_Ptr->VDB_ClipUp)
@@ -8491,7 +8495,7 @@ void D3D_Polygon_Output(RENDERVERTEX *renderVerticesPtr)
 			float zvalue;
 
 			{
-				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
+				int x = (vertices->X*(Global_VDB_Ptr->VDB_ProjX + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreX;
 
 				if (x<Global_VDB_Ptr->VDB_ClipLeft)
 				{
@@ -8505,7 +8509,7 @@ void D3D_Polygon_Output(RENDERVERTEX *renderVerticesPtr)
 				vertexPtr->sx=x;
 			}
 			{
-				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY+1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
+				int y = (vertices->Y*(Global_VDB_Ptr->VDB_ProjY + 1))/vertices->Z+Global_VDB_Ptr->VDB_CentreY;
 				
 				if (y<Global_VDB_Ptr->VDB_ClipUp)
 				{
@@ -8762,7 +8766,7 @@ extern void D3D_RenderHUDString(char *stringPtr,int x,int y,int colour)
 	CheckFilteringModeIsCorrect(FILTERING_BILINEAR_OFF);
 	while( *stringPtr )
 	{
-		char c = *stringPtr++;
+		unsigned char c = AvPTextNextGlyph(&stringPtr);
 
 		{
 			int topLeftU = 1+((c-32)&15)*16;
@@ -8808,7 +8812,7 @@ extern void D3D_RenderHUDString_Clipped(char *stringPtr,int x,int y,int colour)
 
 	while ( *stringPtr )
 	{
-		char c = *stringPtr++;
+		unsigned char c = AvPTextNextGlyph(&stringPtr);
 
 		{
 			int topLeftU = 1+((c-32)&15)*16;
@@ -8844,10 +8848,7 @@ void D3D_RenderHUDString_Centred(char *stringPtr, int centreX, int y, int colour
 	int length = 0;
 	char *ptr = stringPtr;
 
-	while(*ptr)
-	{
-		length+=AAFontWidths[*ptr++];
-	}
+	length = AvPTextStringWidth(ptr, AAFontWidths);
 	length = MUL_FIXED(HUDScaleFactor,length);
 // 	D3D_RenderHUDString(stringPtr,centreX-length/2,y,colour);
 
@@ -8863,7 +8864,7 @@ void D3D_RenderHUDString_Centred(char *stringPtr, int centreX, int y, int colour
 	CheckFilteringModeIsCorrect(FILTERING_BILINEAR_OFF);
 	while( *stringPtr )
 	{
-		char c = *stringPtr++;
+		unsigned char c = AvPTextNextGlyph(&stringPtr);
 
 		{
 			int topLeftU = 1+((c-32)&15)*16;
@@ -8917,10 +8918,7 @@ extern void RenderStringCentred(char *stringPtr, int centreX, int y, int colour)
 	int length = 0;
 	char *ptr = stringPtr;
 
-	while(*ptr)
-	{
-		length+=AAFontWidths[*ptr++];
-	}
+	length = AvPTextStringWidth(ptr, AAFontWidths);
 	D3D_RenderHUDString(stringPtr,centreX-length/2,y,colour);
 }
 
@@ -8937,7 +8935,7 @@ extern void RenderStringVertically(char *stringPtr, int centreX, int bottomY, in
 	CheckFilteringModeIsCorrect(FILTERING_BILINEAR_OFF);
 	while( *stringPtr )
 	{
-		char c = *stringPtr++;
+		unsigned char c = AvPTextNextGlyph(&stringPtr);
 
 		{
 			int topLeftU = 1+((c-32)&15)*16;

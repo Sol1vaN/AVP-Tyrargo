@@ -1,3 +1,4 @@
+#include "event_latency.h"
 #define _BSD_SOURCE
 
 #include <assert.h>
@@ -27,7 +28,13 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include "fixer.h"
+/* shlwapi.h supplies real Win32 declarations on this platform, so do not
+ * include the portable Win32 shim here. Keep the two utility definitions
+ * consumed by this file local instead. */
+#ifndef PATH_MAX
+#define PATH_MAX MAX_PATH
+#endif
+#define min_no_const(a,b) ((a)<(b)?(a):(b))
 #include "files.h"
 
 #define GetBasePath()    SDL_GetPrefPath("", "AliensVsPredator");
@@ -97,6 +104,23 @@ static char *FixFilename(const char *filename, const char *prefix, int force)
 	return f;
 }
 
+/* Resolve the same local path used by OpenGameFile(FILETYPE_CONFIG).
+ * This is not SDL_GetPrefPath: the engine can use HOME/.avp or ./.avp. */
+char *GetLocalGameFilePath(const char *filename)
+{
+    char *path, *absolute;
+    if (!local_dir || !filename) return NULL;
+    path = FixFilename(filename, local_dir, 0);
+    if (!path) return NULL;
+#ifdef _WIN32
+    absolute = _fullpath(NULL, path, 0);
+#else
+    absolute = realpath(path, NULL);
+#endif
+    if (absolute) { free(path); return absolute; }
+    return path;
+}
+
 /*
 Open a file of type type, with mode mode.
 
@@ -115,7 +139,16 @@ FILETYPE_PERM: error
 FILETYPE_OPTIONAL: error
 FILETYPE_CONFIG: try the local dir only
 */
-FILE *OpenGameFile(const char *filename, int mode, int type)
+static FILE * OpenGameFileLatencyBody(const char *filename, int mode, int type);
+FILE *OpenGameFile(const char *filename, int mode, int type) {
+ EVENT_TICK start=EventLatencyBegin();
+ EVENT_TICK id=0;
+ int eventType=type, eventMessage=mode;
+ FILE * result=OpenGameFileLatencyBody(filename,mode,type);
+ EventLatencyEnd(start,"file open",eventType,eventMessage,id,filename,1);
+ return result;
+}
+static FILE * OpenGameFileLatencyBody(const char *filename, int mode, int type)
 {
 	char *rfilename;
 	char *openmode;

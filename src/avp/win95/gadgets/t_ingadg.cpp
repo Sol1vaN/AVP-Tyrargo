@@ -1,3 +1,4 @@
+#include "menu_preview.h"
 /*******************************************************************
  *
  *    DESCRIPTION: 	t_ingadg.cpp
@@ -14,6 +15,10 @@
 
 	#if UseGadgets
 		#include "indexfnt.hpp"
+		extern "C"
+{
+#include "d3d_hud.h"
+};
 		#include "coordstr.hpp"
 		#include "inline.h"
 		#include "trepgadg.hpp"
@@ -65,6 +70,13 @@
 /* Internal function prototypes ************************************/
 
 /* Internal globals ************************************************/
+
+static r2size ConsoleTextScaleSize(r2size size, int scaleFixed)
+{
+	size.w = MUL_FIXED(size.w, scaleFixed);
+	size.h = MUL_FIXED(size.h, scaleFixed);
+	return size;
+}
 
 /* Exported function definitions ***********************************/
 #if UseGadgets
@@ -153,6 +165,8 @@ void TextEntryGadget :: Render
 
 	IndexedFont* pLetterFont = IndexedFont :: GetFont( I_Font_TextEntry );
 	GLOBALASSERT( pLetterFont );
+	int ConsoleTextScaleFixed = D3D_GetConsoleTextScaleFixed();
+	D3D_SetConsoleTextRenderActive(1);
 
 	// Calculate number of lines required:
 	int NumberOfLines = 0;
@@ -200,8 +214,8 @@ void TextEntryGadget :: Render
 	r2rect R2Rect_Area
 	(
 		R2Pos,
-		WIDTH_OF_TEXT_ENTRY_LINE,
-		( pLetterFont -> GetHeight() * NumberOfLines )
+		MUL_FIXED(WIDTH_OF_TEXT_ENTRY_LINE, ConsoleTextScaleFixed),
+		( MUL_FIXED(pLetterFont -> GetHeight() * NumberOfLines, ConsoleTextScaleFixed) )
 	);
 
 	R2Rect_Clip . Clip( R2Rect_Area );
@@ -235,7 +249,7 @@ void TextEntryGadget :: Render
 
 	#if LimitedLineLength
 	{
-		int X_EndOfLine = R2Pos.x + WIDTH_OF_TEXT_ENTRY_LINE;
+		int X_EndOfLine = R2Pos.x + (MUL_FIXED(WIDTH_OF_TEXT_ENTRY_LINE, ConsoleTextScaleFixed));
 
 		const ProjChar* pProjCh = theState . GetProjChar();
 
@@ -252,13 +266,13 @@ void TextEntryGadget :: Render
 						TextInputState :: bOverwrite()
 						?
 						(
-							pLetterFont -> CalcSize( *pProjCh )
+							ConsoleTextScaleSize(pLetterFont -> CalcSize( *pProjCh ), ConsoleTextScaleFixed)
 						)
 						:
 						r2size
 						(
-							WIDTH_OF_INSERTION_CARET,
-							pLetterFont -> GetHeight()
+							MUL_FIXED(WIDTH_OF_INSERTION_CARET, ConsoleTextScaleFixed),
+							MUL_FIXED(pLetterFont -> GetHeight(), ConsoleTextScaleFixed)
 						)
 					)
 				);
@@ -293,11 +307,11 @@ void TextEntryGadget :: Render
 			i++;
 			pProjCh++;
 
-			if (R2Pos_Char.x+pLetterFont->GetMaxWidth()>=X_EndOfLine)
+			if (R2Pos_Char.x+(MUL_FIXED(pLetterFont->GetMaxWidth(), ConsoleTextScaleFixed))>=X_EndOfLine)
 			{
 				// wrap to next line:
 				R2Pos_Char.x = R2Pos.x;
-				R2Pos_Char.y += pLetterFont -> GetHeight();
+				R2Pos_Char.y += MUL_FIXED(pLetterFont -> GetHeight(), ConsoleTextScaleFixed);
 			}			
 		}
 	}
@@ -322,13 +336,13 @@ void TextEntryGadget :: Render
 						bOverwrite
 						?
 						(
-							pLetterFont -> CalcSize( oi() )
+							ConsoleTextScaleSize(pLetterFont -> CalcSize( oi() ), ConsoleTextScaleFixed)
 						)
 						:
 						r2size
 						(
-							WIDTH_OF_INSERTION_CARET,
-							pLetterFont -> GetHeight()
+							MUL_FIXED(WIDTH_OF_INSERTION_CARET, ConsoleTextScaleFixed),
+							MUL_FIXED(pLetterFont -> GetHeight(), ConsoleTextScaleFixed)
 						)
 					)
 				);
@@ -377,14 +391,18 @@ void TextEntryGadget :: Render
 			R2Pos_Char,
 			r2size
 			(
+				MUL_FIXED
 				(
-					TextInputState :: bOverwrite()
-					?
-					pLetterFont -> GetMaxWidth()
-					:
-					WIDTH_OF_INSERTION_CARET
+					(
+						TextInputState :: bOverwrite()
+						?
+						pLetterFont -> GetMaxWidth()
+						:
+						WIDTH_OF_INSERTION_CARET
+					),
+					ConsoleTextScaleFixed
 				),
-				pLetterFont -> GetHeight()
+				MUL_FIXED(pLetterFont -> GetHeight(), ConsoleTextScaleFixed)
 			)
 		);
 
@@ -423,6 +441,9 @@ void TextEntryGadget :: Render
 		)
 	);
 	#endif
+
+
+	D3D_SetConsoleTextRenderActive(0);
 
 	// Diagnostics:
 	#if 0

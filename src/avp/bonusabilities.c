@@ -138,7 +138,7 @@ static DISPLAYBLOCK* CreateGrapplingHook(void)
 		return NULL;
 	}
 	{
-		MODULE tempModule;
+		MODULE tempModule = {0};
 		DISPLAYBLOCK *dPtr;
 		DYNAMICSBLOCK *dynPtr = sbPtr->DynPtr;
   

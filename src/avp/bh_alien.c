@@ -1,3 +1,4 @@
+#include "event_latency.h"
 /*------------------------Patrick 6/11/96-----------------------------
   Source file for alien AI behaviour functions....
   --------------------------------------------------------------------*/
@@ -32,6 +33,8 @@
 #include "bh_dummy.h"
 #include "game_statistics.h"
 #include "scream.h"
+
+#include "npc_support.h"
 
 #define UseLocalAssert Yes
 #include "ourasert.h"
@@ -199,6 +202,7 @@ void CreateAlienBot(VECTORCH *Position,int type)
 		ALIEN_STATUS_BLOCK *alienStatus = (ALIEN_STATUS_BLOCK *)sbPtr->SBdataptr;
 		int i;
 
+		AlienMotionReset(&alienStatus->motion);
 		NPC_InitMovementData(&(alienStatus->moveData));
 		NPC_InitWanderData(&(alienStatus->wanderData));     	
 		switch (type) {
@@ -393,7 +397,15 @@ as invisible.
 
 NB the strategyblock passed here is a reference to the generator sb
 --------------------------------------------------------------------*/
-void CreateAlienDynamic(STRATEGYBLOCK *Generator, ALIEN_TYPE type_of_alien)
+static void CreateAlienDynamicLatencyBody(STRATEGYBLOCK *Generator, ALIEN_TYPE type_of_alien);
+void CreateAlienDynamic(STRATEGYBLOCK *Generator, ALIEN_TYPE type_of_alien) {
+ EVENT_TICK start=EventLatencyBegin();
+ EVENT_TICK id=EventLatencyId(Generator?Generator->SBname:0);
+ int eventType=type_of_alien, eventMessage=0;
+ CreateAlienDynamicLatencyBody(Generator,type_of_alien);
+ EventLatencyEnd(start,"alien spawn",eventType,eventMessage,id,0,1);
+}
+static void CreateAlienDynamicLatencyBody(STRATEGYBLOCK *Generator, ALIEN_TYPE type_of_alien)
 {
 	STRATEGYBLOCK* sbPtr;
 	//int i;
@@ -449,6 +461,7 @@ void CreateAlienDynamic(STRATEGYBLOCK *Generator, ALIEN_TYPE type_of_alien)
 		ALIEN_STATUS_BLOCK *alienStatus = (ALIEN_STATUS_BLOCK *)sbPtr->SBdataptr;
 		int i;
 
+		AlienMotionReset(&alienStatus->motion);
 		NPC_InitMovementData(&(alienStatus->moveData));
 		NPC_InitWanderData(&(alienStatus->wanderData));     	
 
@@ -605,7 +618,7 @@ void InitAlienBehaviour(void* bhdata, STRATEGYBLOCK *sbPtr)
 	int i;
 
 	/* check we're not in a net game */
-	if(AvP.Network != I_No_Network && !AvP.NetworkAIServer) 
+	if(AvP.Network != I_No_Network && !AvP.NetworkAIServer && !netGameData.skirmishMode) 
 	{
 		RemoveBehaviourStrategy(sbPtr);
 		return;
@@ -622,7 +635,9 @@ void InitAlienBehaviour(void* bhdata, STRATEGYBLOCK *sbPtr)
 	/* strategy block initialisation */
 	sbPtr->shapeIndex =	toolsData->shapeIndex;
 
-	if(AvP.Network==I_No_Network)
+	/* Skirmish keeps map IDs: scripted wake-up targets refer to these names.
+	 * Matches AvPx; real multiplayer still assigns network-safe IDs. */
+	if(AvP.Network==I_No_Network || netGameData.skirmishMode)
 	{
 		for(i=0;i<SB_NAME_LENGTH;i++) sbPtr->SBname[i] = toolsData->nameID[i];
 	}
@@ -656,6 +671,7 @@ void InitAlienBehaviour(void* bhdata, STRATEGYBLOCK *sbPtr)
 		SECTION *root_section;
 		ALIEN_STATUS_BLOCK * alienStatus = (ALIEN_STATUS_BLOCK *)sbPtr->SBdataptr;
 
+		AlienMotionReset(&alienStatus->motion);
 		NPC_InitMovementData(&(alienStatus->moveData));
 		NPC_InitWanderData(&(alienStatus->wanderData));
 
@@ -903,6 +919,7 @@ void AlienBehaviour(STRATEGYBLOCK *sbPtr)
 	}
 
 	if(alienStatusPointer->soundHandle!=SOUND_NOACTIVEINDEX) Sound_Update3d(alienStatusPointer->soundHandle,&(sbPtr->DynPtr->Position));
+    if(alienStatusPointer->soundHandle2!=SOUND_NOACTIVEINDEX) Sound_Update3d(alienStatusPointer->soundHandle2,&(sbPtr->DynPtr->Position));
 
 	if (sbPtr->SBDamageBlock.IsOnFire) {
 
@@ -921,7 +938,8 @@ void AlienBehaviour(STRATEGYBLOCK *sbPtr)
 			extern DPID AVPDPNetID;
 
 			myNetworkKillerId=alienStatusPointer->aliensIgniterId;
-			CauseDamageToObject(sbPtr,&firedamage,NormalFrameTime,NULL);
+			{NPC_DAMAGE_SOURCE previous=NPCSupportPushBurnSource(sbPtr);
+        CauseDamageToObject(sbPtr,&firedamage,NormalFrameTime,NULL);NPCSupportPopSource(previous);}
 			myNetworkKillerId=AVPDPNetID;
 		}
 		if (sbPtr->I_SBtype==I_BehaviourNetCorpse) {
@@ -990,12 +1008,16 @@ void AlienBehaviour(STRATEGYBLOCK *sbPtr)
 						}
 
 						if ((!targetModule)||(PlayerIsDeadAndNoLivingNetghosts())) {
-							if (alienStatusPointer->BehaviourState!=ABS_Wander) {
-								NPC_InitMovementData(&(alienStatusPointer->moveData));
-								alienStatusPointer->FarStateTimer = ALIEN_FAR_MOVE_TIME;
-						 		alienStatusPointer->NearStateTimer = 0;
-							}
-							alienStatusPointer->BehaviourState=ABS_Wander;
+                            if(alienStatusPointer->BehaviourState!=ABS_Wander &&
+                               !(PlayerIsDeadAndNoLivingNetghosts() &&
+                                 (alienStatusPointer->BehaviourState==ABS_Avoidance || alienStatusPointer->BehaviourState==ABS_Wait))){
+                                NPC_InitMovementData(&alienStatusPointer->moveData);
+                                NPC_InitWanderData(&alienStatusPointer->wanderData);
+                                InitWaypointManager(&alienStatusPointer->waypointManager);
+                                alienStatusPointer->FarStateTimer=ALIEN_FAR_MOVE_TIME;
+                                alienStatusPointer->NearStateTimer=0;
+                                alienStatusPointer->BehaviourState=ABS_Wander;
+                            }
 						} else {
 							if (alienStatusPointer->BehaviourState!=ABS_Hunt) {
 								alienStatusPointer->FarStateTimer = ALIEN_FAR_MOVE_TIME;
@@ -1064,9 +1086,17 @@ void AlienBehaviour(STRATEGYBLOCK *sbPtr)
 This pair of functions handle the alien visibility switching....
 Note that the ai-pheromone system is maintained by these functions.
 --------------------------------------------------------------------*/
-void MakeAlienNear(STRATEGYBLOCK *sbPtr)
+static void MakeAlienNearLatencyBody(STRATEGYBLOCK *sbPtr);
+void MakeAlienNear(STRATEGYBLOCK *sbPtr) {
+ EVENT_TICK start=EventLatencyBegin();
+ EVENT_TICK id=EventLatencyId(sbPtr?sbPtr->SBname:0);
+ int eventType=sbPtr?sbPtr->I_SBtype:-1, eventMessage=0;
+ MakeAlienNearLatencyBody(sbPtr);
+ EventLatencyEnd(start,"alien enters visible zone",eventType,eventMessage,id,0,1);
+}
+static void MakeAlienNearLatencyBody(STRATEGYBLOCK *sbPtr)
 {
-	MODULE tempModule;
+	MODULE tempModule = {0};
 	DISPLAYBLOCK *dPtr;
 	DYNAMICSBLOCK *dynPtr = sbPtr->DynPtr;
 	ALIEN_STATUS_BLOCK *alienStatusPointer= (ALIEN_STATUS_BLOCK *)(sbPtr->SBdataptr);    
@@ -2354,6 +2384,7 @@ void LoadStrategy_Alien(SAVE_BLOCK_STRATEGY_HEADER* header)
 
 
 	alienStatusPointer = (ALIEN_STATUS_BLOCK*)sbPtr->SBdataptr;
+ AlienMotionReset(&alienStatusPointer->motion);
 
 	//start copying stuff
 	

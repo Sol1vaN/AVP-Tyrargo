@@ -1,3 +1,4 @@
+#include "menu_preview.h"
 /*KJL***************************************************
 * lighting.c - a lighting interface for simple effects *
 ***************************************************KJL*/
@@ -279,6 +280,7 @@ static void DeallocateLightElement(LIGHTELEMENT *lightElementPtr)
 
 void MakeLightElement(VECTORCH *positionPtr, enum LIGHTELEMENT_BEHAVIOUR_ID behaviourID)
 {
+ if(RenderPausedPreview)return;
 	LIGHTELEMENT *lightElementPtr = AllocateLightElement();
 	LIGHTBLOCK *lightPtr = &(lightElementPtr->LightBlock);
 
@@ -367,6 +369,7 @@ void MakeLightElement(VECTORCH *positionPtr, enum LIGHTELEMENT_BEHAVIOUR_ID beha
 
 void HandleLightElementSystem(void)
 {
+ if(RenderPausedPreview)return;
 	int i = NumActiveLightElements;
 	LIGHTELEMENT *lightElementPtr = LightElementStorage;
 	

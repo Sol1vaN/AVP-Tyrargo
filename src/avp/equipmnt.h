@@ -244,7 +244,7 @@ typedef struct
 	unsigned int 		ExplosionIsFlat:1;
 } TEMPLATE_AMMO_DATA;
 
-typedef struct
+typedef struct player_weapon_data
 {
 	enum WEAPON_ID	 	WeaponIDNumber;
 	/* eg.==MARINE_WEAPON_PULSE. This can be used to access the TemplateWeapon[] data, graphics, etc. */
@@ -255,8 +255,8 @@ typedef struct
         
     unsigned int		PrimaryRoundsRemaining; /* in 'current' magazine */
     unsigned int		SecondaryRoundsRemaining; /* in 'current' magazine */
-    unsigned char		PrimaryMagazinesRemaining;
-    unsigned char		SecondaryMagazinesRemaining;
+    unsigned short		PrimaryMagazinesRemaining;
+    unsigned short		SecondaryMagazinesRemaining;
 
 	VECTORCH			PositionOffset; 
     EULER				DirectionOffset;
@@ -343,16 +343,16 @@ typedef struct
 	enum AMMO_ID	SelectedAmmo;
 
 	unsigned int	StandardRoundsRemaining;
-    unsigned char	StandardMagazinesRemaining;
+    unsigned short	StandardMagazinesRemaining;
 
 	unsigned int	FlareRoundsRemaining;
-    unsigned char	FlareMagazinesRemaining;
+    unsigned short	FlareMagazinesRemaining;
 
 	unsigned int	ProximityRoundsRemaining;
-    unsigned char	ProximityMagazinesRemaining;
+    unsigned short	ProximityMagazinesRemaining;
 
 	unsigned int	FragmentationRoundsRemaining;
-    unsigned char	FragmentationMagazinesRemaining;
+    unsigned short	FragmentationMagazinesRemaining;
 
 } GRENADE_LAUNCHER_DATA;
 

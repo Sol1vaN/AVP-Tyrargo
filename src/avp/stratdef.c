@@ -8,6 +8,8 @@
 
 #include "dynblock.h"
 
+#include "savegame.h"
+#include "npc_support.h"
 #define UseLocalAssert Yes
 #include "ourasert.h"
 #include "bh_alien.h"
@@ -67,6 +69,7 @@ void InitialiseStrategyBlocks(void)
     ActiveStBlockListPtr = &ActiveStBlockList[0];
 
 	IncrementalSBname=0;
+    NPCSupportReset();
 }
 
 
@@ -91,6 +94,7 @@ STRATEGYBLOCK* AllocateStrategyBlock(void)
 				}
 		}
 
+	if(FreeBlkPtr)NPCSupportInheritSource(FreeBlkPtr);
 	return(FreeBlkPtr);
 }
 

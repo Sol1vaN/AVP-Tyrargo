@@ -1,0 +1,402 @@
+[
+  {
+    "file": "gallery-01.jpg",
+    "original": "showcase/crt/avp 2026-08-25 23-12-04_489 After.png",
+    "source_sha256": "e0cbe4534d7f40564638912bb58031e4b4e536ea59a956e7d4bd2a04b2082441",
+    "width": 1600,
+    "height": 900,
+    "bytes": 100568
+  },
+  {
+    "file": "gallery-02.jpg",
+    "original": "showcase/crt/avp 2026-08-25 23-12-04_489 Before.png",
+    "source_sha256": "6217df017a80d9a1886e9b77416cd0860171fc1720faad45aba10bb2c2eb343b",
+    "width": 1600,
+    "height": 900,
+    "bytes": 77747
+  },
+  {
+    "file": "gallery-03.jpg",
+    "original": "showcase/crt/avp 2026-08-25 23-13-05_627 After.png",
+    "source_sha256": "09eee6d54937da681d975f50adf1208b362ee8d94fabb27cdbd0b982651d3e1e",
+    "width": 1600,
+    "height": 900,
+    "bytes": 217944
+  },
+  {
+    "file": "gallery-04.jpg",
+    "original": "showcase/crt/avp 2026-08-25 23-13-05_627 Before.png",
+    "source_sha256": "f90980a5a9aecfc1688f6930efd8bb324a468caa92ee3b3c0781cfe6869bba50",
+    "width": 1600,
+    "height": 900,
+    "bytes": 194236
+  },
+  {
+    "file": "gallery-05.jpg",
+    "original": "showcase/crt/avp 2026-08-31 21-46-47_883 After.png",
+    "source_sha256": "47d75525618a3a2a761d1a22fb076e6f54edd4210705c18b760f2c100891a568",
+    "width": 1600,
+    "height": 900,
+    "bytes": 100472
+  },
+  {
+    "file": "gallery-06.jpg",
+    "original": "showcase/crt/avp 2026-08-31 21-46-47_883 Before.png",
+    "source_sha256": "0e3f32376e9c8b0e45032866806df141342beb957f9e0b57df9c7fe1578efe97",
+    "width": 1600,
+    "height": 900,
+    "bytes": 83902
+  },
+  {
+    "file": "gallery-07.jpg",
+    "original": "showcase/crt/CRT off.png",
+    "source_sha256": "e634a14a48cda0606160297aaadf720b19839b6f08122525c90bda41924fe28d",
+    "width": 1600,
+    "height": 900,
+    "bytes": 74989
+  },
+  {
+    "file": "gallery-08.jpg",
+    "original": "showcase/crt/CRT on.png",
+    "source_sha256": "9a06691cd1b21141c55ace3eb62541f5b4b755dab845fe8c78d02421e42a4d03",
+    "width": 1600,
+    "height": 900,
+    "bytes": 112788
+  },
+  {
+    "file": "hero.png",
+    "original": "showcase/halos/avp01.png",
+    "source_sha256": "ad5af3236ac342cd7a0bb9abb90d6794ad17c9b5b791e539671033a1dd340236",
+    "width": 1600,
+    "height": 900,
+    "bytes": 1473748
+  },
+  {
+    "file": "gallery-10.jpg",
+    "original": "showcase/halos/avp02.png",
+    "source_sha256": "9324693e36f48b56ba43347aacdcce5e97b863bae082f84f40902e7133351b63",
+    "width": 1600,
+    "height": 900,
+    "bytes": 146963
+  },
+  {
+    "file": "gallery-11.jpg",
+    "original": "showcase/halos/avp03.png",
+    "source_sha256": "0514e23995840528d65bc83a468c238cff9e5a65340fe8b4d9cf1e73fd40b5a3",
+    "width": 1600,
+    "height": 900,
+    "bytes": 85337
+  },
+  {
+    "file": "gallery-12.jpg",
+    "original": "showcase/halos/avp04.png",
+    "source_sha256": "5345ac17725b493c1489ccc0e85386e05b7fa4d311e0472435c230120b4d56cd",
+    "width": 1600,
+    "height": 900,
+    "bytes": 161198
+  },
+  {
+    "file": "gallery-13.jpg",
+    "original": "showcase/halos/avp05.png",
+    "source_sha256": "722a17db465d3907b4a1b3082e3105a30c752f1980aa37336cf66ee9f8d892c6",
+    "width": 1600,
+    "height": 900,
+    "bytes": 129640
+  },
+  {
+    "file": "gallery-14.jpg",
+    "original": "showcase/halos/avp14.png",
+    "source_sha256": "da26e7fe30ffe647be83a82c952fea55679a65fb4620d7e54b84affb2eac8c8e",
+    "width": 1600,
+    "height": 675,
+    "bytes": 122324
+  },
+  {
+    "file": "gallery-15.jpg",
+    "original": "showcase/halos/avp15.png",
+    "source_sha256": "a8b2e890edc55829126a7f119fbad2cf75b16ada4b6cd5620347d1ac6f6d195f",
+    "width": 1600,
+    "height": 675,
+    "bytes": 64904
+  },
+  {
+    "file": "gallery-16.jpg",
+    "original": "showcase/halos trough glass/avp01.jpg",
+    "source_sha256": "d06f87f8cc1a9d12eef5de816bb2317f47960ad98d921e30aabf4f227e874320",
+    "width": 1600,
+    "height": 900,
+    "bytes": 88807
+  },
+  {
+    "file": "gallery-17.jpg",
+    "original": "showcase/halos trough glass/avp04.jpg",
+    "source_sha256": "62009afc62c76d0182ed5710131b56a4b3315c4cbbd7112221b9878a8975347e",
+    "width": 1600,
+    "height": 900,
+    "bytes": 124752
+  },
+  {
+    "file": "gallery-18.jpg",
+    "original": "showcase/hud/avp00.jpg",
+    "source_sha256": "18f9f05a0a74b8fdb1b7ee69306d915d02d6bc98feaa043e629a9b30c028fd7b",
+    "width": 1600,
+    "height": 900,
+    "bytes": 177826
+  },
+  {
+    "file": "gallery-19.jpg",
+    "original": "showcase/hud/avp02.jpg",
+    "source_sha256": "be0dcf64e4ad848c378c4394c5a9202a202ce57fc284550651c7e9574825fcfa",
+    "width": 1600,
+    "height": 900,
+    "bytes": 102846
+  },
+  {
+    "file": "gallery-20.jpg",
+    "original": "showcase/ingame menu/avp07.png",
+    "source_sha256": "cf07375fa5dee04f846bc674e9bbc18c0318c18462ec24b45e45c9fe654b3134",
+    "width": 1600,
+    "height": 900,
+    "bytes": 30397
+  },
+  {
+    "file": "gallery-21.jpg",
+    "original": "showcase/main menu/avp08.png",
+    "source_sha256": "8fcaed0ff44a5508306a74e963e04cca4413fdb2d0d5642f37b0d3c2c1e17227",
+    "width": 1600,
+    "height": 900,
+    "bytes": 152244
+  },
+  {
+    "file": "gallery-22.jpg",
+    "original": "showcase/maps/avp05.png",
+    "source_sha256": "0dcc8ed0c0abef29ea0042c517e4404c54e9652530eae202fec3118f59a93f67",
+    "width": 1600,
+    "height": 900,
+    "bytes": 161784
+  },
+  {
+    "file": "gallery-23.jpg",
+    "original": "showcase/maps/showcase1.png",
+    "source_sha256": "443141ab00f988924549a29b2587f5c4b7c68de7a8154e53323b64f051ddb776",
+    "width": 1600,
+    "height": 900,
+    "bytes": 79532
+  },
+  {
+    "file": "gallery-24.jpg",
+    "original": "showcase/noise/avp04.png",
+    "source_sha256": "654c5d68fa707ff68e3d83bef6d4ac1a118e3ed6a9e5a60dad7dc06e4f36256d",
+    "width": 1600,
+    "height": 900,
+    "bytes": 534706
+  },
+  {
+    "file": "gallery-25.jpg",
+    "original": "showcase/noise/avp40.png",
+    "source_sha256": "e7c9b507fcbc8262d62af77d42a5f46438da985046801ad0f95b635bfdcfea69",
+    "width": 1600,
+    "height": 900,
+    "bytes": 509914
+  },
+  {
+    "file": "gallery-26.jpg",
+    "original": "showcase/texture filters/avp05.png",
+    "source_sha256": "4ebe65a6289c1ffa290f788e05c725918936aae1b28d41a64957d04867928397",
+    "width": 1600,
+    "height": 900,
+    "bytes": 211847
+  },
+  {
+    "file": "gallery-27.jpg",
+    "original": "showcase/texture filters/avp06.png",
+    "source_sha256": "4a9809d288c31709cf8925d12984b2cc1e5909ae59b6ed8addc7fa35e7d1b44f",
+    "width": 1600,
+    "height": 900,
+    "bytes": 172577
+  },
+  {
+    "file": "gallery-28.jpg",
+    "original": "showcase/ultrawide/avp07.png",
+    "source_sha256": "6e4ed929a4995fcf92de9348ec3b5948141d5a08e2eaa08ee116dbb0d85b48eb",
+    "width": 1600,
+    "height": 675,
+    "bytes": 146398
+  },
+  {
+    "file": "gallery-29.jpg",
+    "original": "showcase/ultrawide/avp08.png",
+    "source_sha256": "d5ed84d01b52021f2491da14352e5ccd3d036307cadedb9c280abe5c97973571",
+    "width": 1600,
+    "height": 675,
+    "bytes": 137170
+  },
+  {
+    "file": "gallery-30.jpg",
+    "original": "showcase/ultrawide/avp09.png",
+    "source_sha256": "bbfddaadfa5ab632b8885f1e6135ccaf8c68d9354e465101257c9345e562c062",
+    "width": 1600,
+    "height": 675,
+    "bytes": 119027
+  },
+  {
+    "file": "gallery-31.jpg",
+    "original": "showcase/ultrawide/avp16.png",
+    "source_sha256": "662cfda502780910860e20ec3099e6c87740ce2a087f18dc0a0f50a5e07e6fc8",
+    "width": 1600,
+    "height": 675,
+    "bytes": 87034
+  },
+  {
+    "file": "gallery-32.jpg",
+    "original": "showcase/ultrawide/avp17.png",
+    "source_sha256": "141601e29aa15baa32a395874b6f012437918bd1475247a76e67c7a881d598ba",
+    "width": 1600,
+    "height": 675,
+    "bytes": 92154
+  },
+  {
+    "file": "gallery-33.jpg",
+    "original": "showcase/ultrawide/avp18.png",
+    "source_sha256": "767a62273011a43092fe081e5fc64cf9c870e4ea409e1bf6bc5fd3b679dc2833",
+    "width": 1600,
+    "height": 675,
+    "bytes": 93354
+  },
+  {
+    "file": "gallery-34.jpg",
+    "original": "showcase/versioning/avp09.png",
+    "source_sha256": "cd6c16c50a602f8e96530240c14de5342e5a54b72711f35a2b24ae6c0f611429",
+    "width": 1600,
+    "height": 900,
+    "bytes": 155293
+  },
+  {
+    "file": "gallery-35.jpg",
+    "original": "showcase/water new/avp10.png",
+    "source_sha256": "99868908dd4a9081aecd44118fcd5992eb79c42aca65680f67deeba8ca563494",
+    "width": 1600,
+    "height": 675,
+    "bytes": 113153
+  },
+  {
+    "file": "gallery-36.jpg",
+    "original": "showcase/water new/avp11.png",
+    "source_sha256": "8bec8e8260ed96b42638e11d1c47ab57b2c58e6ed6a4bfdab2d16fdb6ae914e6",
+    "width": 1600,
+    "height": 675,
+    "bytes": 118278
+  },
+  {
+    "file": "gallery-37.jpg",
+    "original": "showcase/water new/avp13.png",
+    "source_sha256": "441fc4e47e10460c1e58d83404521f586c8b0ab5142b9527597eff7281cbc610",
+    "width": 1600,
+    "height": 675,
+    "bytes": 211334
+  },
+  {
+    "file": "gallery-38.jpg",
+    "original": "showcase/water new/avp49.png",
+    "source_sha256": "c995a6b228e6256744c2928841fed63fa402354dc18c4cd91cdaaea636d4325e",
+    "width": 1600,
+    "height": 900,
+    "bytes": 118717
+  },
+  {
+    "file": "gallery-39.jpg",
+    "original": "showcase/water new/avp51.png",
+    "source_sha256": "333b8beb77a49988255103e0ac6eeede7a4fc84876fe0798427826b5e6e495fe",
+    "width": 1600,
+    "height": 900,
+    "bytes": 119724
+  },
+  {
+    "file": "gallery-40.jpg",
+    "original": "showcase/water vanilla/avp42.png",
+    "source_sha256": "d9b11beea4d876049bba134612e04754da39bdc0e10a360483155cc67f8653ca",
+    "width": 1600,
+    "height": 900,
+    "bytes": 118626
+  },
+  {
+    "file": "gallery-41.jpg",
+    "original": "showcase/water vanilla/avp45.png",
+    "source_sha256": "824df65dafbec577c9d107fe096f707f024418a0d2003d377565f559d3942dc5",
+    "width": 1600,
+    "height": 900,
+    "bytes": 117989
+  },
+  {
+    "file": "gallery-42.jpg",
+    "original": "showcase/water vanilla/avp50.png",
+    "source_sha256": "98aace4a9c3ff72bd639e8f22e6df652db01397c39a530c9f2ae7463e0ae5e48",
+    "width": 1600,
+    "height": 900,
+    "bytes": 118169
+  },
+  {
+    "file": "gallery-43.jpg",
+    "original": "showcase/maps/bonus/avp52.jpg",
+    "source_sha256": "469c83c6c9d8865cb3583c2ac0d75716730c1de298c7a2199ba97a95a5ed96bd",
+    "width": 1600,
+    "height": 900,
+    "bytes": 170681
+  },
+  {
+    "file": "gallery-44.jpg",
+    "original": "showcase/maps/bonus/avp53.jpg",
+    "source_sha256": "c0a41a34953360ec398ea8bdd026ca8195fd9556e684d7c0e90b7addb0de42a6",
+    "width": 1600,
+    "height": 900,
+    "bytes": 188168
+  },
+  {
+    "file": "gallery-45.jpg",
+    "original": "showcase/maps/new delerectic/avp25.png",
+    "source_sha256": "3ef26e7223accb360a3d392f0c24b7388eb7c1314b7f7cddd6b79a86263f90f6",
+    "width": 1600,
+    "height": 900,
+    "bytes": 83253
+  },
+  {
+    "file": "gallery-46.jpg",
+    "original": "showcase/maps/new delerectic/avp26.png",
+    "source_sha256": "3c83867d10da1955c70d25a3ac81616d32af12bf0372266d61bd6888068fb8ca",
+    "width": 1600,
+    "height": 900,
+    "bytes": 84037
+  },
+  {
+    "file": "gallery-47.jpg",
+    "original": "showcase/maps/new delerectic/avp28.png",
+    "source_sha256": "cddf7259dd4f28d82a147352143cf5735af958a276ddbb8c36d430de4ca5f17e",
+    "width": 1600,
+    "height": 900,
+    "bytes": 78848
+  },
+  {
+    "file": "gallery-48.jpg",
+    "original": "showcase/maps/new delerectic/avp29.png",
+    "source_sha256": "c765c228402507bb97a64784852f118fde44dc6b65b38318377f498eda38fb1d",
+    "width": 1600,
+    "height": 900,
+    "bytes": 92131
+  },
+  {
+    "file": "gallery-49.jpg",
+    "original": "showcase/maps/new delerectic/avp38.png",
+    "source_sha256": "17a6105a37c66906c90698bedce1798195dd4e05303ba6ebf11239893ba2f0f0",
+    "width": 1600,
+    "height": 900,
+    "bytes": 135739
+  },
+  {
+    "file": "banner.png",
+    "original": "banner/Choque Alienígena en Nivel Uno-1.png",
+    "source_sha256": "50666464fb4cf16aefa69bba4401b4b8fef98fc8608c9231baab812449d39cca",
+    "width": 1600,
+    "height": 533,
+    "bytes": 1325619
+  }
+]

@@ -165,6 +165,8 @@ extern PARTICLE_DESC ParticleDescription[];
 extern void InitialiseParticleSystem(void);
 extern void MakeParticle(VECTORCH *positionPtr, VECTORCH *velocityPtr, enum PARTICLE_ID particleID);
 extern void HandleParticleSystem(void);
+void MakePlayerFlameParticle(VECTORCH *position,VECTORCH *velocity,VECTORCH *origin);
+int ParticlePlayerFlameOffset(const PARTICLE *particle,double out[3]);
 void RenderAllParticlesFurtherAwayThan(int zThreshold);
 
 extern void HandleRainDrops(MODULE *modulePtr,int numberOfRaindrops);
@@ -208,4 +210,11 @@ void DrawSmallPredatorPlasmaBolt(VECTORCH *positionPtr,VECTORCH *directionPtr);
 #define MAX_NO_OF_BLOOD_PARTICLES 500
 extern int NumberOfBloodParticles;
 
+void BeginParticleRenderOrder(const int *thresholds,int count);
+void EndParticleRenderOrder(void);
+
 #endif
+
+
+struct save_block_header;
+void ParticleSupportLoadOwners(struct save_block_header *header);

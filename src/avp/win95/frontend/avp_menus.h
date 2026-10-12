@@ -97,6 +97,8 @@ enum AVPMENU_ID
 	AVPMENU_INGAMEAVOPTIONS,
 	AVPMENU_MAINMENUAVOPTIONS,
 	AVPMENU_VIDEOMODE,
+	/* Small-font video picker: safe while the 3D game renderer is paused. */
+	AVPMENU_INGAMEVIDEOMODE,
 
 
 	AVPMENU_INGAME,
@@ -115,6 +117,10 @@ enum AVPMENU_ID
 
 	AVPMENU_LOADGAME,
 	AVPMENU_SAVEGAME,
+	AVPMENU_EXPERIMENTAL,
+	AVPMENU_INGAMEEXPERIMENTAL,
+ AVPMENU_EXPERIMENTAL2,
+ AVPMENU_INGAMEEXPERIMENTAL2,
 
 };
 
@@ -131,6 +137,13 @@ enum AVPMENU_ELEMENT_ID
 
 	AVPMENU_ELEMENT_TOGGLE,
 	AVPMENU_ELEMENT_SLIDER,
+	AVPMENU_ELEMENT_ZOOM_SENSITIVITY,
+	AVPMENU_ELEMENT_WEAPON_FOV,
+	AVPMENU_ELEMENT_FOV,
+	AVPMENU_ELEMENT_HUD_ANCHORED,
+	AVPMENU_ELEMENT_HUD_POSITION,
+	AVPMENU_ELEMENT_HUD_SCALE,
+	AVPMENU_ELEMENT_CROSSHAIR_SCALE,
 
 	AVPMENU_ELEMENT_USERPROFILE,
 	AVPMENU_ELEMENT_ALIENEPISODE,
@@ -164,6 +177,13 @@ enum AVPMENU_ELEMENT_ID
 	AVPMENU_ELEMENT_CONNECTIONCHOICE,
 
 	AVPMENU_ELEMENT_VIDEOMODE,
+	AVPMENU_ELEMENT_VIDEO_RENDERER,
+	AVPMENU_ELEMENT_VIDEO_ASPECT,
+	AVPMENU_ELEMENT_VIDEO_RESOLUTION,
+	AVPMENU_ELEMENT_VIDEO_REFRESH,
+	AVPMENU_ELEMENT_VIDEO_SCREENMODE,
+	AVPMENU_ELEMENT_VIDEO_VSYNC,
+	AVPMENU_ELEMENT_VIDEO_FPSCAP,
 	AVPMENU_ELEMENT_VIDEOMODEOK,
 
 	AVPMENU_ELEMENT_KEYCONFIG,
@@ -197,6 +217,13 @@ enum AVPMENU_ELEMENT_ID
 
 	AVPMENU_ELEMENT_SAVEGAME,
 	AVPMENU_ELEMENT_LOADGAME,
+	AVPMENU_ELEMENT_DEV_WEAPON_Z,
+	AVPMENU_ELEMENT_DEV_EXPORT,
+ AVPMENU_ELEMENT_MOTION_PARAM,
+ AVPMENU_ELEMENT_MOTION_EXPORT,
+ AVPMENU_ELEMENT_SHAKE_PARAM,
+ AVPMENU_ELEMENT_SHAKE_EXPORT,
+ AVPMENU_ELEMENT_HUD_ANIMATION_INTENSITY,
 };
 
 
@@ -283,10 +310,23 @@ typedef struct
 } AVP_MENUS;
 
 
+extern void AvP_FlushEpisodeSelection(void);
+
 #define BRIGHTNESS_OF_HIGHLIGHTED_ELEMENT (ONE_FIXED)
 #define BRIGHTNESS_OF_DARKENED_ELEMENT (ONE_FIXED/4)
 #define BRIGHTNESS_CHANGE_SPEED (RealFrameTime*2)
 
+/* Probe 101: configurable compact gameplay FPS overlay. */
+#define FPS_DISPLAY_OFF             0
+#define FPS_DISPLAY_TOP_RIGHT       1
+#define FPS_DISPLAY_TOP_LEFT        2
+#define FPS_DISPLAY_BOTTOM_RIGHT    3
+#define FPS_DISPLAY_BOTTOM_LEFT     4
+
+extern int FPSDisplayPosition;
+void RenderFPSCounter(void);
+int AvP_MenuIsActive(void);
+void ToggleFPSCounterFromConsole(void);
 #define MENU_TOPY		(150)
 #define MENU_CENTREY	(280)
 #define MENU_HEIGHT		(255)
@@ -336,11 +376,16 @@ typedef struct
 	unsigned char	ElapsedTime_Minutes;
 	unsigned char	ElapsedTime_Seconds;
 	unsigned char	Difficulty;
+    unsigned char AcidTier;
 
 	time_t TimeStamp;
 } SAVE_SLOT_HEADER;
 
-#define NUMBER_OF_SAVE_SLOTS 8
+/* Slots 0..49 remain manual saves (_1.sav to _50.sav).  The last physical
+ * slot is intentionally private to Quick Save/Quick Load (_51.sav). */
+#define NUMBER_OF_MANUAL_SAVE_SLOTS 50
+#define QUICK_SAVE_SLOT NUMBER_OF_MANUAL_SAVE_SLOTS
+#define NUMBER_OF_SAVE_SLOTS (NUMBER_OF_MANUAL_SAVE_SLOTS + 1)
 
 
 void KeyboardEntryQueue_Add(char c);
@@ -348,8 +393,11 @@ void KeyboardEntryQueue_Add(char c);
 int AvP_MainMenus(void);
 
 int AvP_InGameMenus(void);
+int AvP_IsSoftwareMenuActive(void);
 
 int InGameMenusAreRunning(void);
+void AvP_OpenInGameSaveMenu(void);
+void AvP_OpenInGameLoadMenu(void);
 
 void RenderBriefingText(int centreY, int brightness);
 void GetFilenameForSaveSlot(int i, unsigned char *filenamePtr);

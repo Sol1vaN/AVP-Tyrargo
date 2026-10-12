@@ -86,7 +86,7 @@ void* PlacedHierarchyBehaveInit(void* bhdata,STRATEGYBLOCK* sbptr)
 void MakePlacedHierarchyNear(STRATEGYBLOCK* sbptr)
 {
 	
-	MODULE tempModule;
+	MODULE tempModule = {0};
 	DISPLAYBLOCK *dPtr;
 	DYNAMICSBLOCK *dynPtr = sbptr->DynPtr;
 	PLACED_HIERARCHY_BEHAV_BLOCK *ph_bhv= (PLACED_HIERARCHY_BEHAV_BLOCK*)(sbptr->SBdataptr);    

@@ -30,6 +30,7 @@
 #include "bh_gener.h"
 #include "pldnet.h"
 #include "particle.h"
+#include "bh_corpse.h"
 #include "scream.h"
 
 extern int NormalFrameTime;
@@ -55,6 +56,7 @@ static int GoToJump(STRATEGYBLOCK *sbPtr);
 int TargetIsFiringFlamethrowerAtAlien(STRATEGYBLOCK *sbPtr);
 static int StartAlienTaunt(STRATEGYBLOCK *sbPtr);
 void StartAlienMovementSequence(STRATEGYBLOCK *sbPtr);
+void AlienHandleMovingAnimation(STRATEGYBLOCK *sbPtr);
 
 extern void Execute_Alien_Dying(STRATEGYBLOCK *sbPtr);
 
@@ -149,6 +151,166 @@ void Alien_ElectToPounce(STRATEGYBLOCK *sbPtr) {
 	}
 }
 
+
+/* Navigation cannot detach an already attached alien merely because an AI
+ * state changes. Pounces/jumps retain their explicit detach operations. */
+static void AlienNavigationGravity(STRATEGYBLOCK *sb,int allowClimb)
+{
+ DYNAMICSBLOCK *d=sb->DynPtr;
+ if(((ALIEN_STATUS_BLOCK*)sb->SBdataptr)->motion.launchLocked || !AlienIsAbleToClimb(sb)){d->UseStandardGravity=1;return;}
+ if(allowClimb || (!d->UseStandardGravity &&
+    (d->GravityDirection.vy<63000 || d->OrientMat.mat22<63000)))d->UseStandardGravity=0;
+ else d->UseStandardGravity=1;
+}
+static int AlienCorpseVisible(STRATEGYBLOCK *sb,STRATEGYBLOCK *corpse)
+{
+ VECTORCH eye,point,direction,oldPoint=LOS_Point,oldNormal=LOS_ObjectNormal;
+ DISPLAYBLOCK *oldHit=LOS_ObjectHitPtr;
+ SECTION_DATA *oldSection=LOS_HModel_Section;
+ int oldLambda=LOS_Lambda,visible;
+ if(!sb->SBdptr || !corpse->SBdptr)return 0;
+ GetTargetingPointOfObject(sb->SBdptr,&eye);
+ GetTargetingPointOfObject(corpse->SBdptr,&point);
+ direction.vx=point.vx-eye.vx;direction.vy=point.vy-eye.vy;direction.vz=point.vz-eye.vz;
+ if(!direction.vx && !direction.vy && !direction.vz)return 1;
+ Normalise(&direction);
+ /* The invisible dead player must not conceal its own physical corpse. */
+ FindPolygonInLineOfSight_TwoIgnores(&direction,&eye,0,sb->SBdptr,Player);
+ visible=LOS_ObjectHitPtr==corpse->SBdptr;
+ LOS_Point=oldPoint;LOS_ObjectNormal=oldNormal;LOS_ObjectHitPtr=oldHit;
+ LOS_HModel_Section=oldSection;LOS_Lambda=oldLambda;return visible;
+}
+static int AlienCorpseAlreadyClaimed(STRATEGYBLOCK *sb,STRATEGYBLOCK *corpse)
+{
+ int i;
+ for(i=0;i<NumActiveStBlocks;i++){
+  STRATEGYBLOCK *other=ActiveStBlockList[i];ALIEN_STATUS_BLOCK *a;
+  if(!other || other==sb || other->I_SBtype!=I_BehaviourAlien || !other->SBdptr ||
+     !other->SBdataptr || other->SBDamageBlock.Health<=0)continue;
+  a=(ALIEN_STATUS_BLOCK*)other->SBdataptr;
+  if(!a->Target && (a->motion.corpsePhase==1 || a->motion.corpsePhase==2) &&
+     NAME_ISEQUAL(a->motion.corpseName,corpse->SBname))return 1;
+ }
+ return 0;
+}
+/* One reachable feeder per body; everyone else uses normal wander/avoidance.
+ * Timers are simulated seconds, not random trials per rendered frame. */
+static int AlienAfterPlayerDeath(STRATEGYBLOCK *sb)
+{
+ ALIEN_STATUS_BLOCK *a=(ALIEN_STATUS_BLOCK*)sb->SBdataptr;
+ ALIEN_MOTION_RUNTIME *r=&a->motion;
+ PLAYER_STATUS *player=Player?(PLAYER_STATUS*)Player->ObStrategyBlock->SBdataptr:NULL;
+ STRATEGYBLOCK *corpse;
+ VECTORCH direction,target;
+ int distance,range;
+ if(AvP.Network!=I_No_Network || !player || player->IsAlive || a->Target ||
+    a->BehaviourState==ABS_Dying || a->BehaviourState==ABS_Dormant ||
+    a->BehaviourState==ABS_Awakening){
+  if(r->aftermath){
+   r->aftermath=0;r->pace=ONE_FIXED;r->corpsePhase=0;r->corpseRetry=0;
+   r->corpseName[0]=0;
+   if(a->BehaviourState!=ABS_Dying && a->BehaviourState!=ABS_Dormant && a->BehaviourState!=ABS_Awakening)
+    StartAlienMovementSequence(sb);
+  }
+  return 0;
+ }
+ if(!r->aftermath){
+  r->aftermath=1;r->paceTimer=0;r->corpseRetry=0;
+  NPC_InitWanderData(&a->wanderData);NPC_InitMovementData(&a->moveData);
+  InitWaypointManager(&a->waypointManager);
+ }
+ if(NormalFrameTime<=0)return r->corpsePhase==2;
+ r->paceTimer-=NormalFrameTime;
+ if(r->paceTimer<=0){
+  r->pace=(FastRandom()&1)?ONE_FIXED*35/100:ONE_FIXED*60/100;
+  r->paceTimer=3*ONE_FIXED+(FastRandom()&65535)*3;
+ }
+ corpse=player->MyCorpse;
+ /* Resolve the current body each frame, never retain a potentially freed pointer. */
+ if(!corpse || corpse->I_SBtype!=I_BehaviourNetCorpse || !corpse->DynPtr ||
+    !corpse->SBdataptr || !corpse->SBdptr ||
+    ((NETCORPSEDATABLOCK*)corpse->SBdataptr)->timer<ONE_FIXED ||
+    ((NETCORPSEDATABLOCK*)corpse->SBdataptr)->GibbFactor>ONE_FIXED/2){
+  r->corpsePhase=0;return 0;
+ }
+ if(!NAME_ISEQUAL(r->corpseName,corpse->SBname)){
+  COPY_NAME(r->corpseName,corpse->SBname);r->corpsePhase=0;r->corpseRetry=0;
+  r->feedTime=0;r->feedStall=0;r->bitten=0;
+ }
+ direction.vx=corpse->DynPtr->Position.vx-sb->DynPtr->Position.vx;
+ direction.vy=corpse->DynPtr->Position.vy-sb->DynPtr->Position.vy;
+ direction.vz=corpse->DynPtr->Position.vz-sb->DynPtr->Position.vz;
+ distance=Magnitude(&direction);range=16000;
+ r->corpseRetry-=NormalFrameTime;
+ if(!r->corpsePhase){
+  if(r->corpseRetry>0)return 0;
+  r->corpseRetry=ONE_FIXED/5;
+  if(distance>range || !HModelSequence_Exists(&a->HModelController,HMSQT_AlienStand,ASSS_Feed) ||
+     AlienCorpseAlreadyClaimed(sb,corpse) || !AlienCorpseVisible(sb,corpse))return 0;
+  r->corpsePhase=1;r->feedBestDistance=distance;r->feedStall=0;
+  NPC_InitMovementData(&a->moveData);InitWaypointManager(&a->waypointManager);
+ }
+ if(r->corpsePhase==3)return 0;
+ if(r->corpseRetry<=0){
+  r->corpseRetry=ONE_FIXED/5;
+  if(distance>range || !AlienCorpseVisible(sb,corpse)){
+   r->corpsePhase=0;r->corpseRetry=5*ONE_FIXED;return 0;
+  }
+ }
+ if(r->corpsePhase==1){
+  double horizontal=(double)direction.vx*direction.vx+(double)direction.vz*direction.vz;
+  if(horizontal>1800.0*1800.0 || abs(direction.vy)>2500 || !sb->DynPtr->IsInContactWithFloor){
+   r->feedStall+=NormalFrameTime;
+   if(distance+100<r->feedBestDistance){r->feedBestDistance=distance;r->feedStall=0;}
+   if(r->feedStall>2*ONE_FIXED){
+    r->corpsePhase=0;r->corpseRetry=5*ONE_FIXED;
+    NPC_InitWanderData(&a->wanderData);return 0;
+   }
+   target=corpse->DynPtr->Position;
+   AlienNavigationGravity(sb,1);a->IAmCrouched=AlienShouldBeCrawling(sb);
+   AlienHandleMovingAnimation(sb);
+   NPCGetMovementDirection(sb,&direction,&target,&a->waypointManager);
+   NPCSetVelocity(sb,&direction,a->MaxSpeed);
+   return 1;
+  }
+  /* Stay on the same surface; do not snap the NPC to the body or world up. */
+  if(sb->DynPtr->OrientMat.mat22<63000){
+   r->corpsePhase=0;r->corpseRetry=5*ONE_FIXED;return 0;
+  }
+  r->corpsePhase=2;r->feedTime=0;r->feedTimer=0;r->feedSound=0;a->IAmCrouched=0;
+  SetAlienShapeAnimSequence_Core(sb,HMSQT_AlienStand,ASSS_Feed,2*ONE_FIXED,ONE_FIXED/4);
+ }
+ if(r->corpsePhase==2){
+  if(distance>4000){r->corpsePhase=0;r->corpseRetry=5*ONE_FIXED;return 0;}
+  NPCOrientateToVector(sb,&direction,NPC_TURNRATE/2,NULL);
+  r->feedTime+=NormalFrameTime;
+   if(AlienFeedSoundEvent(r,a->HModelController.sequence_timer,
+       a->HModelController.keyframe_flags,a->HModelController.Tweening)){
+    /* Independent one-shots: vocal/fire handles must not suppress the jaw. */
+    Sound_Play(SID_ALIEN_JAW_ATTACK,"dh",&sb->DynPtr->Position);
+    /* These five loaded native samples are the engine's flesh-ripping
+     * family; SID_RIP is a legacy unloaded slot in stock data. */
+    Sound_Play(SID_BODY_BEING_HACKED_UP_0+(r->feedTime/(2*ONE_FIXED))%5,
+        "dv",&corpse->DynPtr->Position,96);
+   }
+  if(!r->bitten && r->feedTime>=ONE_FIXED &&
+     (a->HModelController.keyframe_flags || r->feedTime>=2*ONE_FIXED)){
+   NETCORPSEDATABLOCK *body=(NETCORPSEDATABLOCK*)corpse->SBdataptr;
+   SECTION_DATA *head=GetThisSectionData(body->HModelController.section_data,"head");
+   r->bitten=1;
+   if(head && !(head->flags&section_data_notreal))
+    CauseDamageToHModel(&body->HModelController,corpse,
+      &TemplateAmmo[AMMO_ALIEN_BITE_KILLSECTION].MaxDamage[AvP.Difficulty],ONE_FIXED,head,NULL,NULL,0);
+  }
+  if(r->feedTime>=6*ONE_FIXED){
+   r->corpsePhase=3;NPC_InitWanderData(&a->wanderData);
+   StartAlienMovementSequence(sb);return 0;
+  }
+  return 1;
+ }
+ return 0;
+}
+
 void NearAlienBehaviour(STRATEGYBLOCK *sbPtr)
 {
 	ALIEN_STATUS_BLOCK *alienStatusPointer;
@@ -182,6 +344,16 @@ void NearAlienBehaviour(STRATEGYBLOCK *sbPtr)
 		#endif
 	}
 
+
+    {
+        double dx=(double)sbPtr->DynPtr->Position.vx-sbPtr->DynPtr->PrevPosition.vx;
+        double dy=(double)sbPtr->DynPtr->Position.vy-sbPtr->DynPtr->PrevPosition.vy;
+        double dz=(double)sbPtr->DynPtr->Position.vz-sbPtr->DynPtr->PrevPosition.vz;
+        AlienMotionObserve(&alienStatusPointer->motion,sqrt(dx*dx+dy*dy+dz*dz),NormalFrameTime);
+    }
+    AlienLaunchObserve(&alienStatusPointer->motion,sbPtr->DynPtr->IsInContactWithFloor,
+        DotProduct(&sbPtr->DynPtr->LinImpulse,&sbPtr->DynPtr->GravityDirection)<-100,
+        NormalFrameTime);
 	/* zero alien's velocity */
 	{
 		DYNAMICSBLOCK *dynPtr = sbPtr->DynPtr;
@@ -189,6 +361,27 @@ void NearAlienBehaviour(STRATEGYBLOCK *sbPtr)
 	}
 
 	InitWaypointSystem(alienStatusPointer->EnableWaypoints);
+    if(AlienAfterPlayerDeath(sbPtr))return;
+    {
+        DYNAMICSBLOCK *dyn=sbPtr->DynPtr;
+        int navigating=alienStatusPointer->BehaviourState==ABS_Approach ||
+            alienStatusPointer->BehaviourState==ABS_Hunt ||
+            alienStatusPointer->BehaviourState==ABS_Wander ||
+            alienStatusPointer->BehaviourState==ABS_Retreat ||
+            alienStatusPointer->BehaviourState==ABS_Avoidance;
+        if(AlienRouteStalled(&alienStatusPointer->motion,dyn->Position.vx,
+            dyn->Position.vy,dyn->Position.vz,NormalFrameTime,navigating)) {
+            NPC_InitMovementData(&alienStatusPointer->moveData);
+            NPC_InitWanderData(&alienStatusPointer->wanderData);
+            InitWaypointManager(&alienStatusPointer->waypointManager);
+            Initialise_AvoidanceManager(sbPtr,&alienStatusPointer->avoidanceManager);
+            alienStatusPointer->huntingModule=NULL;
+            alienStatusPointer->CurveTimeOut=0;
+            alienStatusPointer->NearStateTimer=0;
+            alienStatusPointer->BehaviourState=ABS_Wander;
+        }
+    }
+
 
 	if (alienStatusPointer->incidentFlag) {
 		Alien_ElectToPounce(sbPtr);
@@ -365,26 +558,36 @@ void AlienHandleStandingAnimation(STRATEGYBLOCK *sbPtr) {
 void AlienHandleMovingAnimation(STRATEGYBLOCK *sbPtr) {
 
 	ALIEN_STATUS_BLOCK *alienStatusPointer;
-	VECTORCH offset;
-	int crawlMode,speed;
+	int crawlMode;
 
 	LOCALASSERT(sbPtr);
 	alienStatusPointer=(ALIEN_STATUS_BLOCK *)(sbPtr->SBdataptr);    
 	LOCALASSERT(alienStatusPointer);
 	/* Make sure we're playing a 'moving' sequence, if we're actually moving. */
 
-	offset.vx=sbPtr->DynPtr->Position.vx-sbPtr->DynPtr->PrevPosition.vx;
-	offset.vy=sbPtr->DynPtr->Position.vy-sbPtr->DynPtr->PrevPosition.vy;
-	offset.vz=sbPtr->DynPtr->Position.vz-sbPtr->DynPtr->PrevPosition.vz;
-	
-	/* ...compute speed factor... */
-	speed=Magnitude(&offset);
-	if (speed<(MUL_FIXED(NormalFrameTime,100))) {
-		/* Not moving much, are we? */
-		AlienHandleStandingAnimation(sbPtr);
-		return;
-	}
-	speed=DIV_FIXED(speed,NormalFrameTime);
+
+    /* Windowed, hysteretic motion state: a zero-displacement frame at high
+     * FPS or a polygon seam must not restart stand/run/crawl tweening. */
+    if(!alienStatusPointer->motion.moving){
+        AlienHandleStandingAnimation(sbPtr);return;
+    }
+    if(alienStatusPointer->motion.aftermath && !alienStatusPointer->Target &&
+       !alienStatusPointer->HModelController.Tweening &&
+       (alienStatusPointer->HModelController.Sequence_Type==HMSQT_AlienRun ||
+        alienStatusPointer->HModelController.Sequence_Type==HMSQT_AlienCrawl)){
+        int duration=DIV_FIXED(alienStatusPointer->IAmCrouched?ONE_FIXED>>2:ONE_FIXED>>1,
+                               alienStatusPointer->motion.pace);
+        #if WOUNDING_SPEED_EFFECTS
+        {
+            int factor=GetAlienSpeedFactor_ForSequence(sbPtr,
+                alienStatusPointer->HModelController.Sequence_Type,
+                alienStatusPointer->HModelController.Sub_Sequence);
+            if(factor!=ONE_FIXED)duration=DIV_FIXED(duration,factor);
+        }
+        #endif
+        if(duration!=alienStatusPointer->HModelController.Seconds_For_Sequence)
+            HModel_ChangeSpeed(&alienStatusPointer->HModelController,duration);
+    }
 	/* Right, now play the correct sort of sequence. */	
 
 	if(alienStatusPointer->IAmCrouched) {
@@ -407,17 +610,20 @@ void AlienHandleMovingAnimation(STRATEGYBLOCK *sbPtr) {
 void StartAlienMovementSequence(STRATEGYBLOCK *sbPtr) {
 
 	ALIEN_STATUS_BLOCK *alienStatusPointer;
-	int crawlMode;
+	int crawlMode,duration;
 
 	LOCALASSERT(sbPtr);
 	alienStatusPointer=(ALIEN_STATUS_BLOCK *)(sbPtr->SBdataptr);    
 	LOCALASSERT(alienStatusPointer);
 
+    duration=ONE_FIXED>>1;
+    if(alienStatusPointer->motion.aftermath && !alienStatusPointer->Target)
+        duration=DIV_FIXED(duration,alienStatusPointer->motion.pace);
 	if(alienStatusPointer->IAmCrouched) {
 		crawlMode=GetAlienCrawlMode(sbPtr);
-		SetAlienShapeAnimSequence(sbPtr,HMSQT_AlienCrawl,crawlMode,ONE_FIXED>>2);
+		SetAlienShapeAnimSequence(sbPtr,HMSQT_AlienCrawl,crawlMode,duration>>1);
 	} else {
-		SetAlienShapeAnimSequence(sbPtr,HMSQT_AlienRun,(int)ARSS_Standard,ONE_FIXED>>1);					
+		SetAlienShapeAnimSequence(sbPtr,HMSQT_AlienRun,(int)ARSS_Standard,duration);					
 	}
 	RecomputeAlienSpeed(sbPtr);
 
@@ -817,9 +1023,7 @@ static void AlienNearState_Approach(STRATEGYBLOCK *sbPtr)
 	LOCALASSERT(alienStatusPointer);
 	LOCALASSERT(dynPtr);
 
-	distanceToPlayer = VectorDistance(&(dynPtr->Position),&(alienStatusPointer->Target->DynPtr->Position));
-
-	if (alienStatusPointer->Target==NULL) {
+	if (alienStatusPointer->Target==NULL || !alienStatusPointer->Target->DynPtr) {
 		/* Approach what? */
 		AlienHandleMovingAnimation(sbPtr);
 		alienStatusPointer->BehaviourState = ABS_Hunt;
@@ -828,6 +1032,7 @@ static void AlienNearState_Approach(STRATEGYBLOCK *sbPtr)
 		return;
 	} 	
 
+    distanceToPlayer=VectorDistance(&dynPtr->Position,&alienStatusPointer->Target->DynPtr->Position);
 	/* Update sequence! */
 	AlienHandleMovingAnimation(sbPtr);
  	
@@ -840,7 +1045,7 @@ static void AlienNearState_Approach(STRATEGYBLOCK *sbPtr)
 			GetTargetingPointOfObject_Far(alienStatusPointer->Target, &targetPos);
 			/* do climb on walls, etc */
 			if (AlienIsAbleToClimb(sbPtr)) {
-				dynPtr->UseStandardGravity=0;
+				AlienNavigationGravity(sbPtr,1);
 			} else {
 				dynPtr->UseStandardGravity=1;
 			}
@@ -849,8 +1054,8 @@ static void AlienNearState_Approach(STRATEGYBLOCK *sbPtr)
 		{
 			curveToPlayer = 0;	
 			NPCGetMovementTarget(sbPtr, alienStatusPointer->Target, &targetPos, &approachingAirDuct,1);
-			/* don't climb on walls, etc */
-			dynPtr->UseStandardGravity=1;
+			/* Keep wall attachment across navigation state changes. */
+            AlienNavigationGravity(sbPtr,0);
 		}
 	}
 
@@ -944,7 +1149,7 @@ static void AlienNearState_Approach(STRATEGYBLOCK *sbPtr)
 
 					Normalise(&velocityDirection);
 					dot=DotProduct(&dynPtr->GravityDirection,&velocityDirection);
-					if (dot<-60000)
+					if (dot<-60000 && AlienLaunchBegin(&alienStatusPointer->motion,dynPtr->IsInContactWithFloor))
 				#endif
 				{
 					/* patrick 29/7/97: I have added the extra condition of not being in the same module as
@@ -975,7 +1180,7 @@ static void AlienNearState_Approach(STRATEGYBLOCK *sbPtr)
 		NPCGetMovementDirection(sbPtr, &velocityDirection, &targetPos,&alienStatusPointer->waypointManager);
 		if (AlienIsEncouragedToCrawl()&&(alienStatusPointer->EnableWaypoints)) {
 			if (AlienIsAbleToClimb(sbPtr)) {
-				dynPtr->UseStandardGravity=0;
+				AlienNavigationGravity(sbPtr,1);
 			} else {
 				dynPtr->UseStandardGravity=1;
 			}
@@ -989,7 +1194,7 @@ static void AlienNearState_Approach(STRATEGYBLOCK *sbPtr)
 			
 			dot=DotProduct(&dynPtr->GravityDirection,&velocityDirection);
 
-			if (dot<-60000) {
+			if (dot<-60000 && AlienLaunchBegin(&alienStatusPointer->motion,dynPtr->IsInContactWithFloor)) {
 			
 				dynPtr->TimeNotInContactWithFloor = 0;
 				dynPtr->UseStandardGravity=1;
@@ -1205,7 +1410,7 @@ static void AlienNearState_Attack(STRATEGYBLOCK *sbPtr)
 	/* The following should be #if 0, but I'll not check that in until the player is unclimbable. */
 	#if 1
 	/* don't climb on walls, etc */
-	dynPtr->UseStandardGravity=1;
+	AlienNavigationGravity(sbPtr,0);
 	#endif
 	/* Nowadays, other things can be stuck to walls... sigh. */
 
@@ -1337,8 +1542,9 @@ static void AlienNearState_Wander(STRATEGYBLOCK *sbPtr)
 	LOCALASSERT(alienStatusPointer);
 	LOCALASSERT(dynPtr);
 
-	/* don't climb on walls, etc */
-	dynPtr->UseStandardGravity=1;
+	/* Relaxed patrol can crawl; existing wall attachment is preserved. */
+    AlienNavigationGravity(sbPtr,alienStatusPointer->motion.aftermath);
+    alienStatusPointer->IAmCrouched=AlienShouldBeCrawling(sbPtr);
 	
 	/* check if we should be crouched or standing up */
 
@@ -1360,7 +1566,7 @@ static void AlienNearState_Wander(STRATEGYBLOCK *sbPtr)
 	#endif
 
 	/* should we change to approach state? */
-	if(AlienHasPathToTarget(sbPtr))
+	if(!alienStatusPointer->motion.recoveryTime && AlienHasPathToTarget(sbPtr))
 	{
 		/* doesn't require a sequence change */
 		NPC_InitMovementData(&(alienStatusPointer->moveData));
@@ -1371,7 +1577,7 @@ static void AlienNearState_Wander(STRATEGYBLOCK *sbPtr)
 			WarnMarineOfAttack(alienStatusPointer->Target,sbPtr);
 		}
 		return;
-	} else if (AlienIsAwareOfTarget(sbPtr)) {
+	} else if (!alienStatusPointer->motion.recoveryTime && AlienIsAwareOfTarget(sbPtr)) {
 		/* Go to hunt. */
 		alienStatusPointer->BehaviourState = ABS_Hunt;
 		alienStatusPointer->NearStateTimer = ALIEN_NEARWAITTIME;
@@ -1379,7 +1585,7 @@ static void AlienNearState_Wander(STRATEGYBLOCK *sbPtr)
 	}
 	
 	/* Try to reaquire target? */
-	alienStatusPointer->Target=NULL;
+	if(!alienStatusPointer->motion.recoveryTime)alienStatusPointer->Target=NULL;
 
 	/* wander target aquisition: if no target, or moved module */
 	LOCALASSERT(sbPtr->containingModule);
@@ -1400,8 +1606,19 @@ static void AlienNearState_Wander(STRATEGYBLOCK *sbPtr)
 		alienStatusPointer->NearStateTimer = ALIEN_NEARWAITTIME;
 		if(alienStatusPointer->IAmCrouched) SetAlienShapeAnimSequence(sbPtr,HMSQT_AlienCrouch,(int)ACrSS_Standard,ONE_FIXED>>1);		
 		else SetAlienShapeAnimSequence(sbPtr,HMSQT_AlienStand,(int)ASSS_Standard,ONE_FIXED>>1);
+        return; /* No target means no stale worldPosition velocity. */
 	}
 	
+    if(alienStatusPointer->motion.aftermath){
+        alienStatusPointer->NearStateTimer+=NormalFrameTime;
+        if(alienStatusPointer->NearStateTimer>=2*ONE_FIXED && !alienStatusPointer->motion.moving){
+            NPC_InitWanderData(&alienStatusPointer->wanderData);
+            alienStatusPointer->NearStateTimer=0;
+            alienStatusPointer->BehaviourState=ABS_Wait;
+            return;
+        }
+        if(alienStatusPointer->motion.moving)alienStatusPointer->NearStateTimer=0;
+    }
 	/* ok: should have a current target at this stage... */
 	NPCGetMovementDirection(sbPtr, &velocityDirection, &(alienStatusPointer->wanderData.worldPosition),&alienStatusPointer->waypointManager);
 	NPCSetVelocity(sbPtr, &velocityDirection, alienStatusPointer->MaxSpeed);	
@@ -1470,13 +1687,14 @@ static void AlienNearState_Wait(STRATEGYBLOCK *sbPtr)
 
 	/* do climb on walls, etc */
 	if (AlienIsAbleToClimb(sbPtr)) {
-		dynPtr->UseStandardGravity=0;
+		AlienNavigationGravity(sbPtr,1);
 	} else {
 		dynPtr->UseStandardGravity=1;
 	}
 
 	AlienHandleStandingAnimation(sbPtr);
 
+    if(alienStatusPointer->motion.recoveryTime>0)return;
 	/* test for attack */
 	if(AlienHasPathToTarget(sbPtr))
 	{
@@ -1743,7 +1961,7 @@ static void AlienNearState_Hunt(STRATEGYBLOCK *sbPtr)
 	LOCALASSERT(dynPtr);
 
 	/* don't climb on walls, etc */
-	dynPtr->UseStandardGravity=1;
+	AlienNavigationGravity(sbPtr,0);
 
 	/* check if we should be crouched or standing up */
 
@@ -1781,12 +1999,12 @@ static void AlienNearState_Hunt(STRATEGYBLOCK *sbPtr)
 	if (alienStatusPointer->IAmCrouched) {
 		/* Are we climbing? */
 		if (AlienIsAbleToClimb(sbPtr)) {
-			dynPtr->UseStandardGravity=0;
+			AlienNavigationGravity(sbPtr,1);
 		} else {
-			dynPtr->UseStandardGravity=1;
+			AlienNavigationGravity(sbPtr,0);
 		}
 	} else {
-		dynPtr->UseStandardGravity=1;
+		AlienNavigationGravity(sbPtr,0);
 	}
 
 	/* should we change to approach state? */
@@ -2029,7 +2247,8 @@ int AlienShouldBeCrawling(STRATEGYBLOCK *sbPtr)
 {
 	ALIEN_STATUS_BLOCK *alienStatus=(ALIEN_STATUS_BLOCK *)(sbPtr->SBdataptr);
 
-	if(sbPtr->DynPtr->OrientMat.mat22<63000) return 1;
+	/* Hysteresis on wall/floor transitions prevents alternating gaits. */
+    if(sbPtr->DynPtr->OrientMat.mat22<(alienStatus->IAmCrouched?64000:63000))return 1;
 	if(sbPtr->containingModule->m_flags & MODULEFLAG_AIRDUCT) return 1;
 	/* Wounding! */
 
@@ -2221,6 +2440,7 @@ ATTACK_DATA *AlienIsAbleToPounce(STRATEGYBLOCK *sbPtr) {
 	if(sbPtr->containingModule->m_flags & MODULEFLAG_AIRDUCT) {
 		return(NULL);
 	}
+    if(alienStatusPointer->motion.launchLocked)return NULL;
 	/* Wounding! */
 
 	/* Can't pounce if you've lost any leg sections. */	
@@ -2429,6 +2649,7 @@ static void ApplyPounceImpulse(STRATEGYBLOCK *sbPtr) {
 	LOCALASSERT(dynPtr);
 	LOCALASSERT(alienStatusPointer->Target);	
 
+    if(!AlienLaunchBegin(&alienStatusPointer->motion,dynPtr->IsInContactWithFloor))return;
 	GetTargetingPointOfObject(alienStatusPointer->Target->SBdptr,&targetPoint);
 	
 	dist = VectorDistance(&(dynPtr->Position),&targetPoint);
@@ -2550,6 +2771,7 @@ static int CheckJumpingAbility(STRATEGYBLOCK *sbPtr) {
 	alienStatusPointer=(ALIEN_STATUS_BLOCK *)(sbPtr->SBdataptr);    
 	LOCALASSERT(alienStatusPointer);
 
+    if(!sbPtr->DynPtr->IsInContactWithFloor || alienStatusPointer->motion.launchLocked)return 0;
 	if (alienStatusPointer->JumpDetected==0) {
 		/* No jump sequence.  Always a bad start. */
 		return(0);
@@ -2588,6 +2810,7 @@ static int GoToJump(STRATEGYBLOCK *sbPtr) {
 		return(0);
 	}
 
+    if(!AlienLaunchBegin(&alienStatusPointer->motion,dynPtr->IsInContactWithFloor))return 0;
 	/* Should be able to jump now! */
 
 	dynPtr->LinVelocity.vx=0;
@@ -2676,7 +2899,7 @@ static void AlienNearState_Jump(STRATEGYBLOCK *sbPtr)
 
 		/* Hang on for dear life... */
 		if (AlienIsAbleToClimb(sbPtr)) {
-			dynPtr->UseStandardGravity=0;
+			AlienNavigationGravity(sbPtr,1);
 		} else {
 			dynPtr->UseStandardGravity=1;
 		}
@@ -2688,6 +2911,63 @@ static void AlienNearState_Jump(STRATEGYBLOCK *sbPtr)
 		return;
 
 	}
+}
+
+/* Tyrargo campaign safeguard, separate from the AvPx Skirmish ID fix.
+ * Use perception distance, not the 3000-unit melee range. The regression save
+ * places the exposed dormant alien 14720 units away from the player.
+ * No module-visibility shortcut: each successful ray must hit this alien first. */
+#define ALIEN_DORMANT_WAKE_RANGE 16000
+extern int Alien_TargetFilter(STRATEGYBLOCK *candidate);
+extern DISPLAYBLOCK PlayersWeapon;
+static int AlienDormantPlayerIsNearbyAndVisible(STRATEGYBLOCK *sbPtr)
+{
+ ALIEN_STATUS_BLOCK *status;
+ STRATEGYBLOCK *playerSB;
+ VECTORCH eye,points[3],oldPoint,oldNormal;
+ DISPLAYBLOCK *oldHit;
+ SECTION_DATA *oldSection,*root,*head;
+ int oldLambda,visible=0,count=1,i;
+ double dx,dy,dz;
+ if(!sbPtr || !sbPtr->DynPtr || !(status=(ALIEN_STATUS_BLOCK*)sbPtr->SBdataptr) ||
+    NormalFrameTime<=0 || AvP.Network!=I_No_Network || !sbPtr->SBdptr || !Player ||
+    !(playerSB=Player->ObStrategyBlock) || !playerSB->DynPtr || !playerSB->SBdataptr ||
+    !((PLAYER_STATUS*)playerSB->SBdataptr)->IsAlive || !Alien_TargetFilter(playerSB))return 0;
+ /* Reuse the dormant state's idle timer: no save-format change.
+  * Five checks per simulated second, independent of rendering FPS. */
+ if(status->NearStateTimer>ONE_FIXED/5)status->NearStateTimer=ONE_FIXED/5;
+ status->NearStateTimer-=NormalFrameTime;
+ if(status->NearStateTimer>0)return 0;
+ status->NearStateTimer=ONE_FIXED/5;
+ dx=(double)playerSB->DynPtr->Position.vx-sbPtr->DynPtr->Position.vx;
+ dy=(double)playerSB->DynPtr->Position.vy-sbPtr->DynPtr->Position.vy;
+ dz=(double)playerSB->DynPtr->Position.vz-sbPtr->DynPtr->Position.vz;
+ if(dx*dx+dy*dy+dz*dz>(double)ALIEN_DORMANT_WAKE_RANGE*ALIEN_DORMANT_WAKE_RANGE)return 0;
+ GetTargetingPointOfObject(Player,&eye);
+ /* This proves the current pose before reading section world positions.
+  * A curled-up chest can be hidden while the head/body remains exposed. */
+ GetTargetingPointOfObject(sbPtr->SBdptr,&points[0]);
+ root=sbPtr->SBdptr->HModelControlBlock?sbPtr->SBdptr->HModelControlBlock->section_data:NULL;
+ head=root?GetThisSectionData(root,"head"):NULL;
+ if(head && (head->flags&section_data_initialised) && !(head->flags&section_data_notreal))
+  points[count++]=head->World_Offset;
+ if(root && root!=head && (root->flags&section_data_initialised) && !(root->flags&section_data_notreal))
+  points[count++]=root->World_Offset;
+ oldPoint=LOS_Point;oldNormal=LOS_ObjectNormal;oldHit=LOS_ObjectHitPtr;
+ oldSection=LOS_HModel_Section;oldLambda=LOS_Lambda;
+ for(i=0;i<count && !visible;i++){
+  VECTORCH direction;
+  direction.vx=points[i].vx-eye.vx;direction.vy=points[i].vy-eye.vy;direction.vz=points[i].vz-eye.vz;
+  if(!direction.vx && !direction.vy && !direction.vz)continue;
+  Normalise(&direction);
+  /* The player's own first-person model cannot conceal a world-space enemy.
+   * Doors, walls, glass and all other objects retain the normal AI LOS rules. */
+  FindPolygonInLineOfSight_TwoIgnores(&direction,&eye,0,Player,&PlayersWeapon);
+  visible=(LOS_ObjectHitPtr==sbPtr->SBdptr && LOS_Lambda<=ALIEN_DORMANT_WAKE_RANGE);
+ }
+ LOS_Point=oldPoint;LOS_ObjectNormal=oldNormal;LOS_ObjectHitPtr=oldHit;
+ LOS_HModel_Section=oldSection;LOS_Lambda=oldLambda;
+ return visible;
 }
 
 void AlienNearState_Dormant(STRATEGYBLOCK *sbPtr)
@@ -2722,6 +3002,11 @@ void AlienNearState_Dormant(STRATEGYBLOCK *sbPtr)
 		}
 	} else {
 		alienStatusPointer->HModelController.Playing=1;
+	}
+
+	if (AlienDormantPlayerIsNearbyAndVisible(sbPtr)) {
+		Alien_Awaken(sbPtr);
+		return;
 	}
 
 	/* Brushing Test. */

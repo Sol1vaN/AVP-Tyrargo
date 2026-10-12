@@ -1,3 +1,6 @@
+static int VisualEffectTraceActive;
+static int WaterTerrainTraceActive;
+static int CameraMotionTraceActive, CameraMotionTraceTexture=-1;
 /*KJL*************************
 * los.c - Line of sight code *
 *************************KJL*/
@@ -18,6 +21,8 @@
 #include "showcmds.h"
 #include "targeting.h"
 #include "los.h"
+#include "pvisible.h"
+static int NavigationTraceActive;
 
 /*KJL****************************************************************************************
 *                                    P R O T O T Y P E S	                                *
@@ -152,6 +157,15 @@ int CameraCanSeeThisPosition_WithIgnore(DISPLAYBLOCK *ignoredObjectPtr,VECTORCH 
 		
 	if (LOS_ObjectHitPtr == Player) return 1;
 	else return 0;
+}
+
+int CameraCanSeeEffectThroughGlass(DISPLAYBLOCK *ignoredObjectPtr,VECTORCH *positionPtr)
+{
+ int previous=VisualEffectTraceActive,visible;
+ VisualEffectTraceActive=1;
+ visible=CameraCanSeeThisPosition_WithIgnore(ignoredObjectPtr,positionPtr);
+ VisualEffectTraceActive=previous;
+ return visible;
 }
 
 int IsThisObjectVisibleFromThisPosition_WithIgnore(DISPLAYBLOCK *objectPtr,DISPLAYBLOCK *ignoredObjectPtr,VECTORCH *positionPtr,int maxRange)
@@ -289,6 +303,16 @@ void FindPolygonInLineOfSight_TwoIgnores(VECTORCH *viewpointDirectionPtr, VECTOR
 		DISPLAYBLOCK* objectPtr = displayBlockList[numberOfObjects];
 		
 		if ((objectPtr == objectToIgnorePtr)||(objectPtr == next_objectToIgnorePtr)) continue;
+        if(NavigationTraceActive && objectPtr->ObStrategyBlock){
+            STRATEGYBLOCK*s=objectPtr->ObStrategyBlock;
+            /* Plan around persistent geometry. Moving actors still collide in
+               dynamics, but their obsolete poses must not freeze a route job. */
+            if(s->I_SBtype==I_BehaviourMarine || s->I_SBtype==I_BehaviourAlien || s->I_SBtype==I_BehaviourPredator)continue;
+            if(s->I_SBtype==I_BehaviourInanimateObject && s->SBdataptr){
+                INANIMATEOBJECT_STATUSBLOCK*item=s->SBdataptr;
+                if(s->DynPtr && s->DynPtr->IsPickupObject && (item->typeId==IOT_Weapon || item->typeId==IOT_Ammo || item->typeId==IOT_Health || item->typeId==IOT_Armour))continue;
+            }
+        }
 
 		/* if hierarchical model, consider each object in the model separately */
 		if (objectPtr->HModelControlBlock)
@@ -528,6 +552,7 @@ void CheckForRayIntersectionWithObject(DISPLAYBLOCK *dPtr)
         
 		/* scanning through polys */
 		AccessNextPolygon();
+        if(VisualEffectTraceActive && (PolyheaderPtr->PolyFlags & iflag_transparent))continue;
 		
 		if( (PolyheaderPtr->PolyFlags & iflag_notvis) && !(PolyheaderPtr->PolyFlags & iflag_mirror)) continue;
 
@@ -672,6 +697,12 @@ void CheckForRayIntersectionWithObject(DISPLAYBLOCK *dPtr)
 
 				LOS_Point=pointOnPlane;
 				LOS_ObjectHitPtr = dPtr;
+
+                if(CameraMotionTraceActive) {
+                    int type=PolyheaderPtr->PolyItemType;
+                    CameraMotionTraceTexture=(type==I_2dTexturedPolygon||type==I_Gouraud2dTexturedPolygon||type==I_3dTexturedPolygon||type==I_Gouraud3dTexturedPolygon||type==I_ZB_2dTexturedPolygon||type==I_ZB_Gouraud2dTexturedPolygon||type==I_ZB_3dTexturedPolygon||type==I_ZB_Gouraud3dTexturedPolygon)?(PolyheaderPtr->PolyColour&0xffff):-1;
+                }
+
 				LOS_Lambda=lambda;
 				LOS_HModel_Section = 0;
 			}
@@ -698,3 +729,41 @@ int IsObjectVisibleFromThisPoint(DISPLAYBLOCK *dispPtr, VECTORCH *viewpointDirec
 
 
 
+
+/* Cosmetic, bounded query. Restore every public LOS result and the private
+   ray pointers; do not animate hierarchical models or perturb weapon aim. */
+int CameraMotionTrace(VECTORCH *origin,VECTORCH *direction,int range,const char **texture)
+{
+ extern IMAGEHEADER ImageHeaderArray[];extern int NumImages;
+ VECTORCH oldPoint=LOS_Point,oldNormal=LOS_ObjectNormal;
+ VECTORCH *oldPosition=ViewpointPositionPtr,*oldDirection=ViewpointDirectionPtr;
+ DISPLAYBLOCK *oldObject=LOS_ObjectHitPtr;SECTION_DATA *oldSection=LOS_HModel_Section;
+ int oldLambda=LOS_Lambda,result,i;
+ if(texture)*texture=0;
+ LOS_Lambda=range;LOS_ObjectHitPtr=0;LOS_HModel_Section=0;
+ ViewpointPositionPtr=origin;ViewpointDirectionPtr=direction;
+ CameraMotionTraceTexture=-1;CameraMotionTraceActive=1;
+ for(i=0;i<NumActiveBlocks;i++){
+  DISPLAYBLOCK*d=ActiveBlockList[i];
+  if(d!=Player&&!d->HModelControlBlock&&d->ObShapeData&&(!WaterTerrainTraceActive||d->ObMyModule))CheckForRayIntersectionWithObject(d);
+ }
+ result=LOS_ObjectHitPtr?LOS_Lambda:range;
+ if(texture&&LOS_ObjectHitPtr&&CameraMotionTraceTexture>=0&&CameraMotionTraceTexture<NumImages)*texture=ImageHeaderArray[CameraMotionTraceTexture].ImageName;
+ CameraMotionTraceActive=0;
+ LOS_Point=oldPoint;LOS_ObjectNormal=oldNormal;LOS_ObjectHitPtr=oldObject;LOS_HModel_Section=oldSection;LOS_Lambda=oldLambda;
+ ViewpointPositionPtr=oldPosition;ViewpointDirectionPtr=oldDirection;
+ return result;
+}
+
+int WaterTerrainDepth(int x,int y,int z){
+ VECTORCH origin={x,y-300,z},direction={0,65536,0};
+ WaterTerrainTraceActive=1;int hit=CameraMotionTrace(&origin,&direction,812,0);WaterTerrainTraceActive=0;return hit-300;
+}
+
+/* Navigation queries match non-solid inventory collision semantics. Combat,
+   camera visibility and projectile traces continue to use the native filter. */
+void FindPolygonInLineOfSight_Navigation(VECTORCH*direction,VECTORCH*origin,DISPLAYBLOCK*actor,DISPLAYBLOCK*player){
+ int previous=NavigationTraceActive;NavigationTraceActive=1;
+ FindPolygonInLineOfSight_TwoIgnores(direction,origin,0,actor,player);
+ NavigationTraceActive=previous;
+}

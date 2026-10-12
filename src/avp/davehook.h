@@ -29,6 +29,7 @@
 	extern void DAVEHOOK_UnInit(void);
 	extern void DAVEHOOK_Maintain(void);
 
+	extern void DAVEHOOK_RefreshScreenBounds(void);
 	extern void DAVEHOOK_ScreenModeChange_Setup(void);
 	extern void DAVEHOOK_ScreenModeChange_Cleanup(void);
 

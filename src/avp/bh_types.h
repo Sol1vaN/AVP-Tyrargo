@@ -170,6 +170,10 @@ typedef struct player_input_requests
 
 }PLAYER_INPUT_REQUESTS;
 
+/* Manual reload uses the Alien-only spit request bit for Marine and Predator.
+   The alias preserves PLAYER_INPUT_REQUESTS binary layout. */
+#define Rqst_ReloadWeapon Rqst_Spit
+
 /*-------------Patrick 23/10/96 --------------------
   Some defines for key combo bit masks
   these should correspond to the above request flags.

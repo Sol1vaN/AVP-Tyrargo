@@ -90,6 +90,7 @@ extern void HandleAlienOVision(void);
 extern int IsVisionChanging(void);
 
 extern void ChangePredatorVisionMode(void);
+extern void PreviousPredatorVisionMode(void);
 
 
 extern void SetupVision(void);

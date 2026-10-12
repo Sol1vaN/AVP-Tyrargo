@@ -1,4 +1,8 @@
+#include "campaign_state.h"
+#include "event_latency.h"
 #include "3dc.h"
+extern void NPCNavFrameBegin(void);
+extern void NPCSupportFrameBegin(void);
 #include <stdbool.h>
 #include <math.h>
 #include "inline.h"
@@ -47,6 +51,7 @@
 
 #include "kshape.h"
 #include "game.h"
+#include "playeryaw.h"
 
 /* KJL 16:00:13 11/22/96 - One of my evil experiments....   */
 #define PENTIUM_PROFILING_ON 0
@@ -190,6 +195,9 @@ extern BOOL Current_Level_Requires_Mirror_Image();
 
 void StartGame(void)
 {
+    CampaignBeginLevel();
+	Probe113_BeginMapTrace("StartGame");
+	Probe113_RenderTracef("START_GAME begin env=%d", AvP.CurrentEnv);
 	/* called whenever we start a game (NOT when we change */
 	/* environments - destroy anything from a previous game*/
 
@@ -204,9 +212,12 @@ void StartGame(void)
 	ResetCDPlayForLevel();
 	
 	
+	Probe113_RenderTracef("START_GAME before_ProcessSystemObjects");
 	ProcessSystemObjects();
+	Probe113_RenderTracef("START_GAME after_ProcessSystemObjects");
 	
 	create_strategies_from_list ();
+	Probe113_RenderTracef("START_GAME after_create_strategies");
 	AssignAllSBNames();
 	
 	SetupVision();
@@ -224,6 +235,7 @@ void StartGame(void)
 	InitialiseParticleSystem();
 	InitialiseSfxBlocks();
 	InitialiseLightElementSystem();
+	Probe113_RenderTracef("START_GAME after_render_systems");
 
 	AvP.DestructTimer=-1;
 
@@ -257,7 +269,7 @@ void StartGame(void)
 	{
 		extern SCREENDESCRIPTORBLOCK ScreenDescriptorBlock;
 		extern int MotionTrackerScale;
-		MotionTrackerScale = DIV_FIXED(ScreenDescriptorBlock.SDB_Width,640);
+		MotionTrackerScale = DIV_FIXED(ScreenDescriptorBlock.SDB_Height,480);
 	}
  //	BuildInvSqrtTable();
 
@@ -316,14 +328,15 @@ void DealWithElapsedTime()
 **********************************************/
 void UpdateGame(void)
 {
+ NPCNavFrameBegin();NPCSupportFrameBegin();
 	/* Read Keyboard, Keypad, Joystick etc. */
-	ReadUserInput();
+	{ EVENT_TICK span=EventLatencyBegin(); ReadUserInput(); EventLatencyEnd(span,"input",0,0,0,0,0); }
 
 	/* DHM 18/11/97: hook for my code */
 	#if PENTIUM_PROFILING_ON
 	ProfileStart();
 	#endif	
-	DAVEHOOK_Maintain();
+	{ EVENT_TICK span=EventLatencyBegin(); DAVEHOOK_Maintain(); EventLatencyEnd(span,"daemon / console input",0,0,0,0,0); }
 	#if PENTIUM_PROFILING_ON
 	ProfileStop("DAEMON");
 	#endif
@@ -334,8 +347,8 @@ void UpdateGame(void)
 	#if PENTIUM_PROFILING_ON
 	ProfileStart();
 	#endif	
-	PlayerPheromoneSystem();
-	AiPheromoneSystem();
+	{ EVENT_TICK span=EventLatencyBegin(); PlayerPheromoneSystem(); EventLatencyEnd(span,"player pheromones",0,0,0,0,0); }
+	{ EVENT_TICK span=EventLatencyBegin(); AiPheromoneSystem(); EventLatencyEnd(span,"AI pheromones",0,0,0,0,0); }
 	#if PENTIUM_PROFILING_ON
 	ProfileStop("PHEROMONE");
 	#endif	
@@ -343,14 +356,14 @@ void UpdateGame(void)
 	/*-------------- Patrick 11/1/97 ----------------
 	Call the alien hive management function
 	-------------------------------------------------*/
-	DoHive();
-	DoSquad();
+	{ EVENT_TICK span=EventLatencyBegin(); DoHive(); EventLatencyEnd(span,"hive AI",0,0,0,0,0); }
+	{ EVENT_TICK span=EventLatencyBegin(); DoSquad(); EventLatencyEnd(span,"squad AI",0,0,0,0,0); }
 	
 
    	#if PROFILING_ON
 	ProfileStart();
 	#endif
- 	ObjectBehaviours();
+ 	{ EVENT_TICK span=EventLatencyBegin(); ObjectBehaviours(); EventLatencyEnd(span,"all behaviours",0,0,0,0,0); }
 	#if PROFILING_ON 
 	ProfileStop("BEHAVS");
 	#endif	
@@ -359,7 +372,7 @@ void UpdateGame(void)
 	#if PENTIUM_PROFILING_ON 
 	ProfileStart();
 	#endif
-	MaintainPlayer();
+	{ EVENT_TICK span=EventLatencyBegin(); MaintainPlayer(); EventLatencyEnd(span,"player maintenance",0,0,0,0,0); }
 	#if PENTIUM_PROFILING_ON 
 	ProfileStop("MNT PLYR");
 	#endif
@@ -368,7 +381,7 @@ void UpdateGame(void)
 	#if PENTIUM_PROFILING_ON
 	ProfileStart();
 	#endif	
-	MNormalise(&(Player->ObStrategyBlock->DynPtr->OrientMat));
+	{ EVENT_TICK span=EventLatencyBegin(); PlayerYawNormalise(&(Player->ObStrategyBlock->DynPtr->OrientMat)); EventLatencyEnd(span,"player matrix normalize",0,0,0,0,0); }
 	#if PENTIUM_PROFILING_ON
 	ProfileStop("MNorm");
 	#endif
@@ -376,26 +389,26 @@ void UpdateGame(void)
 	/* netgame support: it seems necessary to collect all our messages here, as some
 	things depend on the player's behaviour running before anything else... 
 	including firing the player's weapon */
-	if(AvP.Network != I_No_Network)	NetCollectMessages();
+	if(AvP.Network != I_No_Network)	{ EVENT_TICK span=EventLatencyBegin(); NetCollectMessages(); EventLatencyEnd(span,"network collect",0,0,0,0,0); }
 
-	RemoveDestroyedStrategyBlocks();
+	{ EVENT_TICK span=EventLatencyBegin(); RemoveDestroyedStrategyBlocks(); EventLatencyEnd(span,"destroy marked strategies",0,0,0,0,0); }
 
 	{
 
 		if(SaveGameRequest != SAVELOAD_REQUEST_NONE)
 		{
-			SaveGame();
+			{ EVENT_TICK span=EventLatencyBegin(); SaveGame(); EventLatencyEnd(span,"save game",0,0,0,0,0); }
 		}
 		else if(LoadGameRequest != SAVELOAD_REQUEST_NONE)
 		{
-			LoadSavedGame();
+			{ EVENT_TICK span=EventLatencyBegin(); LoadSavedGame(); EventLatencyEnd(span,"load save",0,0,0,0,0); }
 		}
 	}
 	
 	#if PENTIUM_PROFILING_ON 
   	ProfileStart();
 	#endif
-	ObjectDynamics();
+	{ EVENT_TICK span=EventLatencyBegin(); ObjectDynamics(); EventLatencyEnd(span,"collision / dynamics",0,0,0,0,0); }
 	#if PENTIUM_PROFILING_ON 
 	ProfileStop("DYNAMICS");
 	#endif
@@ -404,7 +417,7 @@ void UpdateGame(void)
 	
 	if(RequestEnvChangeViaLift)
 	{
-		CleanUpLiftControl();								
+		{ EVENT_TICK span=EventLatencyBegin(); CleanUpLiftControl(); EventLatencyEnd(span,"lift environment cleanup",0,0,0,0,0); }								
  	}	
 
 	#if 0
@@ -416,10 +429,10 @@ void UpdateGame(void)
 	Player->ObWorld.vz = -42249;
 	#endif
 	/* netgame support */
-	if(AvP.Network != I_No_Network)	NetSendMessages();
+	if(AvP.Network != I_No_Network)	{ EVENT_TICK span=EventLatencyBegin(); NetSendMessages(); EventLatencyEnd(span,"network send",0,0,0,0,0); }
 
 	/* KJL 11:50:18 03/21/97 - cheat modes */
-	HandleCheatModes();
+	{ EVENT_TICK span=EventLatencyBegin(); HandleCheatModes(); EventLatencyEnd(span,"cheat maintain",0,0,0,0,0); }
 	
 	/*------------Patrick 1/6/97---------------
 	New sound system 
@@ -430,17 +443,17 @@ void UpdateGame(void)
 	
 	if(playerPherModule)
 	{
-		PlatSetEnviroment(playerPherModule->m_sound_env_index,playerPherModule->m_sound_reverb);		
+		{ EVENT_TICK span=EventLatencyBegin(); PlatSetEnviroment(playerPherModule->m_sound_env_index,playerPherModule->m_sound_reverb); EventLatencyEnd(span,"room reverb",0,0,0,0,0); }		
 	}
-	SoundSys_Management();
-	DoPlayerSounds();
+	{ EVENT_TICK span=EventLatencyBegin(); SoundSys_Management(); EventLatencyEnd(span,"sound management",0,0,0,0,0); }
+	{ EVENT_TICK span=EventLatencyBegin(); DoPlayerSounds(); EventLatencyEnd(span,"player sounds",0,0,0,0,0); }
 	#if PENTIUM_PROFILING_ON 
   	ProfileStop("SOUND SYS");
 	#endif
  
-	LevelSpecificChecks();
+	{ EVENT_TICK span=EventLatencyBegin(); LevelSpecificChecks(); EventLatencyEnd(span,"map scripts",0,0,0,0,0); }
 //	NormaliseTest();
-	MessageHistory_Maintain();
+	{ EVENT_TICK span=EventLatencyBegin(); MessageHistory_Maintain(); EventLatencyEnd(span,"message history maintain",0,0,0,0,0); }
 
 	if(AvP.LevelCompleted)
 	{

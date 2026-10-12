@@ -210,7 +210,7 @@ void MakeDummyNear(STRATEGYBLOCK *sbPtr)
 {
 	extern MODULEMAPBLOCK AlienDefaultMap;
 
-	MODULE tempModule;
+	MODULE tempModule = {0};
 	DISPLAYBLOCK *dPtr;
 	DYNAMICSBLOCK *dynPtr;
 	DUMMY_STATUS_BLOCK *dummyStatusPointer;    

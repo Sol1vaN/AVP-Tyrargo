@@ -1,3 +1,9 @@
+#include "dev_viewmodel.h"
+#include "event_latency.h"
+#include "menu_preview.h"
+#include "water_effect.h"
+#include "particle_order.h"
+#include <stdint.h>
 /* KJL 14:50:53 10/13/97 - 
  *
  *	Experimental particle system
@@ -14,6 +20,8 @@
 #include "dynamics.h"
 #include "particle.h"
 #include "kshape.h"
+#include "viewmodel.h"
+#include "render_geometry.h"
 #include "sfx.h"
 #include "d3d_render.h"
 #include "psndproj.h"
@@ -38,6 +46,7 @@
 #include "los.h"
 #include "chnkload.h"
 #include "maths.h"
+#include "npc_support.h"
 
 #include <math.h>
 
@@ -51,6 +60,16 @@
 
 static PHEROMONE_TRAIL TrailStorage[MAX_NO_OF_PHEROMONE_TRAILS];
 static PARTICLE ParticleStorage[MAX_NO_OF_PARTICLES];
+static NPC_DAMAGE_SOURCE ParticleOwners[MAX_NO_OF_PARTICLES];
+NPC_DAMAGE_SOURCE ParticleSupportOwner(PARTICLE *particle){
+ NPC_DAMAGE_SOURCE empty={0};uintptr_t a=(uintptr_t)particle,first=(uintptr_t)ParticleStorage;
+ if(a<first || a>=first+sizeof ParticleStorage || (a-first)%sizeof(PARTICLE))return empty;
+ return ParticleOwners[(a-first)/sizeof(PARTICLE)];
+}
+/* Render metadata only: never serialized, never used by fire damage/collision.
+   Keep it beside the pool so stack particles and existing saves retain ABI. */
+typedef struct { int active,birthLife; VECTORCH origin; } PLAYER_FLAME_VISUAL;
+static PLAYER_FLAME_VISUAL PlayerFlameVisual[MAX_NO_OF_PARTICLES];
 static VOLUMETRIC_EXPLOSION ExplosionStorage[MAX_NO_OF_EXPLOSIONS];
 
 static int NumActiveTrails;
@@ -78,6 +97,29 @@ void DrawXenoborgMainLaserbeam(LASER_BEAM_DESC *laserPtr);
 void HandlePheromoneTrails(void);
 void RenderTrailSegment(PHEROMONE_TRAIL *trailPtr);
 		
+/* Each visible object emits at most two optical coronas (Xenoborg beams).
+ * Copy world positions, never pointers into transient object/local storage.
+ * Visibility is still tested at submission: glass passes, solid walls block.
+ * This bounded frame-local queue allocates nothing during gameplay. */
+static struct { VECTORCH position; unsigned int colour; } ObjectCoronas[2*maxobjects];
+static int ObjectCoronaCount,DeferObjectCoronas;
+static void SubmitObjectCorona(VECTORCH *position,unsigned int colour)
+{
+ if(!DeferObjectCoronas){RenderLightFlare(position,colour);return;}
+ LOCALASSERT(ObjectCoronaCount<2*maxobjects);
+ if(ObjectCoronaCount>=2*maxobjects)return;
+ ObjectCoronas[ObjectCoronaCount].position=*position;
+ ObjectCoronas[ObjectCoronaCount++].colour=colour;
+}
+static void BeginObjectCoronas(void){ObjectCoronaCount=0;DeferObjectCoronas=1;}
+static void DrawObjectCoronas(void)
+{
+ DeferObjectCoronas=0;
+ for(int i=0;i<ObjectCoronaCount;i++)
+  RenderLightFlare(&ObjectCoronas[i].position,ObjectCoronas[i].colour);
+ ObjectCoronaCount=0;
+}
+
 PARTICLE_DESC ParticleDescription[MAX_NO_OF_PARTICLE_IDS] =
 {
 	/* PARTICLE_PREDATOR_BLOOD */
@@ -1427,6 +1469,7 @@ static void DeallocatePheromoneTrail(PHEROMONE_TRAIL *trailPtr);
 void InitialiseParticleSystem(void)
 {
  	NumActiveParticles = 0;
+    memset(ParticleOwners,0,sizeof ParticleOwners);
 	NumberOfBloodParticles = 0;
 
  	NumActiveTrails = 0;
@@ -1449,6 +1492,8 @@ static PARTICLE* AllocateParticle(void)
 	if (NumActiveParticles != MAX_NO_OF_PARTICLES) 
 	{
 		particlePtr = &ParticleStorage[NumActiveParticles];
+        PlayerFlameVisual[NumActiveParticles].active=0;
+        ParticleOwners[NumActiveParticles]=NPCSupportCurrentSource();
 		NumActiveParticles++;
 	}
 	else
@@ -1466,6 +1511,8 @@ static void DeallocateParticle(PARTICLE *particlePtr)
 	
 	NumActiveParticles--;
 	*particlePtr = ParticleStorage[NumActiveParticles];
+    PlayerFlameVisual[particlePtr-ParticleStorage]=PlayerFlameVisual[NumActiveParticles];
+    ParticleOwners[particlePtr-ParticleStorage]=ParticleOwners[NumActiveParticles];
 }
 
 static PHEROMONE_TRAIL* AllocatePheromoneTrail(void)
@@ -1522,6 +1569,7 @@ static VOLUMETRIC_EXPLOSION* AllocateVolumetricExplosion(void)
 
 void MakeParticle(VECTORCH *positionPtr, VECTORCH *velocityPtr, enum PARTICLE_ID particleID)
 {
+ if(RenderPausedPreview)return;
 	PARTICLE *particlePtr;
 
 	if( (particleID == PARTICLE_ALIEN_BLOOD) || (particleID == PARTICLE_PREDATOR_BLOOD) || (particleID == PARTICLE_HUMAN_BLOOD)|| (particleID == PARTICLE_ANDROID_BLOOD))
@@ -1715,20 +1763,68 @@ void MakeParticle(VECTORCH *positionPtr, VECTORCH *velocityPtr, enum PARTICLE_ID
 	}
 }
 
+/* Tag only local-player emission. Allocation, randomness and physical velocity
+ * are exactly the same as MakeParticle; other emitters never acquire this tag. */
+void MakePlayerFlameParticle(VECTORCH *position,VECTORCH *velocity,VECTORCH *origin)
+{
+ int slot=NumActiveParticles;
+ MakeParticle(position,velocity,PARTICLE_FLAME);
+ if(NumActiveParticles==slot+1){
+  PlayerFlameVisual[slot].active=1;
+  PlayerFlameVisual[slot].birthLife=ParticleStorage[slot].LifeTime;
+  PlayerFlameVisual[slot].origin=*origin;
+ }
+}
+int ParticlePlayerFlameOffset(const PARTICLE *particle,double out[3])
+{
+ uintptr_t address=(uintptr_t)particle,first=(uintptr_t)ParticleStorage;
+ if(particle->ParticleID!=PARTICLE_FLAME || address<first || address>=first+sizeof ParticleStorage || (address-first)%sizeof(PARTICLE))return 0;
+ unsigned int slot=(unsigned int)((address-first)/sizeof(PARTICLE));
+ const PLAYER_FLAME_VISUAL *visual=&PlayerFlameVisual[slot];
+ if(!visual->active)return 0;
+ double age=(visual->birthLife-particle->LifeTime)/65536.0;
+ if(age<0 || age>=.12)return 0;
+ double anchor[3],origin[3];
+ if(!ViewmodelFlameAnchor(anchor))return 0;
+ GeometryTransformPoint(origin,visual->origin.vx,visual->origin.vy,visual->origin.vz);
+ /* C1 hand-off: emitted flame leaves the moving nozzle and settles onto
+    its original world trajectory over 120ms, never dragging distant fire. */
+ double u=age/.12,weight=1-u*u*(3-2*u);
+ for(int j=0;j<3;j++)out[j]=(anchor[j]-origin[j])*weight;
+ if(DevFlameValue(3)||DevFlameValue(4)||DevFlameValue(5)){
+  double point[3],delta[3],original[3];
+  GeometryTransformPoint(point,particle->Position.vx,particle->Position.vy,particle->Position.vz);
+  for(int j=0;j<3;j++)original[j]=delta[j]=point[j]-origin[j];
+  ViewmodelFlameDirection(delta);
+  for(int j=0;j<3;j++)out[j]+=(delta[j]-original[j])*weight;
+ }
+ return 1;
+}
+
 void HandleParticleSystem(void)
 {
+ if(RenderPausedPreview){
+  int n;for(n=0;n<NumActiveParticles;n++)ParticleStorage[n].NotYetRendered=1;
+  { EVENT_TICK stamp=EventLatencyBegin(); HandleDecalSystem(); EventLatencyEnd(stamp,"particles world decals",0,0,0,0,0); }{ EVENT_TICK stamp=EventLatencyBegin(); D3D_DecalSystem_End(); EventLatencyEnd(stamp,"particles decal flush",0,0,0,0,0); }
+  { EVENT_TICK stamp=EventLatencyBegin(); PostLandscapeRendering(); EventLatencyEnd(stamp,"particles post landscape",0,0,0,0,0); }{ EVENT_TICK stamp=EventLatencyBegin(); D3D_DecalSystem_Setup(); EventLatencyEnd(stamp,"particles decal setup",0,0,0,0,0); }{ EVENT_TICK stamp=EventLatencyBegin(); RenderParticlesForTranslucentPolyList(); EventLatencyEnd(stamp,"particles translucent queue",0,0,0,0,0); }
+  OutputTranslucentPolyList();
+  { EVENT_TICK stamp=EventLatencyBegin(); D3D_DecalSystem_End(); EventLatencyEnd(stamp,"particles decal flush",0,0,0,0,0); }
+  return;
+ }
+	EVENT_TICK particleUpdate;
 	int i;
 	PARTICLE *particlePtr;
-	HandleRipples();
+	{ EVENT_TICK stamp=EventLatencyBegin(); HandleRipples(); EventLatencyEnd(stamp,"particles ripple update",0,0,0,0,0); }
 //	D3D_DrawWaterTest();
 	
-	HandleDecalSystem();
-	D3D_DecalSystem_End();
+	{ EVENT_TICK stamp=EventLatencyBegin(); HandleDecalSystem(); EventLatencyEnd(stamp,"particles world decals",0,0,0,0,0); }
+	{ EVENT_TICK stamp=EventLatencyBegin(); D3D_DecalSystem_End(); EventLatencyEnd(stamp,"particles decal flush",0,0,0,0,0); }
 
 
 	
 //	textprint("Particles Active: %d\n",i);
-//	D3D_DecalSystem_Setup();
+//	{ EVENT_TICK stamp=EventLatencyBegin(); D3D_DecalSystem_Setup(); EventLatencyEnd(stamp,"particles decal setup",0,0,0,0,0); }
+	particleUpdate=EventLatencyBegin();
 	i = NumActiveParticles;
 	particlePtr = ParticleStorage;
 	
@@ -2802,11 +2898,13 @@ void HandleParticleSystem(void)
 		particlePtr++;
 	}
 	
+	EventLatencyEnd(particleUpdate,"particles physics/update",NumActiveParticles,0,0,0,0);
 	//
-	PostLandscapeRendering();
-	D3D_DecalSystem_Setup();
-	OutputTranslucentPolyList();
+	{ EVENT_TICK stamp=EventLatencyBegin(); PostLandscapeRendering(); EventLatencyEnd(stamp,"particles post landscape",0,0,0,0,0); }
+	{ EVENT_TICK stamp=EventLatencyBegin(); D3D_DecalSystem_Setup(); EventLatencyEnd(stamp,"particles decal setup",0,0,0,0,0); }
+	{ EVENT_TICK stamp=EventLatencyBegin(); RenderParticlesForTranslucentPolyList(); EventLatencyEnd(stamp,"particles translucent queue",0,0,0,0,0); }
 
+	particleUpdate=EventLatencyBegin();
 	i = NumActiveParticles;
 	particlePtr = ParticleStorage;
 	while(i--)
@@ -2842,23 +2940,26 @@ void HandleParticleSystem(void)
 		}
 	}
 	
+	EventLatencyEnd(particleUpdate,"particles retirement",NumActiveParticles,0,0,0,0);
+ BeginObjectCoronas();
 	{
 		extern int NumOnScreenBlocks;
 		extern DISPLAYBLOCK *OnScreenBlockList[];
 		int numOfObjects = NumOnScreenBlocks;
 		while(numOfObjects)
 		{
+			EVENT_TICK effectStamp=EventLatencyBegin();
 			DISPLAYBLOCK *objectPtr = OnScreenBlockList[--numOfObjects];
 			STRATEGYBLOCK *sbPtr = objectPtr->ObStrategyBlock;
 
 			if (!objectPtr->ObShape && objectPtr->SfxPtr)
 			{
-				DrawSfxObject(objectPtr);
+				{ EVENT_TICK stamp=EventLatencyBegin(); DrawSfxObject(objectPtr); EventLatencyEnd(stamp,"particles SFX object",0,0,0,0,0); }
 			}
 			if (objectPtr->HModelControlBlock)
 			{
 				SECTION_DATA *firstSectionPtr=objectPtr->HModelControlBlock->section_data;
-				ScanHModelForDecals(objectPtr,firstSectionPtr);
+				{ EVENT_TICK stamp=EventLatencyBegin(); ScanHModelForDecals(objectPtr,firstSectionPtr); EventLatencyEnd(stamp,"particles model decals",0,0,0,0,0); }
 			}
 			if (sbPtr)
 			{
@@ -2885,7 +2986,7 @@ void HandleParticleSystem(void)
 							position.vy += objectPtr->ObWorld.vy;
 							position.vz += objectPtr->ObWorld.vz;
 							
-							if (CameraCanSeeThisPosition_WithIgnore(objectPtr,&position))
+							if (CameraCanSeeEffectThroughGlass(objectPtr,&position))
 							{
 								LIGHTBLOCK *lPtr = pl_bhv->light;
 								int colour;
@@ -2923,7 +3024,7 @@ void HandleParticleSystem(void)
 									  	break;
 									}
 								}
-								RenderLightFlare(&position,colour);
+								SubmitObjectCorona(&position,colour);
 							}
 						}
 
@@ -2949,7 +3050,7 @@ void HandleParticleSystem(void)
 						{
 							if (sbPtr->DynPtr)
 							{
-								if (CameraCanSeeThisPosition_WithIgnore(objectPtr,&(sbPtr->DynPtr->Position)))
+								if (CameraCanSeeEffectThroughGlass(objectPtr,&(sbPtr->DynPtr->Position)))
 								{
 									int colour;
 									switch (CurrentVisionMode)
@@ -2973,7 +3074,7 @@ void HandleParticleSystem(void)
 										  	break;
 										}
 									}
-									RenderLightFlare(&(sbPtr->DynPtr->Position),colour);
+									SubmitObjectCorona(&(sbPtr->DynPtr->Position),colour);
 								}
 							}
 						}
@@ -2984,7 +3085,7 @@ void HandleParticleSystem(void)
 					{
 						if (sbPtr->DynPtr)
 						{
-							if (CameraCanSeeThisPosition_WithIgnore(objectPtr,&(sbPtr->DynPtr->Position)))
+							if (CameraCanSeeEffectThroughGlass(objectPtr,&(sbPtr->DynPtr->Position)))
 							{
 								int colour;
 								switch (CurrentVisionMode)
@@ -3008,7 +3109,7 @@ void HandleParticleSystem(void)
 									  	break;
 									}
 								}
-								RenderLightFlare(&(sbPtr->DynPtr->Position),colour);
+								SubmitObjectCorona(&(sbPtr->DynPtr->Position),colour);
 							}
 						}
 						break;
@@ -3047,7 +3148,7 @@ void HandleParticleSystem(void)
 										  	break;
 										}
 									}
-									RenderLightFlare(&(laserPtr->SourcePosition),colour);
+									SubmitObjectCorona(&(laserPtr->SourcePosition),colour);
 								}
 								else
 								{
@@ -3147,7 +3248,12 @@ void HandleParticleSystem(void)
 					}
 				}
 			}
-		}
+        /* DISPLAYBLOCK.name is not a reliable resource string for dynamic
+         * actors. Use the real map module; the binary SB id still identifies actors. */
+		EventLatencyEnd(effectStamp,"particles object effects",sbPtr?sbPtr->I_SBtype:-1,0,
+                sbPtr?EventLatencyId(sbPtr->SBname):0,
+                objectPtr->ObMyModule?objectPtr->ObMyModule->name:NULL,0);
+        }
 	}
 	HandlePheromoneTrails();
 	{
@@ -3158,27 +3264,57 @@ void HandleParticleSystem(void)
 				HandleVolumetricExplosion(&ExplosionStorage[i]);
 		}
 	}
+	/* World particles remain behind glass; optical glare follows its surface. */
+	D3D_DecalSystem_Setup();
+	OutputTranslucentPolyList();
+ DrawObjectCoronas();
 	//RenderBoom();
    	//RenderFog();
-	D3D_DecalSystem_End();
+	{ EVENT_TICK stamp=EventLatencyBegin(); D3D_DecalSystem_End(); EventLatencyEnd(stamp,"particles decal flush",0,0,0,0,0); }
 	
+}
+
+static PARTICLE_RENDER_ORDER ParticleRenderOrder;
+void BeginParticleRenderOrder(const int *thresholds,int count)
+{
+    ParticleOrderBegin(&ParticleRenderOrder,thresholds,count);
+}
+void EndParticleRenderOrder(void){ParticleRenderOrder.active=0;}
+/* New particles appended by collision callbacks join the NEXT invocation,
+ * exactly like the old loop's snapshot of NumActiveParticles. */
+static void QueueNewRenderParticles(void)
+{
+    for(int index=ParticleRenderOrder.knownParticles;index<NumActiveParticles;index++){
+        if(ParticleStorage[index].NotYetRendered){
+            VECTORCH position=ParticleStorage[index].Position;
+            TranslatePointIntoViewspace(&position);
+            ParticleOrderQueue(&ParticleRenderOrder,index,position.vz);
+        }
+    }
+    ParticleRenderOrder.knownParticles=NumActiveParticles;
 }
 
 void RenderAllParticlesFurtherAwayThan(int zThreshold)
 {
 	/* now render particles */
-	int i = NumActiveParticles;
-	PARTICLE *particlePtr = ParticleStorage;
-	while(i--)
-	{
+    int ordered=ParticleRenderOrder.active && ParticleRenderOrder.slot<ParticleRenderOrder.count
+        && ParticleRenderOrder.threshold[ParticleRenderOrder.slot]==zThreshold
+        && NumActiveParticles>=ParticleRenderOrder.knownParticles;
+    if(ordered)QueueNewRenderParticles();else ParticleRenderOrder.active=0;
+    int limit=NumActiveParticles;
+    int index=ordered?ParticleRenderOrder.head[ParticleRenderOrder.slot]:0;
+    while(index>=0 && index<limit)
+    {
+        PARTICLE *particlePtr=&ParticleStorage[index];
+        int next=ordered?ParticleRenderOrder.next[index]:index+1;
 		if (particlePtr->NotYetRendered)
 		{
-			VECTORCH position = particlePtr->Position;
-			TranslatePointIntoViewspace(&position);
-
-			if (position.vz>zThreshold)
+            VECTORCH position;
+            if(!ordered){position=particlePtr->Position;TranslatePointIntoViewspace(&position);}
+            if (ordered || position.vz>zThreshold)
 			{
 				particlePtr->NotYetRendered = 0;
+                if(RenderPausedPreview){RenderParticle(particlePtr);index=next;continue;}
 				switch(particlePtr->ParticleID)
 				{
 					case PARTICLE_ALIEN_BLOOD:
@@ -3378,14 +3514,15 @@ void RenderAllParticlesFurtherAwayThan(int zThreshold)
 				}
 			}
 		}
-		particlePtr++;
+		index=next;
 	}
+    if(ordered)ParticleRenderOrder.slot++;
 }
 void DoFlareCorona(DISPLAYBLOCK *objectPtr)
 {
 	VECTORCH position=objectPtr->ObWorld;
 	
-	if (CameraCanSeeThisPosition_WithIgnore(objectPtr,&position))
+	if (CameraCanSeeEffectThroughGlass(objectPtr,&position))
 	{
 		LIGHTBLOCK *lPtr = objectPtr->ObLights[0];
 		int a = lPtr->LightBright>>8;
@@ -3421,7 +3558,7 @@ void DoFlareCorona(DISPLAYBLOCK *objectPtr)
 			  	break;
 			}
 		}
-		RenderLightFlare(&position,colour);
+		SubmitObjectCorona(&position,colour);
 	}
 }
 #define MAX_RAINDROPS 1000
@@ -3429,8 +3566,10 @@ static PARTICLE RainDropStorage[MAX_RAINDROPS];
 #define MAX_NO_OF_RIPPLES 100
 RIPPLE RippleStorage[MAX_NO_OF_RIPPLES];
 int ActiveRippleNumber;
+static int RippleRadiusFraction[100],RippleAmplitudeFraction[100];
 void InitialiseRainDrops(void)
 {
+ WaterReset();
 	{
 		int i = MAX_RAINDROPS;
 		PARTICLE *particlePtr = RainDropStorage;
@@ -3455,8 +3594,18 @@ void InitialiseRainDrops(void)
 	}
 }
 
+static void RenderPausedRain(int count,int shaft)
+{
+ if(count>MAX_RAINDROPS)count=MAX_RAINDROPS;
+ for(int n=0;n<count;n++){
+  PARTICLE *p=&RainDropStorage[n];if(p->Position.vy==0x7fffffff)continue;
+  if(shaft)RenderParticle(p);
+  else {VECTORCH prev=p->Position;prev.vx-=p->Velocity.vx/60;prev.vy-=p->Velocity.vy/60;prev.vz-=p->Velocity.vz/60;D3D_DrawParticle_Rain(p,&prev);}
+ }
+}
 void HandleRainDrops(MODULE *modulePtr,int numberOfRaindrops)
 {
+ if(RenderPausedPreview){RenderPausedRain(numberOfRaindrops,0);return;}
 	int i = numberOfRaindrops;
 
 	PARTICLE *particlePtr = RainDropStorage;
@@ -3512,6 +3661,7 @@ void HandleRainDrops(MODULE *modulePtr,int numberOfRaindrops)
 #if 0
 void HandleRain(MODULE *modulePtr,int numberOfRaindrops)
 {
+ if(RenderPausedPreview){RenderPausedRain(numberOfRaindrops,0);return;}
 	int i = numberOfRaindrops;
 	/* KJL 15:23:37 12/8/97 - this is written to work with the yard in genshd1 */
 
@@ -3575,6 +3725,7 @@ void HandleRain(MODULE *modulePtr,int numberOfRaindrops)
 #endif
 void HandleRain(int numberOfRaindrops)
 {
+ if(RenderPausedPreview){RenderPausedRain(numberOfRaindrops,0);return;}
 	int i = numberOfRaindrops;
 	/* KJL 15:23:37 12/8/97 - this is written to work with the yard in genshd1 */
 
@@ -3645,6 +3796,7 @@ void HandleRain(int numberOfRaindrops)
 }
 void HandleRainInTrench(int numberOfRaindrops)
 {
+ if(RenderPausedPreview){RenderPausedRain(numberOfRaindrops,0);return;}
 	int i = numberOfRaindrops;
 	/* KJL 15:23:37 12/8/97 - this is written to work with the yard in genshd1 */
 
@@ -3708,6 +3860,7 @@ void HandleRainInTrench(int numberOfRaindrops)
 
 void HandleRainShaft(MODULE *modulePtr, int bottomY, int topY, int numberOfRaindrops)
 {
+ if(RenderPausedPreview){RenderPausedRain(numberOfRaindrops,1);return;}
 	int i = numberOfRaindrops;
 	PARTICLE_DESC *particleDescPtr = &ParticleDescription[PARTICLE_WATERFALLSPRAY];
 
@@ -3779,22 +3932,41 @@ void HandleRainShaft(MODULE *modulePtr, int bottomY, int topY, int numberOfRaind
 
 void HandleRipples(void)
 {
+ WaterAdvance(NormalFrameTime);
 	int i;
 
 	for(i=0; i<MAX_NO_OF_RIPPLES; i++)
 	{
 		if (RippleStorage[i].Active)
 		{	
-			RippleStorage[i].Radius	+= MUL_FIXED(2400,NormalFrameTime);
+			int64_t radius=(int64_t)2400*NormalFrameTime+RippleRadiusFraction[i];
+            int64_t decay=(int64_t)50*NormalFrameTime+RippleAmplitudeFraction[i];
+            RippleStorage[i].Radius += (int)(radius/65536);
+            RippleRadiusFraction[i]=(int)(radius%65536);
+            RippleStorage[i].Amplitude -= (int)(decay/65536);
+            RippleAmplitudeFraction[i]=(int)(decay%65536);
 			RippleStorage[i].InvRadius = DIV_FIXED(4090,RippleStorage[i].Radius);
-			RippleStorage[i].Amplitude -= MUL_FIXED(50,NormalFrameTime);
+			/* Decay retains the sub-unit fraction above. */
 			
-			if (RippleStorage[i].Amplitude<0)
+			if (RippleStorage[i].Amplitude<=0)
 			{
 				RippleStorage[i].Active = 0;
 			}
 		}
 	}
+}
+
+/* Read-only snapshot: keep the original ripple storage and Vanilla evaluator. */
+int WaterRippleSnapshot(float (*ripples)[4],float (*inverseRadius)[4],int capacity)
+{
+ int n=0;
+ for(int i=0;i<MAX_NO_OF_RIPPLES && n<capacity;i++)if(RippleStorage[i].Active){
+  ripples[n][0]=RippleStorage[i].X; ripples[n][1]=RippleStorage[i].Z;
+  ripples[n][2]=RippleStorage[i].Radius; ripples[n][3]=RippleStorage[i].Amplitude;
+  inverseRadius[n][0]=RippleStorage[i].InvRadius;
+  inverseRadius[n][1]=inverseRadius[n][2]=inverseRadius[n][3]=0; n++;
+ }
+ return n;
 }
 
 int EffectOfRipples(VECTORCH *point)
@@ -3851,6 +4023,9 @@ void AddRipple(int x,int z,int amplitude)
 	RippleStorage[ActiveRippleNumber].X = x;
 	RippleStorage[ActiveRippleNumber].Z = z;
 	RippleStorage[ActiveRippleNumber].Radius = 200;
+    RippleStorage[ActiveRippleNumber].InvRadius = DIV_FIXED(4090,200);
+    RippleRadiusFraction[ActiveRippleNumber]=RippleAmplitudeFraction[ActiveRippleNumber]=0;
+    WaterDrop(x,z,amplitude);
 	RippleStorage[ActiveRippleNumber].Amplitude = amplitude;
 
 	ActiveRippleNumber++;
@@ -3861,6 +4036,8 @@ void AddRipple(int x,int z,int amplitude)
 
 void CheckForObjectsInWater(int minX, int maxX, int minZ, int maxZ, int averageY)
 {
+ WaterRegister(minX,maxX,minZ,maxZ,averageY);
+ if(RenderPausedPreview)return;
    	extern int NumActiveBlocks;
 	extern DISPLAYBLOCK* ActiveBlockList[];
    	int numberOfObjects = NumActiveBlocks;
@@ -3968,7 +4145,8 @@ void CheckForObjectsInWater(int minX, int maxX, int minZ, int maxZ, int averageY
 				}
 				{
 					
-					AddRipple(dynPtr->Position.vx,dynPtr->Position.vz,100);
+					if(WaterObjectRipple(objectPtr,dynPtr->Position.vx,dynPtr->Position.vz,averageY))
+                    AddRipple(dynPtr->Position.vx,dynPtr->Position.vz,100);
 					#if 0
 					{
 						int i;
@@ -5480,7 +5658,9 @@ typedef struct particle_save_block_header
 
 void Load_Particles(SAVE_BLOCK_HEADER* header)
 {
+	if(header->size<sizeof(PARTICLE_SAVE_BLOCK_HEADER))return;
 	PARTICLE_SAVE_BLOCK_HEADER* block = (PARTICLE_SAVE_BLOCK_HEADER*) header;
+	if(block->NumActiveParticles<0 || block->NumActiveParticles>MAX_NO_OF_PARTICLES)return;
 	PARTICLE* saved_particle = (PARTICLE*)(block+1);
 	int expected_size;
 	int i;
@@ -5491,7 +5671,9 @@ void Load_Particles(SAVE_BLOCK_HEADER* header)
 	if(header->size != expected_size) return;
 
 	//right copy the stuff then
-	NumActiveParticles = block->NumActiveParticles;
+	if(block->NumActiveParticles<0 || block->NumActiveParticles>MAX_NO_OF_PARTICLES)return;
+    memset(ParticleOwners,0,sizeof ParticleOwners);
+    NumActiveParticles = block->NumActiveParticles;
 	NumberOfBloodParticles = block->NumberOfBloodParticles;
 
 	for(i=0;i<NumActiveParticles;i++)
@@ -5500,6 +5682,7 @@ void Load_Particles(SAVE_BLOCK_HEADER* header)
 	}	
 }
 
+static void ParticleSupportSaveOwners(void);
 void Save_Particles()
 {
 	PARTICLE_SAVE_BLOCK_HEADER* block;
@@ -5524,6 +5707,23 @@ void Save_Particles()
 		PARTICLE* particle = GetPointerForSaveBlock(sizeof(PARTICLE));
 		*particle = ParticleStorage[i];
 	}	
+    ParticleSupportSaveOwners();
+}
+
+typedef struct {SAVE_BLOCK_HEADER header;int schema,count;} PARTICLE_OWNER_SAVE;
+void ParticleSupportLoadOwners(SAVE_BLOCK_HEADER *header){
+ if(header->size<sizeof(PARTICLE_OWNER_SAVE))return;
+ PARTICLE_OWNER_SAVE *b=(PARTICLE_OWNER_SAVE*)header;
+ if(b->schema!=244 || b->count!=NumActiveParticles || b->count<0 || b->count>MAX_NO_OF_PARTICLES || header->size!=sizeof(*b)+b->count*sizeof(NPC_DAMAGE_SOURCE))return;
+ memcpy(ParticleOwners,b+1,b->count*sizeof(NPC_DAMAGE_SOURCE));
+}
+static void ParticleSupportSaveOwners(void){
+ NPC_DAMAGE_SOURCE empty={0};int found=0;
+ for(int i=0;i<NumActiveParticles;i++)if(memcmp(ParticleOwners[i].name,empty.name,SB_NAME_LENGTH)){found=1;break;}
+ if(!found)return;
+ int size=sizeof(PARTICLE_OWNER_SAVE)+NumActiveParticles*sizeof(NPC_DAMAGE_SOURCE);
+ PARTICLE_OWNER_SAVE *b=GetPointerForSaveBlock(size);b->header.type=SaveBlock_NPCSupport;b->header.size=size;b->schema=244;b->count=NumActiveParticles;
+ memcpy(b+1,ParticleOwners,NumActiveParticles*sizeof(NPC_DAMAGE_SOURCE));
 }
 
 /*----------------------**

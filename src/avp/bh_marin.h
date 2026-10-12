@@ -1,3 +1,6 @@
+#include "npc_local_nav.h"
+#include "npc_precision.h"
+#include "npc_inventory.h"
 /*--------------Patrick 14/2/97----------------
   Header file for marine support functions
   ---------------------------------------------*/
@@ -245,7 +248,17 @@
 		NPC_AVOIDANCEMANAGER avoidanceManager;
 		WAYPOINT_MANAGER waypointManager;
 
- 	}MARINE_STATUS_BLOCK;
+ 	 AIMODULE *supportSource,*supportDestination,*supportNext;
+     int supportRouteTimer;
+     NPC_LOCAL_NAV localNav;
+     NPC_MARINE_SQUAD squad;
+     double smartAim[3];
+     char smartAimTarget[SB_NAME_LENGTH];
+     int smartAimValid;
+     int sentryGoalTimer;
+     char sentryGoalName[SB_NAME_LENGTH];
+     NPC_MOTION_RUNTIME precision; /* runtime only, never serialized */
+}MARINE_STATUS_BLOCK;
 
 	typedef enum marine_npc_weapons {
 

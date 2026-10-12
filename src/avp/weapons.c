@@ -1,7 +1,14 @@
+#include "fire_input.h"
+#include "optimized_ammo.h"
+#include "molecular_acid.h"
+#include "fidget_timer.h"
+#include "weapon_jam_timer.h"
 /*KJL******************************************************************
 * weapon.c - this is home to the weapon state machine and related fns *
 ******************************************************************KJL*/
 #include "3dc.h"
+#include "viewmodel.h"
+#include "camera_motion.h"
 #include "module.h"
 #include "inline.h"
 
@@ -15,6 +22,8 @@
 #include "load_shp.h"
 #include "huddefs.h"
 
+#include "savegame.h"
+#include "npc_support.h"
 #define UseLocalAssert Yes
 #include "ourasert.h"
 
@@ -38,6 +47,7 @@
 #include "bh_videoscreen.h"
 #include "bh_track.h"
 #include "weapons.h"
+#include "dev_viewmodel.h"
 #include "avpview.h"
 
 #include "psnd.h"
@@ -133,6 +143,28 @@ extern ACTIVESOUNDSAMPLE ActiveSounds[];
 extern NETGAME_GAMEDATA netGameData;
 
 int WeaponFidgetPlaying;
+static FIDGET_TIMER WeaponFidgetTimer;
+static WEAPON_JAM_TIMER PulseRifleJamTimer;
+static int WeaponFidgetWasEligible, WeaponFidgetWeaponID = -1;
+static void WeaponFidgetBeginFrame(const PLAYER_WEAPON_DATA *weapon)
+{
+ if(WeaponFidgetWeaponID!=weapon->WeaponIDNumber)FidgetTimerReset(&WeaponFidgetTimer);
+ WeaponFidgetWeaponID=weapon->WeaponIDNumber;
+ WeaponFidgetWasEligible=0;
+}
+static int WeaponFidgetReady(void)
+{
+ WeaponFidgetWasEligible=1;
+ if(!WeaponFidgetTimer.randomState && NormalFrameTime>0)
+  WeaponFidgetTimer.randomState=(uint32_t)FastRandom()|1u;
+ return FidgetTimerReady(&WeaponFidgetTimer,NormalFrameTime);
+}
+static void WeaponFidgetEndFrame(void)
+{
+ /* Firing, reloading, running instead of standing, or playing a fidget all
+    suspend eligibility. A fresh 5..12 second wait starts after they finish. */
+ if(!WeaponFidgetWasEligible)FidgetTimerReset(&WeaponFidgetTimer);
+}
 int Old_Minigun_SpinSpeed;
 int Minigun_SpinSpeed;
 int Weapon_ThisBurst;
@@ -652,6 +684,7 @@ enum PARTICLE_ID GetBloodType(STRATEGYBLOCK *sbPtr) {
 }
 
 static int FirePrimaryLate,FireSecondaryLate;
+static FIRE_INPUT_STATE FireInput={-1,0,0,0,0};
 
 void UpdateWeaponStateMachine(void)
 {
@@ -667,6 +700,8 @@ void UpdateWeaponStateMachine(void)
     GLOBALASSERT(playerStatusPtr->SelectedWeaponSlot<MAX_NO_OF_WEAPON_SLOTS);
     
 	if (playerStatusPtr->MyFaceHugger) {
+        FireInputReset(&FireInput);
+		FidgetTimerReset(&WeaponFidgetTimer);
 		return;
 	}
 
@@ -674,6 +709,13 @@ void UpdateWeaponStateMachine(void)
 
     /* init a pointer to the weapon's data */
     weaponPtr = &(playerStatusPtr->WeaponSlot[playerStatusPtr->SelectedWeaponSlot]);
+ FireInputUpdate(&FireInput,weaponPtr->WeaponIDNumber,
+   playerStatusPtr->Mvt_InputRequests.Flags.Rqst_FirePrimaryWeapon,
+   playerStatusPtr->Mvt_InputRequests.Flags.Rqst_FireSecondaryWeapon,NormalFrameTime,
+   playerStatusPtr->IsAlive && !playerStatusPtr->MyFaceHugger &&
+   (weaponPtr->CurrentState==WEAPONSTATE_IDLE || weaponPtr->CurrentState==WEAPONSTATE_WAITING ||
+    weaponPtr->CurrentState==WEAPONSTATE_FIRING_PRIMARY || weaponPtr->CurrentState==WEAPONSTATE_RECOIL_PRIMARY));
+
 
 	justfiredp=0; // Has the player just fired...
 	justfireds=0; // Has the player just fired...
@@ -690,12 +732,17 @@ void UpdateWeaponStateMachine(void)
 
 	/* Player doesn't have a weapon! This will eventually be changed into an assertion 
 	that the player *does* have a weapon */
-	if (weaponPtr->WeaponIDNumber == NULL_WEAPON)
+	if (weaponPtr->WeaponIDNumber == NULL_WEAPON) {
+        FireInputReset(&FireInput);
+		FidgetTimerReset(&WeaponFidgetTimer);
 		return;
+	}
 
 	/* Player is dead. Weapon goes idle */
     if (!playerStatusPtr->IsAlive)
 	{
+        FireInputReset(&FireInput);
+		FidgetTimerReset(&WeaponFidgetTimer);
 		#if 0
 		WeaponCreateStartFrame((void *)playerStatusPtr, weaponPtr);
 		#endif
@@ -817,22 +864,20 @@ void UpdateWeaponStateMachine(void)
 			    {
 			    	/* load a new magazine */
                     TEMPLATE_AMMO_DATA *templateAmmoPtr = &TemplateAmmo[twPtr->PrimaryAmmoID];
-					if (weaponPtr->PrimaryRoundsRemaining==0) {
-						if (weaponPtr->WeaponIDNumber==WEAPON_TWO_PISTOLS) {
-							/* Two pistols reloads BOTH primary and secondary. */
-							if (weaponPtr->PrimaryMagazinesRemaining) {
-			                	weaponPtr->PrimaryRoundsRemaining = templateAmmoPtr->AmmoPerMagazine;
-			                	weaponPtr->PrimaryMagazinesRemaining--;
-							}
-							if (weaponPtr->SecondaryMagazinesRemaining) {
-			                	weaponPtr->SecondaryRoundsRemaining = templateAmmoPtr->AmmoPerMagazine;
-			                	weaponPtr->SecondaryMagazinesRemaining--;
-							}
-						} else {
-							/* Grenade launcher has already reloaded at this point. */
-		                	weaponPtr->PrimaryRoundsRemaining = templateAmmoPtr->AmmoPerMagazine;
-		                	weaponPtr->PrimaryMagazinesRemaining--;
+					if (weaponPtr->WeaponIDNumber==WEAPON_TWO_PISTOLS) {
+						/* Two pistols reload each incomplete magazine independently. */
+						if (weaponPtr->PrimaryMagazinesRemaining
+							&& weaponPtr->PrimaryRoundsRemaining<AcidMagazineRounds((int)(templateAmmoPtr-TemplateAmmo), templateAmmoPtr->AmmoPerMagazine)) {
+		                	ReloadWeaponMagazine(weaponPtr, 0);
 						}
+						if (weaponPtr->SecondaryMagazinesRemaining
+							&& weaponPtr->SecondaryRoundsRemaining<AcidMagazineRounds((int)(templateAmmoPtr-TemplateAmmo), templateAmmoPtr->AmmoPerMagazine)) {
+		                	ReloadWeaponMagazine(weaponPtr, 1);
+						}
+					} else if (weaponPtr->PrimaryMagazinesRemaining
+						&& weaponPtr->PrimaryRoundsRemaining<AcidMagazineRounds((int)(templateAmmoPtr-TemplateAmmo), templateAmmoPtr->AmmoPerMagazine)) {
+						/* The keyframe path may have filled the grenade launcher already. */
+		                	ReloadWeaponMagazine(weaponPtr, 0);
 					}
                		weaponPtr->CurrentState = WEAPONSTATE_IDLE;
 			    	weaponPtr->StateTimeOutCounter=0;
@@ -844,8 +889,7 @@ void UpdateWeaponStateMachine(void)
 			    {
 			    	/* load a new magazine */
                     TEMPLATE_AMMO_DATA *templateAmmoPtr = &TemplateAmmo[twPtr->SecondaryAmmoID];
-                	weaponPtr->SecondaryRoundsRemaining = templateAmmoPtr->AmmoPerMagazine;
-                	weaponPtr->SecondaryMagazinesRemaining--;
+                	ReloadWeaponMagazine(weaponPtr, 1);
                		weaponPtr->CurrentState = WEAPONSTATE_IDLE;
 			    	weaponPtr->StateTimeOutCounter=0;
 					
@@ -946,13 +990,10 @@ void UpdateWeaponStateMachine(void)
 				case WEAPONSTATE_WAITING:
 				{
 					/* wait for player to take his finger of fire */
-					if( (!(playerStatusPtr->Mvt_InputRequests.Flags.Rqst_FirePrimaryWeapon
-					     ||playerStatusPtr->Mvt_InputRequests.Flags.Rqst_FireSecondaryWeapon))
-					|| (/* Alien Claw! */ 
-						(weaponPtr->WeaponIDNumber == WEAPON_ALIEN_CLAW)
-						&&(twPtr->PrimaryIsAutomatic)
-						&&(playerStatusPtr->Mvt_InputRequests.Flags.Rqst_FirePrimaryWeapon)
-						) )
+					if ((!playerStatusPtr->Mvt_InputRequests.Flags.Rqst_FirePrimaryWeapon &&
+                         !playerStatusPtr->Mvt_InputRequests.Flags.Rqst_FireSecondaryWeapon) ||
+                        FireInputPrimary(&FireInput,playerStatusPtr->Mvt_InputRequests.Flags.Rqst_FirePrimaryWeapon,twPtr->PrimaryIsAutomatic) ||
+                        FireInputSecondary(&FireInput,playerStatusPtr->Mvt_InputRequests.Flags.Rqst_FireSecondaryWeapon,twPtr->SecondaryIsAutomatic))
 					{
 		        		weaponPtr->CurrentState = WEAPONSTATE_IDLE;
 				    	weaponPtr->StateTimeOutCounter=0;
@@ -1126,19 +1167,45 @@ void UpdateWeaponStateMachine(void)
         }
         
 	}
+	WeaponFidgetBeginFrame(weaponPtr);
 	StateDependentMovement(playerStatusPtr,weaponPtr);
+	WeaponFidgetEndFrame();
 	PositionPlayersWeapon();
     
+}
+
+static int TryManualWeaponReload(PLAYER_STATUS *playerStatusPtr,PLAYER_WEAPON_DATA *weaponPtr,TEMPLATE_WEAPON_DATA *twPtr)
+{
+	/* Manual reload enters the same native state as automatic empty-magazine reload.
+	   It is available only to reloadable Marine weapons. */
+	if (playerStatusPtr->Mvt_InputRequests.Flags.Rqst_ReloadWeapon
+		&& (AvP.PlayerType==I_Marine)
+		&& (twPtr->PrimaryAmmoID!=AMMO_NONE)
+		&& !twPtr->PrimaryIsMeleeWeapon
+		&& ((weaponPtr->PrimaryMagazinesRemaining>0
+			 && weaponPtr->PrimaryRoundsRemaining<AcidMagazineRounds(twPtr->PrimaryAmmoID, TemplateAmmo[twPtr->PrimaryAmmoID].AmmoPerMagazine))
+			|| (weaponPtr->WeaponIDNumber==WEAPON_TWO_PISTOLS
+			 && weaponPtr->SecondaryMagazinesRemaining>0
+			 && weaponPtr->SecondaryRoundsRemaining<AcidMagazineRounds(twPtr->PrimaryAmmoID, TemplateAmmo[twPtr->PrimaryAmmoID].AmmoPerMagazine))))
+	{
+		weaponPtr->CurrentState = WEAPONSTATE_RELOAD_PRIMARY;
+		weaponPtr->StateTimeOutCounter = WEAPONSTATE_INITIALTIMEOUTCOUNT;
+		return 1;
+	}
+
+ return 0;
 }
 
 static void WeaponStateIdle(PLAYER_STATUS *playerStatusPtr,PLAYER_WEAPON_DATA *weaponPtr,TEMPLATE_WEAPON_DATA *twPtr, int justfiredp, int justfireds, int ps)
 {
 	int CanFirePrimary, CanFireSecondary;
-	int WishToFirePrimary,PrimaryFired;
+	int WishToFirePrimary,WishToFireSecondary,PrimaryFired;
 
 	CanFirePrimary=1;
 	CanFireSecondary=1;
 	PrimaryFired=0;
+
+ if(TryManualWeaponReload(playerStatusPtr,weaponPtr,twPtr))return;
 
 	if ( (twPtr->FireInChangeVision==0)&&(IsVisionChanging()) ) {
 		CanFirePrimary=0;
@@ -1152,7 +1219,16 @@ static void WeaponStateIdle(PLAYER_STATUS *playerStatusPtr,PLAYER_WEAPON_DATA *w
 	}
 	#endif
 
-	WishToFirePrimary=playerStatusPtr->Mvt_InputRequests.Flags.Rqst_FirePrimaryWeapon;
+	WishToFirePrimary=FireInputPrimary(&FireInput,
+      playerStatusPtr->Mvt_InputRequests.Flags.Rqst_FirePrimaryWeapon,twPtr->PrimaryIsAutomatic);
+ WishToFireSecondary=FireInputSecondary(&FireInput,
+      playerStatusPtr->Mvt_InputRequests.Flags.Rqst_FireSecondaryWeapon,twPtr->SecondaryIsAutomatic);
+ /* Unsupported/empty secondary modes must not starve an available primary. */
+ if(!twPtr->FireSecondaryFunction && !twPtr->SecondaryIsMeleeWeapon)WishToFireSecondary=0;
+ if(WishToFirePrimary && twPtr->SecondaryAmmoID!=AMMO_NONE && !twPtr->SecondaryIsMeleeWeapon &&
+    !weaponPtr->SecondaryRoundsRemaining &&
+    !((weaponPtr->WeaponIDNumber==WEAPON_MARINE_PISTOL || weaponPtr->WeaponIDNumber==WEAPON_TWO_PISTOLS) &&
+      weaponPtr->PrimaryRoundsRemaining))WishToFireSecondary=0;
 
 	if (weaponPtr->WeaponIDNumber == WEAPON_MINIGUN) {
 		if ((Weapon_ThisBurst<MINIGUN_MINIMUM_BURST)&&(Weapon_ThisBurst>=0)
@@ -1178,6 +1254,9 @@ static void WeaponStateIdle(PLAYER_STATUS *playerStatusPtr,PLAYER_WEAPON_DATA *w
 		}
 	}
 
+	/* Secondary requests take priority at the existing legal idle boundary.
+     * No cooldown, reload, recoil, melee strike or jam is interrupted. */
+    if(WishToFireSecondary && CanFireSecondary)WishToFirePrimary=0;
 	/* does the player wish to fire primary ammo*/
    	if ((WishToFirePrimary)&&(CanFirePrimary)) {
     	if (twPtr->PrimaryAmmoID != AMMO_NONE) {
@@ -1201,7 +1280,12 @@ static void WeaponStateIdle(PLAYER_STATUS *playerStatusPtr,PLAYER_WEAPON_DATA *w
 				||( (weaponPtr->WeaponIDNumber==WEAPON_TWO_PISTOLS)&&(weaponPtr->SecondaryRoundsRemaining) )) {
 			
        			/* consider probability of jamming */
-   	  		   	if (twPtr->ProbabilityOfJamming > Random16BitNumber) {
+                if(weaponPtr->WeaponIDNumber==WEAPON_PULSERIFLE &&
+                   NormalFrameTime>0 && !PulseRifleJamTimer.randomState)
+                    PulseRifleJamTimer.randomState=(uint32_t)FastRandom()|1u;
+   	  		   	if ((weaponPtr->WeaponIDNumber==WEAPON_PULSERIFLE)
+                    ? WeaponJamReady(&PulseRifleJamTimer,NormalFrameTime,twPtr->ProbabilityOfJamming)
+                    : (twPtr->ProbabilityOfJamming > Random16BitNumber)) {
 					weaponPtr->CurrentState = WEAPONSTATE_JAMMED;
 					weaponPtr->StateTimeOutCounter = WEAPONSTATE_INITIALTIMEOUTCOUNT;
        		  	} else { /* okay, the weapon is able to fire */
@@ -1267,7 +1351,8 @@ static void WeaponStateIdle(PLAYER_STATUS *playerStatusPtr,PLAYER_WEAPON_DATA *w
 				weaponPtr->StateTimeOutCounter = WEAPONSTATE_INITIALTIMEOUTCOUNT;
 			}
 		}
-    } else if((playerStatusPtr->Mvt_InputRequests.Flags.Rqst_FireSecondaryWeapon)&&(CanFireSecondary)) {
+    } else if((WishToFireSecondary)&&(CanFireSecondary)) {
+        FireInput.secondaryQueued=0;
 		/* or the secondary ammo */
     	if (twPtr->SecondaryAmmoID != AMMO_NONE) {
            	if (twPtr->SecondaryIsMeleeWeapon) {
@@ -1306,11 +1391,11 @@ static void WeaponStateIdle(PLAYER_STATUS *playerStatusPtr,PLAYER_WEAPON_DATA *w
 	              	    	weaponPtr->CurrentState = WEAPONSTATE_FIRING_SECONDARY;
 							weaponPtr->StateTimeOutCounter = WEAPONSTATE_INITIALTIMEOUTCOUNT;
 						} else if ((*twPtr->FireSecondaryFunction)(weaponPtr)) {
-							if (twPtr->SecondaryMuzzleFlash) {					
+							if (twPtr->SecondaryMuzzleFlash)					
 								AddLightingEffectToObject(Player,LFX_MUZZLEFLASH);
 		              	    	weaponPtr->CurrentState = WEAPONSTATE_FIRING_SECONDARY;
 								weaponPtr->StateTimeOutCounter = WEAPONSTATE_INITIALTIMEOUTCOUNT;
-							}
+							
 						}
 					}
 				}
@@ -1567,6 +1652,9 @@ static void WeaponStateIdle(PLAYER_STATUS *playerStatusPtr,PLAYER_WEAPON_DATA *w
 			Weapon_ThisBurst=-1;
 		}
 	}
+ if(weaponPtr->CurrentState==WEAPONSTATE_FIRING_PRIMARY)FireInput.primaryLatched=1;
+ if(weaponPtr->CurrentState==WEAPONSTATE_FIRING_SECONDARY)FireInput.secondaryLatched=1;
+
 }
 
 static int RequestChangeOfWeapon(PLAYER_STATUS *playerStatusPtr,PLAYER_WEAPON_DATA *weaponPtr)
@@ -2146,6 +2234,11 @@ int FireNonAutomaticSecondaryAmmo(PLAYER_WEAPON_DATA *weaponPtr)
 		PlayerFireLineOfSightAmmo(twPtr->SecondaryAmmoID,1);
 		CurrentGameStats_WeaponFired(PlayerStatusPtr->SelectedWeaponSlot,1);
 	}	
+    if(weaponPtr->WeaponIDNumber==WEAPON_PULSERIFLE && twPtr->SecondaryAmmoID==AMMO_PULSE_GRENADE){
+        /* Exactly one SFX per committed shot, including buffered secondary
+         * presses while the primary loop owns weaponHandle. */
+        Sound_Play(SID_NADEFIRE,"h");playerNoise=1;
+    }
 	return(1);	
 }	
 
@@ -2387,7 +2480,13 @@ void GetDirectionOfAttack(STRATEGYBLOCK *sbPtr,VECTORCH *WorldVector,VECTORCH *O
 
 }
 
-void CauseDamageToObject(STRATEGYBLOCK *sbPtr, DAMAGE_PROFILE *damage, int multiple,VECTORCH *incoming)
+static void CauseDamageToObjectBody(STRATEGYBLOCK *sbPtr, DAMAGE_PROFILE *damage, int multiple,VECTORCH *incoming);
+void CauseDamageToObject(STRATEGYBLOCK *sbPtr, DAMAGE_PROFILE *damage, int multiple,VECTORCH *incoming) {
+ NPC_DAMAGE_EVENT event=NPCSupportBeforeDamage(sbPtr);
+ CauseDamageToObjectBody(sbPtr,damage,multiple,incoming);
+ NPCSupportAfterDamage(sbPtr,event);
+}
+static void CauseDamageToObjectBody(STRATEGYBLOCK *sbPtr, DAMAGE_PROFILE *damage, int multiple,VECTORCH *incoming)
 {
 	int use_multiple;
 
@@ -2810,7 +2909,7 @@ void PositionPlayersWeapon(void)
 	VECTORCH gunOffset = PlayersWeaponCameraOffset;
 	gunOffset.vx += twPtr->RestPosition.vx;
 	gunOffset.vy += twPtr->RestPosition.vy;
-	gunOffset.vz += twPtr->RestPosition.vz;
+	gunOffset.vz += DevViewmodelZ(weaponPtr->WeaponIDNumber, twPtr->RestPosition.vz);
 
 	gunOffset.vx += weaponPtr->PositionOffset.vx;
 	gunOffset.vy += weaponPtr->PositionOffset.vy;
@@ -2820,24 +2919,19 @@ void PositionPlayersWeapon(void)
 		||(weaponPtr->WeaponIDNumber == WEAPON_PRED_SHOULDERCANNON) 
 		||(weaponPtr->WeaponIDNumber == WEAPON_PRED_MEDICOMP) 
 		)) ) {
+		gunDirection = PlayersTarget.Position;
 		{
-			gunDirection = PlayersTarget.Position;
-		
-			{
-				VECTORCH offset;
-				offset.vx = gunOffset.vx/4;
-				offset.vy = gunOffset.vy/4;
-				offset.vz = gunOffset.vz/4;
+			VECTORCH offset = gunOffset;
+			MATRIXCH matrix = Global_VDB_Ptr->VDB_Mat;
 
-				{
-					MATRIXCH mat = Global_VDB_Ptr->VDB_Mat;
-					TransposeMatrixCH(&mat);
-					RotateVector(&offset, &mat);
-		 		}
-			 	gunDirection.vx -= Global_VDB_Ptr->VDB_World.vx-offset.vx;
-			  	gunDirection.vy -= Global_VDB_Ptr->VDB_World.vy-offset.vy;
-			  	gunDirection.vz -= Global_VDB_Ptr->VDB_World.vz-offset.vz;
-			}
+			offset.vx /= 4;
+			offset.vy /= 4;
+			offset.vz /= 4;
+			TransposeMatrixCH(&matrix);
+			RotateVector(&offset, &matrix);
+			gunDirection.vx -= Global_VDB_Ptr->VDB_World.vx - offset.vx;
+			gunDirection.vy -= Global_VDB_Ptr->VDB_World.vy - offset.vy;
+			gunDirection.vz -= Global_VDB_Ptr->VDB_World.vz - offset.vz;
 			Normalise(&gunDirection);
 		}
 		{
@@ -2896,6 +2990,9 @@ void PositionPlayersWeapon(void)
 		TransposeMatrixCH(&PlayersWeapon.ObMat);
 	}
 
+	ViewmodelUpdatePose(&gunOffset, &weaponPtr->DirectionOffset,
+        !(twPtr->PrimaryIsMeleeWeapon || weaponPtr->WeaponIDNumber==WEAPON_PRED_DISC ||
+          weaponPtr->WeaponIDNumber==WEAPON_PRED_SHOULDERCANNON || weaponPtr->WeaponIDNumber==WEAPON_PRED_MEDICOMP));
 	PlayersWeapon.ObView = gunOffset;
 
 	{
@@ -3018,6 +3115,7 @@ void PositionPlayersWeaponMuzzleFlash(void)
  	  	mat.mat32 = 0;	  	
  	  	mat.mat33 = 65536;	  	
 		 	MatrixMultiply(&PlayersWeaponMuzzleFlash.ObMat,&mat,&PlayersWeaponMuzzleFlash.ObMat);
+		ViewmodelUpdateFlash(size,length,&mat);
 	}
 
 }	
@@ -3182,6 +3280,26 @@ static void StateDependentMovement(PLAYER_STATUS *playerStatusPtr, PLAYER_WEAPON
 }
 
 
+
+void ReleasePlayerWeaponGraphics(void)
+{
+ /* SECTION_DATA lives on the heap, but Shape/sempai/keyframes point into
+    the level pool. A surviving instance is not proof that its assets live. */
+ Dispel_HModel(&PlayersWeaponHModelController);
+ memset(&PlayersWeaponHModelController,0,sizeof PlayersWeaponHModelController);
+ memset(&PlayersWeapon,0,sizeof PlayersWeapon);
+ memset(&PlayersWeaponMuzzleFlash,0,sizeof PlayersWeaponMuzzleFlash);
+ memset(&PlayersWeaponCameraOffset,0,sizeof PlayersWeaponCameraOffset);
+ PWMFSDP=NULL;
+ PlayerStaff1=PlayerStaff2=PlayerStaff3=NULL;
+ memset(GrenadeLauncherSectionPointers,0,sizeof GrenadeLauncherSectionPointers);
+ WeaponFidgetPlaying=WeaponFidgetWasEligible=0;
+ WeaponFidgetWeaponID=-1;
+ FidgetTimerReset(&WeaponFidgetTimer);
+ WeaponJamReset(&PulseRifleJamTimer);
+ FireInputReset(&FireInput);
+ MarineMotionReset();
+}
 
 extern void UpdateWeaponShape(void)
 {
@@ -4161,6 +4279,7 @@ static void DamageDamageBlock(DAMAGEBLOCK *DBPtr, DAMAGE_PROFILE *damage, int mu
 }
 
 void InitThisWeapon(PLAYER_WEAPON_DATA *pwPtr) {
+	FidgetTimerReset(&WeaponFidgetTimer);
 
 	TEMPLATE_WEAPON_DATA *twPtr;
 	int shapenum;
@@ -5709,7 +5828,7 @@ void GrenadeLauncherReload(void *playerStatus, PLAYER_WEAPON_DATA *weaponPtr) {
 
 	GLOBALASSERT(PlayersWeaponHModelController.Sequence_Type==HMSQT_MarineHUD);
 
-	if (PlayersWeaponHModelController.Sub_Sequence!=MHSS_Standard_Reload) {
+	if (weaponPtr->StateTimeOutCounter==WEAPONSTATE_INITIALTIMEOUTCOUNT || PlayersWeaponHModelController.Sub_Sequence!=MHSS_Standard_Reload) {
 		InitHModelSequence(&PlayersWeaponHModelController,HMSQT_MarineHUD,(int)MHSS_Standard_Reload,(ONE_FIXED*4)/3);
 		PlayersWeaponHModelController.Looped=0;
 		GrenadeLauncher_UpdateBullets(weaponPtr);
@@ -5720,8 +5839,9 @@ void GrenadeLauncherReload(void *playerStatus, PLAYER_WEAPON_DATA *weaponPtr) {
 		TEMPLATE_AMMO_DATA *templateAmmoPtr = &TemplateAmmo[twPtr->PrimaryAmmoID];
 
 		/* Reload grenade launcher ahead of schedule. */
-		weaponPtr->PrimaryRoundsRemaining = templateAmmoPtr->AmmoPerMagazine;
-		weaponPtr->PrimaryMagazinesRemaining--;
+		if (weaponPtr->PrimaryMagazinesRemaining>0 && weaponPtr->PrimaryRoundsRemaining<AcidMagazineRounds((int)(templateAmmoPtr-TemplateAmmo), templateAmmoPtr->AmmoPerMagazine)) {
+            ReloadWeaponMagazine(weaponPtr, 0);
+        }
 		GrenadeLauncher_UpdateBullets(weaponPtr);
 
 	}
@@ -5743,12 +5863,11 @@ void GrenadeLauncherReload_Change(void *playerStatus, PLAYER_WEAPON_DATA *weapon
 
 		/* Reload grenade launcher if unloaded. */
 		if (weaponPtr->PrimaryRoundsRemaining==0) {
-			weaponPtr->PrimaryRoundsRemaining = templateAmmoPtr->AmmoPerMagazine;
-			weaponPtr->PrimaryMagazinesRemaining--;
+			ReloadWeaponMagazine(weaponPtr, 0);
 		}
 		GrenadeLauncher_UpdateBullets(weaponPtr);
 		/* A little cheat... */
-		if (weaponPtr->PrimaryRoundsRemaining<templateAmmoPtr->AmmoPerMagazine) {
+		if (weaponPtr->PrimaryRoundsRemaining<AcidMagazineRounds((int)(templateAmmoPtr-TemplateAmmo), templateAmmoPtr->AmmoPerMagazine)) {
 			GrenadeLauncherSectionPointers[0]->flags|=section_data_notreal;
 		}
 	}
@@ -5802,7 +5921,7 @@ void GrenadeLauncherFidget(void *playerStatus, PLAYER_WEAPON_DATA *weaponPtr) {
 				InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>2),HMSQT_MarineHUD,(int)MHSS_Stationary,ONE_FIXED,1);
 				WeaponFidgetPlaying=0;
 			}
-		} else if ((FastRandom()&255)==0) {
+		} else if (WeaponFidgetReady()) {
 			/* Start animation. */
 			if (HModelSequence_Exists(&PlayersWeaponHModelController,HMSQT_MarineHUD,(int)MHSS_Fidget)) {
 				InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>2),HMSQT_MarineHUD,(int)MHSS_Fidget,ONE_FIXED,0);
@@ -5860,7 +5979,7 @@ void PulseRifleFidget(void *playerStatus, PLAYER_WEAPON_DATA *weaponPtr) {
 				InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>2),HMSQT_MarineHUD,(int)MHSS_Stationary,ONE_FIXED,1);
 				WeaponFidgetPlaying=0;
 			}
-		} else if ((FastRandom()&255)==0) {
+		} else if (WeaponFidgetReady()) {
 			/* Start animation. */
 			if (HModelSequence_Exists(&PlayersWeaponHModelController,HMSQT_MarineHUD,(int)MHSS_Fidget)) {
 				InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>2),HMSQT_MarineHUD,(int)MHSS_Fidget,ONE_FIXED,0);
@@ -5910,7 +6029,7 @@ void WristBlade_Idle(void *playerStatus, PLAYER_WEAPON_DATA *weaponPtr) {
 				if (PlayersWeaponHModelController.sequence_timer==(ONE_FIXED-1)) {
 					InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>3),twPtr->InitialSequenceType,(int)PHSS_Stand,ONE_FIXED,1);
 				}
-			} else if ((FastRandom()&255)==0) {
+			} else if (WeaponFidgetReady()) {
 				/* Start animation. */
 				if (HModelSequence_Exists(&PlayersWeaponHModelController,HMSQT_PredatorHUD,(int)PHSS_Fidget)) {
 					InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>2),HMSQT_PredatorHUD,(int)PHSS_Fidget,-1,0);
@@ -6332,7 +6451,7 @@ void PredPistol_Idle(void *playerStatus, PLAYER_WEAPON_DATA *weaponPtr) {
 				if (PlayersWeaponHModelController.sequence_timer==(ONE_FIXED-1)) {
 					InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>3),twPtr->InitialSequenceType,(int)PHSS_Stand,ONE_FIXED,1);
 				}
-			} else if ((FastRandom()&255)==0) {
+			} else if (WeaponFidgetReady()) {
 				/* Start animation. */
 				if (HModelSequence_Exists(&PlayersWeaponHModelController,HMSQT_PredatorHUD,(int)PHSS_Fidget)) {
 					InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>2),HMSQT_PredatorHUD,(int)PHSS_Fidget,-1,0);
@@ -6458,7 +6577,14 @@ int PlayerFireFlameThrower(PLAYER_WEAPON_DATA *weaponPtr) {
 
 #define ALWAYS_EXIT_WOUNDS 1
 
+static DISPLAYBLOCK *CauseDamageToHModelBody(HMODELCONTROLLER *HMC_Ptr, STRATEGYBLOCK *sbPtr, DAMAGE_PROFILE *damage, int multiple, SECTION_DATA *this_section_data,VECTORCH *incoming, VECTORCH *position, int FromHost);
 DISPLAYBLOCK *CauseDamageToHModel(HMODELCONTROLLER *HMC_Ptr, STRATEGYBLOCK *sbPtr, DAMAGE_PROFILE *damage, int multiple, SECTION_DATA *this_section_data,VECTORCH *incoming, VECTORCH *position, int FromHost) {
+ NPC_DAMAGE_EVENT event=NPCSupportBeforeDamage(sbPtr);
+ DISPLAYBLOCK *result=CauseDamageToHModelBody(HMC_Ptr,sbPtr,damage,multiple,this_section_data,incoming,position,FromHost);
+ NPCSupportAfterDamage(sbPtr,event);
+ return result;
+}
+static DISPLAYBLOCK *CauseDamageToHModelBody(HMODELCONTROLLER *HMC_Ptr, STRATEGYBLOCK *sbPtr, DAMAGE_PROFILE *damage, int multiple, SECTION_DATA *this_section_data,VECTORCH *incoming, VECTORCH *position, int FromHost) {
 	
 	DAMAGEBLOCK tempdamage;
 	int healthdamage,armourdamage;
@@ -8311,7 +8437,7 @@ void PlasmaCaster_Idle(void *playerStatus, PLAYER_WEAPON_DATA *weaponPtr) {
 				if (PlayersWeaponHModelController.sequence_timer==(ONE_FIXED-1)) {
 					InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>3),twPtr->InitialSequenceType,(int)PHSS_Stand,ONE_FIXED,1);
 				}
-			} else if ((FastRandom()&255)==0) {
+			} else if (WeaponFidgetReady()) {
 				/* Start animation. */
 				if (HModelSequence_Exists(&PlayersWeaponHModelController,HMSQT_PredatorHUD,(int)PHSS_Fidget)) {
 					InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>2),HMSQT_PredatorHUD,(int)PHSS_Fidget,-1,0);
@@ -8912,7 +9038,7 @@ void WristConsole_Idle(void *playerStatus, PLAYER_WEAPON_DATA *weaponPtr) {
 				if (PlayersWeaponHModelController.sequence_timer==(ONE_FIXED-1)) {
 					InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>3),twPtr->InitialSequenceType,(int)PHSS_Stand,ONE_FIXED,1);
 				}
-			} else if ((FastRandom()&255)==0) {
+			} else if (WeaponFidgetReady()) {
 				/* Start animation. */
 				if (HModelSequence_Exists(&PlayersWeaponHModelController,HMSQT_PredatorHUD,(int)PHSS_Fidget)) {
 					InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>2),HMSQT_PredatorHUD,(int)PHSS_Fidget,-1,0);
@@ -9034,7 +9160,7 @@ void SADAR_Fidget(void *playerStatus, PLAYER_WEAPON_DATA *weaponPtr) {
 				InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>3),HMSQT_MarineHUD,(int)MHSS_Stationary,ONE_FIXED,1);
 				WeaponFidgetPlaying=0;
 			}
-		} else if ((FastRandom()&255)==0) {
+		} else if (WeaponFidgetReady()) {
 			/* Start animation. */
 			if (HModelSequence_Exists(&PlayersWeaponHModelController,HMSQT_MarineHUD,(int)MHSS_Fidget)) {
 				InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>2),HMSQT_MarineHUD,(int)MHSS_Fidget,ONE_FIXED,0);
@@ -9153,7 +9279,7 @@ void GenericMarineWeapon_Idle(void *playerStatus, PLAYER_WEAPON_DATA *weaponPtr)
 				InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>3),twPtr->InitialSequenceType,(int)twPtr->InitialSubSequence,ONE_FIXED,1);
 				WeaponFidgetPlaying=0;
 			}
-		} else if ((FastRandom()&255)==0) {
+		} else if (WeaponFidgetReady()) {
 			/* Start animation. */
 			if (HModelSequence_Exists(&PlayersWeaponHModelController,HMSQT_MarineHUD,(int)MHSS_Fidget)) {
 				InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>2),HMSQT_MarineHUD,(int)MHSS_Fidget,ONE_FIXED,0);
@@ -9284,7 +9410,7 @@ void GenericPredatorWeapon_Idle(void *playerStatus, PLAYER_WEAPON_DATA *weaponPt
 				if (PlayersWeaponHModelController.sequence_timer==(ONE_FIXED-1)) {
 					InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>3),twPtr->InitialSequenceType,(int)PHSS_Stand,ONE_FIXED,1);
 				}
-			} else if ((FastRandom()&255)==0) {
+			} else if (WeaponFidgetReady()) {
 				/* Start animation. */
 				if (HModelSequence_Exists(&PlayersWeaponHModelController,HMSQT_PredatorHUD,(int)PHSS_Fidget)) {
 					InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>2),HMSQT_PredatorHUD,(int)PHSS_Fidget,-1,0);
@@ -9474,7 +9600,7 @@ void PredatorDisc_Recoil(void *playerStatus, PLAYER_WEAPON_DATA *weaponPtr) {
 				if (PlayersWeaponHModelController.sequence_timer==(ONE_FIXED-1)) {
 					InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>3),twPtr->InitialSequenceType,(int)PHSS_Stand,ONE_FIXED,1);
 				}
-			} else if ((FastRandom()&255)==0) {
+			} else if (WeaponFidgetReady()) {
 				/* Start animation. */
 				if (HModelSequence_Exists(&PlayersWeaponHModelController,HMSQT_PredatorHUD,(int)PHSS_Fidget)) {
 					InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>2),HMSQT_PredatorHUD,(int)PHSS_Fidget,-1,0);
@@ -9890,7 +10016,7 @@ void Staff_Idle(void *playerStatus, PLAYER_WEAPON_DATA *weaponPtr) {
 					InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>3),HMSQT_PredatorHUD,(int)PHSS_Stand,ONE_FIXED,1);
 					WeaponFidgetPlaying=0;
 				}
-			} else if ((FastRandom()&255)==0) {
+			} else if (WeaponFidgetReady()) {
 				/* Start animation. */
 				#if 1
 				if (HModelSequence_Exists(&PlayersWeaponHModelController,HMSQT_PredatorHUD,(int)PHSS_Fidget)) {
@@ -11281,6 +11407,9 @@ void Load_WeaponsCGlobals(SAVE_BLOCK_HEADER* header)
 
 	//check the size of the save block
 	if(header->size!=sizeof(*block)) return;
+	FidgetTimerReset(&WeaponFidgetTimer);
+ WeaponJamReset(&PulseRifleJamTimer);
+ FireInputReset(&FireInput);
 
 	Alien_Visible_Weapon = block->Alien_Visible_Weapon;
 	Alien_Tail_Clock = block->Alien_Tail_Clock;
@@ -11401,7 +11530,7 @@ void MarinePistol_Fidget(void *playerStatus, PLAYER_WEAPON_DATA *weaponPtr) {
 				InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>2),HMSQT_MarineHUD,(int)MHSS_Stationary,ONE_FIXED,1);
 				WeaponFidgetPlaying=0;
 			}
-		} else if ((FastRandom()&255)==0) {
+		} else if (WeaponFidgetReady()) {
 			/* Start animation. */
 			if (HModelSequence_Exists(&PlayersWeaponHModelController,HMSQT_MarineHUD,(int)MHSS_Fidget)) {
 				InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>2),HMSQT_MarineHUD,(int)MHSS_Fidget,(ONE_FIXED<<1),0);
@@ -11852,7 +11981,7 @@ void MarineTwoPistols_Fidget(void *playerStatus, PLAYER_WEAPON_DATA *weaponPtr) 
 				InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>2),HMSQT_MarineHUD,(int)MHSS_Stationary,ONE_FIXED,1);
 				WeaponFidgetPlaying=0;
 			}
-		} else if ((FastRandom()&255)==0) {
+		} else if (WeaponFidgetReady()) {
 			/* Start animation. */
 			if (HModelSequence_Exists(&PlayersWeaponHModelController,HMSQT_MarineHUD,(int)MHSS_Fidget)) {
 				InitHModelTweening(&PlayersWeaponHModelController,(ONE_FIXED>>2),HMSQT_MarineHUD,(int)MHSS_Fidget,(ONE_FIXED<<1),0);
@@ -12016,6 +12145,7 @@ void MarinePistol_SwapOut(void *playerStatus, PLAYER_WEAPON_DATA *weaponPtr) {
 				if (weaponPtr->PrimaryMagazinesRemaining&1) {
 	       			((PLAYER_STATUS *)playerStatus)->WeaponSlot[slot].PrimaryMagazinesRemaining++;
 				}
+                OptimizedAmmoSplitPistols(weaponPtr,&((PLAYER_STATUS *)playerStatus)->WeaponSlot[slot]);
 
 			}
 		}
@@ -12043,17 +12173,20 @@ void MarineTwoPistols_SwapOut(void *playerStatus, PLAYER_WEAPON_DATA *weaponPtr)
 			slot=SlotForThisWeapon(WEAPON_MARINE_PISTOL);
 			if (slot!=-1) {
 				if (weaponPtr->PrimaryRoundsRemaining==0) {
-	       			((PLAYER_STATUS *)playerStatus)->WeaponSlot[slot].PrimaryMagazinesRemaining=weaponPtr->PrimaryMagazinesRemaining+weaponPtr->SecondaryMagazinesRemaining;
-	       			if (((PLAYER_STATUS *)playerStatus)->WeaponSlot[slot].PrimaryMagazinesRemaining>99) {
-						((PLAYER_STATUS *)playerStatus)->WeaponSlot[slot].PrimaryMagazinesRemaining=99;
+	       			((PLAYER_STATUS *)playerStatus)->WeaponSlot[slot].PrimaryMagazinesRemaining=
+                            min_no_const(AcidResourceCapacity(99),(int)weaponPtr->PrimaryMagazinesRemaining+(int)weaponPtr->SecondaryMagazinesRemaining);
+	       			if (((PLAYER_STATUS *)playerStatus)->WeaponSlot[slot].PrimaryMagazinesRemaining>AcidResourceCapacity(99)) {
+						((PLAYER_STATUS *)playerStatus)->WeaponSlot[slot].PrimaryMagazinesRemaining=AcidResourceCapacity(99);
 	       			};
 	       			((PLAYER_STATUS *)playerStatus)->WeaponSlot[slot].PrimaryRoundsRemaining=weaponPtr->SecondaryRoundsRemaining;
 					weaponPtr->SecondaryRoundsRemaining=0;
 	       			weaponPtr->PrimaryRoundsRemaining=((PLAYER_STATUS *)playerStatus)->WeaponSlot[slot].PrimaryRoundsRemaining;
 				} else {
-	       			((PLAYER_STATUS *)playerStatus)->WeaponSlot[slot].PrimaryMagazinesRemaining=weaponPtr->PrimaryMagazinesRemaining+weaponPtr->SecondaryMagazinesRemaining;
+	       			((PLAYER_STATUS *)playerStatus)->WeaponSlot[slot].PrimaryMagazinesRemaining=
+                            min_no_const(AcidResourceCapacity(99),(int)weaponPtr->PrimaryMagazinesRemaining+(int)weaponPtr->SecondaryMagazinesRemaining);
 	       			((PLAYER_STATUS *)playerStatus)->WeaponSlot[slot].PrimaryRoundsRemaining=weaponPtr->PrimaryRoundsRemaining;
 				}
+                OptimizedAmmoMergePistols(&((PLAYER_STATUS *)playerStatus)->WeaponSlot[slot],weaponPtr);
 			}
 		}
 	}

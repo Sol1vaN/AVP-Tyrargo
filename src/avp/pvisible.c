@@ -589,7 +589,7 @@ HMODELCONTROLLER DropShipHModelController;
 
 void MakeObjectNear(STRATEGYBLOCK *sbPtr)
 {
-        MODULE tempModule;
+        MODULE tempModule = {0};
         DISPLAYBLOCK *dPtr;
         DYNAMICSBLOCK *dynPtr = sbPtr->DynPtr;
 
@@ -2200,15 +2200,15 @@ void IdentifyObject(STRATEGYBLOCK *sbPtr) {
 
 
 
-STRATEGYBLOCK* CreateMultiplayerWeaponPickup(VECTORCH* location,int type,char* name)
+static STRATEGYBLOCK* CreateWeaponPickup(VECTORCH* location,int type,char* name,int npcDrop)
 {
-	TOOLS_DATA_INANIMATEOBJECT toolsdata;
+	TOOLS_DATA_INANIMATEOBJECT toolsdata={0};
 	STRATEGYBLOCK * sbPtr;
 	INANIMATEOBJECT_STATUSBLOCK* objectstatusptr;
 	int trueType;
 	
 	if ((type==WEAPON_TWO_PISTOLS)||(type==WEAPON_MARINE_PISTOL)) {
-		if (!netGameData.allowPistols) {
+		if (!npcDrop && !netGameData.allowPistols) {
 			return(0);
 		}
 	}
@@ -2278,8 +2278,8 @@ STRATEGYBLOCK* CreateMultiplayerWeaponPickup(VECTORCH* location,int type,char* n
 
 	sbPtr = CreateActiveStrategyBlock();
 
-	InitialiseSBValues(sbPtr);
 	if(!sbPtr) return 0;
+	InitialiseSBValues(sbPtr);
 
 	sbPtr->I_SBtype = I_BehaviourInanimateObject;
 	sbPtr->shapeIndex=toolsdata.shapeIndex;
@@ -2290,7 +2290,8 @@ STRATEGYBLOCK* CreateMultiplayerWeaponPickup(VECTORCH* location,int type,char* n
 	if(!name)
 	{
 		AssignNewSBName(sbPtr);
-		AddNetMsg_CreateWeapon(&sbPtr->SBname[0],trueType,location);
+		if(!npcDrop)AddNetMsg_CreateWeapon(&sbPtr->SBname[0],trueType,location);
+        else {sbPtr->SBname[0]='N';sbPtr->SBname[1]='W';}
 	}
 	else
 	{
@@ -2299,7 +2300,7 @@ STRATEGYBLOCK* CreateMultiplayerWeaponPickup(VECTORCH* location,int type,char* n
 
 	objectstatusptr=(INANIMATEOBJECT_STATUSBLOCK*)sbPtr->SBdataptr;
 	
-	objectstatusptr->lifespanTimer=20*ONE_FIXED;
+	objectstatusptr->lifespanTimer=npcDrop?0:20*ONE_FIXED;
 	
 	//sort out object visibility
 	{
@@ -2317,6 +2318,9 @@ STRATEGYBLOCK* CreateMultiplayerWeaponPickup(VECTORCH* location,int type,char* n
 	return sbPtr;
 }
 
+
+STRATEGYBLOCK* CreateMultiplayerWeaponPickup(VECTORCH*location,int type,char*name){return CreateWeaponPickup(location,type,name,0);}
+STRATEGYBLOCK* CreateNPCWeaponPickup(VECTORCH*location,int type,char*name){return CreateWeaponPickup(location,type,name,1);}
 void MakePlayersWeaponPickupVisible()
 {
 	extern int NumActiveStBlocks;
@@ -2447,6 +2451,7 @@ void LoadStrategy_InanimateObject(SAVE_BLOCK_STRATEGY_HEADER* header)
 			//okay we need to create a disc then
 			sbPtr = Create_Pred_Disc_Pickup_For_Load();
 		}
+		if(!sbPtr && block->typeId==IOT_Weapon && header->SBname[0]=='N' && header->SBname[1]=='W') {VECTORCH point=block->dynamics.Position;sbPtr=CreateNPCWeaponPickup(&point,block->subType,header->SBname);}
 		if(!sbPtr) return;
 
 	}

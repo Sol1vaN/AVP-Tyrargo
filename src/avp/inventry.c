@@ -1,3 +1,6 @@
+#include "event_latency.h"
+#include "optimized_ammo.h"
+#include "molecular_acid.h"
 /* Maintains the equipmnt the player has, 
 rounds fired etc etc etc*/
 
@@ -18,6 +21,12 @@ rounds fired etc etc etc*/
 #include "psnd.h"
 #include "weapons.h"
 #include "inventry.h"
+#include "los.h"
+#include "npc_precision.h"
+#include "bh_marin.h"
+#include "npc_support.h"
+#include "targeting.h"
+extern int NormalFrameTime;
 
 /* for win95 net game support */
 #include "pldnet.h"
@@ -28,6 +37,11 @@ rounds fired etc etc etc*/
 #define UseLocalAssert Yes
 #include "ourasert.h"
 
+static PLAYER_STATUS *InventoryRecipient;
+static STRATEGYBLOCK *InventoryNPC;
+static void RemovePickedUpObjectForActor(STRATEGYBLOCK*,STRATEGYBLOCK*);
+static STRATEGYBLOCK *InventoryActor(void){return InventoryNPC?InventoryNPC:Player->ObStrategyBlock;}
+static void InventoryMessage(const char *text){if(!InventoryNPC)NewOnScreenMessage(text);}
 void InitialisePlayersInventory(PLAYER_STATUS *playerStatusPtr);
 void MaintainPlayersInventory(void);
 void SetPlayerSecurityClearance(STRATEGYBLOCK *sbPtr, unsigned int securityLevel);
@@ -49,9 +63,106 @@ int RecallDisc_Charge=400000;
 
 #define SPECIALIST_PISTOLS	(netGameData.specialistPistols)
 
-void MaintainPlayersInventory(void)
+static void TryPlayerPickup(STRATEGYBLOCK *collidedWith)
 {
-	DYNAMICSBLOCK *dynPtr = Player->ObStrategyBlock->DynPtr;
+			INANIMATEOBJECT_STATUSBLOCK* objStatPtr = collidedWith->SBdataptr;
+			
+			/*Make sure the object hasn't already been picked up this frame*/
+			if(collidedWith->SBflags.please_destroy_me==0 && objStatPtr->respawnTimer==0)
+			{
+				/* now test for inanimate objects we can pick up... */
+                EVENT_TICK pickupSpan=EventLatencyBegin();
+                EVENT_TICK pickupId=EventLatencyId(collidedWith->SBname);
+                int pickupType=objStatPtr->typeId,pickupSubtype=objStatPtr->subType,pickupAccepted=0;
+				switch(objStatPtr->typeId)
+				{
+					case(IOT_Weapon):
+					{
+						if (AbleToPickupWeapon(objStatPtr->subType)) {
+							{ pickupAccepted=1; RemovePickedUpObject(collidedWith); }	
+						 	/*Message now done in able to pickup function*/
+						 //	InventoryMessage(GetTextString(TemplateWeapon[objStatPtr->subType].Name));
+						}
+						break;
+					}
+					case(IOT_Ammo):
+					{
+						if (AbleToPickupAmmo(objStatPtr->subType)) {
+							{ pickupAccepted=1; RemovePickedUpObject(collidedWith); }
+							InventoryMessage(GetTextString(TemplateAmmo[objStatPtr->subType].ShortName));
+						}
+						break;
+					}
+					case(IOT_Health):
+					{
+						if (AbleToPickupHealth(objStatPtr->subType)) {
+							{ pickupAccepted=1; RemovePickedUpObject(collidedWith); }
+							InventoryMessage(GetTextString(TEXTSTRING_INGAME_MEDIKIT));
+						}
+						break;
+					}
+					case(IOT_Armour):
+					{
+						if (AbleToPickupArmour(objStatPtr->subType)) {
+							{ pickupAccepted=1; RemovePickedUpObject(collidedWith); }
+							InventoryMessage(GetTextString(TEXTSTRING_INGAME_ARMOUR));
+						}
+						break;
+					}
+					case(IOT_Key):
+					{
+//						SetPlayerSecurityClearance(InventoryActor(),objStatPtr->subType);						
+						{ pickupAccepted=1; RemovePickedUpObject(collidedWith); }
+						break;
+					}
+					case(IOT_BoxedSentryGun):
+					{
+						{ pickupAccepted=1; RemovePickedUpObject(collidedWith); }						
+						break;
+					}
+					case(IOT_IRGoggles):
+					{
+						{ pickupAccepted=1; RemovePickedUpObject(collidedWith); }						
+						break;
+					}
+					case(IOT_DataTape):
+					{
+						{ pickupAccepted=1; RemovePickedUpObject(collidedWith); }						
+						break;
+					}
+      				case(IOT_MTrackerUpgrade):
+					{
+						if (AbleToPickupMTrackerUpgrade(objStatPtr->subType))				
+							{ pickupAccepted=1; RemovePickedUpObject(collidedWith); }						
+						break;
+					}
+      				case(IOT_PheromonePod):
+					{
+					 	((PLAYER_STATUS *)(InventoryRecipient ? (void*)InventoryRecipient : InventoryActor()->SBdataptr))->MTrackerType++;	
+						{ pickupAccepted=1; RemovePickedUpObject(collidedWith); }						
+					}
+					case IOT_SpecialPickupObject:
+					{
+						{ pickupAccepted=1; RemovePickedUpObject(collidedWith); }						
+						
+						break;
+					}
+					case IOT_FieldCharge:
+					{
+						if (AbleToPickupFieldCharge(objStatPtr->subType)) {
+							{ pickupAccepted=1; RemovePickedUpObject(collidedWith); }
+						}
+						break;
+					}
+
+					default: ;
+				}
+                EventLatencyEnd(pickupSpan,"pickup handling",pickupType,pickupSubtype,pickupId,0,pickupAccepted);
+			}
+}
+static void MaintainPlayersInventoryMeasuredBody(void)
+{
+	DYNAMICSBLOCK *dynPtr = InventoryActor()->DynPtr;
 	struct collisionreport *nextReport;
 
 	LOCALASSERT(dynPtr);
@@ -65,96 +176,7 @@ void MaintainPlayersInventory(void)
 		/* check collison report for valid object */
 		if((collidedWith) && (collidedWith->I_SBtype == I_BehaviourInanimateObject))
 		{
-			INANIMATEOBJECT_STATUSBLOCK* objStatPtr = collidedWith->SBdataptr;
-			
-			/*Make sure the object hasn't already been picked up this frame*/
-			if(collidedWith->SBflags.please_destroy_me==0 && objStatPtr->respawnTimer==0)
-			{
-				/* now test for inanimate objects we can pick up... */
-				switch(objStatPtr->typeId)
-				{
-					case(IOT_Weapon):
-					{
-						if (AbleToPickupWeapon(objStatPtr->subType)) {
-							RemovePickedUpObject(collidedWith);	
-						 	/*Message now done in able to pickup function*/
-						 //	NewOnScreenMessage(GetTextString(TemplateWeapon[objStatPtr->subType].Name));
-						}
-						break;
-					}
-					case(IOT_Ammo):
-					{
-						if (AbleToPickupAmmo(objStatPtr->subType)) {
-							RemovePickedUpObject(collidedWith);
-							NewOnScreenMessage(GetTextString(TemplateAmmo[objStatPtr->subType].ShortName));
-						}
-						break;
-					}
-					case(IOT_Health):
-					{
-						if (AbleToPickupHealth(objStatPtr->subType)) {
-							RemovePickedUpObject(collidedWith);
-							NewOnScreenMessage(GetTextString(TEXTSTRING_INGAME_MEDIKIT));
-						}
-						break;
-					}
-					case(IOT_Armour):
-					{
-						if (AbleToPickupArmour(objStatPtr->subType)) {
-							RemovePickedUpObject(collidedWith);
-							NewOnScreenMessage(GetTextString(TEXTSTRING_INGAME_ARMOUR));
-						}
-						break;
-					}
-					case(IOT_Key):
-					{
-//						SetPlayerSecurityClearance(Player->ObStrategyBlock,objStatPtr->subType);						
-						RemovePickedUpObject(collidedWith);
-						break;
-					}
-					case(IOT_BoxedSentryGun):
-					{
-						RemovePickedUpObject(collidedWith);						
-						break;
-					}
-					case(IOT_IRGoggles):
-					{
-						RemovePickedUpObject(collidedWith);						
-						break;
-					}
-					case(IOT_DataTape):
-					{
-						RemovePickedUpObject(collidedWith);						
-						break;
-					}
-      				case(IOT_MTrackerUpgrade):
-					{
-						if (AbleToPickupMTrackerUpgrade(objStatPtr->subType))				
-							RemovePickedUpObject(collidedWith);						
-						break;
-					}
-      				case(IOT_PheromonePod):
-					{
-					 	((PLAYER_STATUS *)(Player->ObStrategyBlock->SBdataptr))->MTrackerType++;	
-						RemovePickedUpObject(collidedWith);						
-					}
-					case IOT_SpecialPickupObject:
-					{
-						RemovePickedUpObject(collidedWith);						
-						
-						break;
-					}
-					case IOT_FieldCharge:
-					{
-						if (AbleToPickupFieldCharge(objStatPtr->subType)) {
-							RemovePickedUpObject(collidedWith);
-						}
-						break;
-					}
-
-					default: ;
-				}
-			}
+            TryPlayerPickup(collidedWith);
 		} else if((collidedWith) && (collidedWith->I_SBtype == I_BehaviourNetGhost)) {
 			NETGHOSTDATABLOCK* ghostData = collidedWith->SBdataptr;
 
@@ -165,7 +187,7 @@ void MaintainPlayersInventory(void)
 							AddNetMsg_LocalObjectDestroyed_Request(collidedWith);
 							ghostData->IOType=IOT_Non;
 							/* So it's not picked up again... */
-							NewOnScreenMessage(GetTextString(TemplateAmmo[ghostData->subtype].ShortName));
+							InventoryMessage(GetTextString(TemplateAmmo[ghostData->subtype].ShortName));
 						}
 					}
 					if (ghostData->IOType==IOT_Weapon) {
@@ -174,7 +196,7 @@ void MaintainPlayersInventory(void)
 							ghostData->IOType=IOT_Non;
 							/* So it's not picked up again... */
 						 	/*Message now done in able to pickup function*/
-						   //	NewOnScreenMessage(GetTextString(TemplateWeapon[ghostData->subtype].Name));
+						   //	InventoryMessage(GetTextString(TemplateWeapon[ghostData->subtype].Name));
 						}
 					}
 				}
@@ -184,6 +206,42 @@ void MaintainPlayersInventory(void)
 		nextReport = nextReport->NextCollisionReportPtr;
 	}
 
+}
+
+
+/* Reaching a shelf must not require moving the torso collision sphere upwards.
+ * Retain native collision pickups; extend weapons/ammo only within arm reach,
+ * with an eye-to-item ray so walls and the underside of shelves still block. */
+static void MaintainReachPickups(void)
+{
+ extern STRATEGYBLOCK *ActiveStBlockList[];extern int NumActiveStBlocks;
+ DYNAMICSBLOCK *d=InventoryActor()->DynPtr;int i;
+ if(AvP.PlayerType!=I_Marine || AvP.Network!=I_No_Network)return;
+ for(i=0;i<NumActiveStBlocks;i++){
+  STRATEGYBLOCK *sb=ActiveStBlockList[i];INANIMATEOBJECT_STATUSBLOCK *o;
+  VECTORCH eye,direction,oldPoint,oldNormal;int distance,oldLambda,visible;
+  DISPLAYBLOCK *oldHit;SECTION_DATA *oldSection;
+  if(!sb || !sb->DynPtr || !sb->SBdptr || sb->I_SBtype!=I_BehaviourInanimateObject || sb->SBflags.please_destroy_me)continue;
+  o=(INANIMATEOBJECT_STATUSBLOCK*)sb->SBdataptr;
+  if(o->respawnTimer || (o->typeId!=IOT_Weapon && o->typeId!=IOT_Ammo))continue;
+  if(!NPCPickupWithinReach((double)sb->DynPtr->Position.vx-d->Position.vx,
+       (double)sb->DynPtr->Position.vy-d->Position.vy,(double)sb->DynPtr->Position.vz-d->Position.vz,
+       Player->ObMinY,Player->ObMaxY))continue;
+  eye=d->Position;eye.vy+=Player->ObMinY+200;
+  direction.vx=sb->DynPtr->Position.vx-eye.vx;direction.vy=sb->DynPtr->Position.vy-eye.vy;direction.vz=sb->DynPtr->Position.vz-eye.vz;
+  distance=Magnitude(&direction);if(!distance){TryPlayerPickup(sb);continue;}
+  Normalise(&direction);
+  oldPoint=LOS_Point;oldNormal=LOS_ObjectNormal;oldHit=LOS_ObjectHitPtr;oldSection=LOS_HModel_Section;oldLambda=LOS_Lambda;
+  FindPolygonInLineOfSight_TwoIgnores(&direction,&eye,0,Player,sb->SBdptr);
+  visible=LOS_Lambda>=distance;
+  LOS_Point=oldPoint;LOS_ObjectNormal=oldNormal;LOS_ObjectHitPtr=oldHit;LOS_HModel_Section=oldSection;LOS_Lambda=oldLambda;
+  if(visible)TryPlayerPickup(sb);
+ }
+}
+void MaintainPlayersInventory(void)
+{
+ EVENT_TICK span=EventLatencyBegin();MaintainPlayersInventoryMeasuredBody();MaintainReachPickups();
+ EventLatencyEnd(span,"player inventory",0,0,0,0,0);
 }
 
 void LoadAllWeapons(PLAYER_STATUS *playerStatusPtr) {
@@ -198,14 +256,14 @@ void LoadAllWeapons(PLAYER_STATUS *playerStatusPtr) {
 		TEMPLATE_AMMO_DATA *templateAmmoPtr;
 
 		wdPtr = &playerStatusPtr->WeaponSlot[--slot];
+		if(wdPtr->WeaponIDNumber<0 || wdPtr->WeaponIDNumber>=MAX_NO_OF_WEAPON_TEMPLATES)continue;
 	    twPtr = &TemplateWeapon[wdPtr->WeaponIDNumber];
 		templateAmmoPtr = &TemplateAmmo[twPtr->PrimaryAmmoID];
 
 		if ((wdPtr->PrimaryRoundsRemaining==0)
 			&&(wdPtr->PrimaryMagazinesRemaining>0)
 			&&(twPtr->PrimaryAmmoID!=AMMO_NONE)) {
-			wdPtr->PrimaryRoundsRemaining = templateAmmoPtr->AmmoPerMagazine;
-			wdPtr->PrimaryMagazinesRemaining--;
+			ReloadWeaponMagazine(wdPtr, 0);
 		}
 
 		if ((wdPtr->SecondaryRoundsRemaining==0)
@@ -215,14 +273,33 @@ void LoadAllWeapons(PLAYER_STATUS *playerStatusPtr) {
 
 			secondaryTemplateAmmoPtr = &TemplateAmmo[twPtr->SecondaryAmmoID];
 			
-			wdPtr->SecondaryRoundsRemaining = secondaryTemplateAmmoPtr->AmmoPerMagazine;
-			wdPtr->SecondaryMagazinesRemaining--;
+			ReloadWeaponMagazine(wdPtr, 1);
 		}
 
     } while(slot);
 
 }
 	
+/* Fresh level only; saved/campaign inventory is restored afterwards unchanged.
+ * Magazine-fed weapons get larger magazines (LoadAllWeapons), not more of them.
+ * Fixed-capacity weapons retain the scaled initial reserve from probe 209. */
+static void AcidInitialInventory(PLAYER_STATUS *ps)
+{
+ OptimizedAmmoReset();
+ if(!AcidActive())return;
+ for(int i=0;i<MAX_NO_OF_WEAPON_SLOTS;i++){
+  PLAYER_WEAPON_DATA *w=&ps->WeaponSlot[i];
+  if(AvP.PlayerType==I_Marine){
+   if(w->WeaponIDNumber==WEAPON_PULSERIFLE || w->WeaponIDNumber==WEAPON_SADAR || w->WeaponIDNumber==WEAPON_FRISBEE_LAUNCHER)
+    w->PrimaryMagazinesRemaining=AcidResourceCapacity(w->PrimaryMagazinesRemaining);
+   if(w->WeaponIDNumber==WEAPON_PULSERIFLE)
+    w->SecondaryRoundsRemaining=AcidResourceCapacity(w->SecondaryRoundsRemaining/ONE_FIXED)*ONE_FIXED;
+  }else if(AvP.PlayerType==I_Predator && w->WeaponIDNumber==WEAPON_PRED_RIFLE){
+   w->PrimaryRoundsRemaining=AcidResourceCapacity(w->PrimaryRoundsRemaining/ONE_FIXED)*ONE_FIXED;
+  }
+ }
+}
+
 void InitialisePlayersInventory(PLAYER_STATUS *playerStatusPtr)
 {
 	PLAYER_WEAPON_DATA *weaponDataPtr = &playerStatusPtr->WeaponSlot[WEAPON_SLOT_1];
@@ -613,14 +690,44 @@ void InitialisePlayersInventory(PLAYER_STATUS *playerStatusPtr)
     playerStatusPtr->JetpackEnabled = StartingEquipment.marine_jetpack;
     playerStatusPtr->GrapplingHookEnabled = StartingEquipment.predator_grappling_hook;	
 
-	LoadAllWeapons(PlayerStatusPtr);
+	AcidInitialInventory(playerStatusPtr);
+	LoadAllWeapons(playerStatusPtr);
 }
 
 
 /* fn returns zero if unable to add ammo to inventory,
  eg, of the wrong type */
 
+static int AbleToPickupAmmoBase(enum AMMO_ID ammoID);
+/* Apply deterministic pickup totals in the base path. This wrapper keeps
+ * rejected pickups atomic and clamps the alternate integer reserves. */
 static int AbleToPickupAmmo(enum AMMO_ID ammoID)
+{
+ if(!AcidActive()||ammoID==AMMO_PRED_DISC)return AbleToPickupAmmoBase(ammoID);
+ PLAYER_STATUS *ps=(PLAYER_STATUS*)(InventoryRecipient ? (void*)InventoryRecipient : InventoryActor()->SBdataptr);
+ PLAYER_WEAPON_DATA before[MAX_NO_OF_WEAPON_SLOTS];
+ GRENADE_LAUNCHER_DATA grenades=GrenadeLauncherData;
+ memcpy(before,ps->WeaponSlot,sizeof before);
+ int accepted=AbleToPickupAmmoBase(ammoID);
+ if(!accepted){memcpy(ps->WeaponSlot,before,sizeof before);GrenadeLauncherData=grenades;return 0;}
+ /* Keep integer reserves bounded, including alternate grenade/pistol stores.
+  * Fractional pickup fields remain in saves for compatibility, but are unused. */
+ int cap=AcidResourceCapacity(99);
+ for(int i=0;i<MAX_NO_OF_WEAPON_SLOTS;i++){
+  PLAYER_WEAPON_DATA *w=&ps->WeaponSlot[i];
+  if(w->PrimaryMagazinesRemaining>cap)w->PrimaryMagazinesRemaining=cap;
+  if(w->SecondaryMagazinesRemaining>cap)w->SecondaryMagazinesRemaining=cap;
+ }
+ #define ACID_GRENADE(member) if(GrenadeLauncherData.member>cap)GrenadeLauncherData.member=cap
+ ACID_GRENADE(StandardMagazinesRemaining);
+ ACID_GRENADE(FlareMagazinesRemaining);
+ ACID_GRENADE(ProximityMagazinesRemaining);
+ ACID_GRENADE(FragmentationMagazinesRemaining);
+ #undef ACID_GRENADE
+ return 1;
+}
+
+static int AbleToPickupAmmoBase(enum AMMO_ID ammoID)
 {
 	int weaponSlot = -1;
 
@@ -799,7 +906,7 @@ static int AbleToPickupAmmo(enum AMMO_ID ammoID)
 						PLAYER_WEAPON_DATA *weaponPtr;
 						    
 					    /* access the extra data hanging off the strategy block */
-						PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (Player->ObStrategyBlock->SBdataptr);
+						PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (InventoryRecipient ? (void*)InventoryRecipient : InventoryActor()->SBdataptr);
 					    GLOBALASSERT(playerStatusPtr);
 	    	
 				    	/* init a pointer to the weapon's data */
@@ -819,15 +926,15 @@ static int AbleToPickupAmmo(enum AMMO_ID ammoID)
 								weaponPtr->SecondaryMagazinesRemaining = 99;
 						}
 						#else
-						if(weaponPtr->SecondaryRoundsRemaining == 99)
+						if(weaponPtr->SecondaryRoundsRemaining >= AcidResourceCapacity(99)*ONE_FIXED)
 						{
 							/* no room! */
 							return 0;
 						}
 
-						weaponPtr->SecondaryRoundsRemaining+=(5*ONE_FIXED);
-						if (weaponPtr->SecondaryRoundsRemaining>(99*ONE_FIXED)) {
-							weaponPtr->SecondaryRoundsRemaining=(99*ONE_FIXED);
+						weaponPtr->SecondaryRoundsRemaining+=AcidResourceCapacity(5)*ONE_FIXED;
+						if (weaponPtr->SecondaryRoundsRemaining>(AcidResourceCapacity(99)*ONE_FIXED)) {
+							weaponPtr->SecondaryRoundsRemaining=(AcidResourceCapacity(99)*ONE_FIXED);
 						}
 						#endif
 					}		
@@ -853,7 +960,7 @@ static int AbleToPickupAmmo(enum AMMO_ID ammoID)
 				case AMMO_PRED_DISC:
 				{
 					PLAYER_WEAPON_DATA *weaponPtr;
-					PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (Player->ObStrategyBlock->SBdataptr);
+					PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (InventoryRecipient ? (void*)InventoryRecipient : InventoryActor()->SBdataptr);
 
 				    GLOBALASSERT(playerStatusPtr);
 					weaponSlot = SlotForThisWeapon(WEAPON_PRED_DISC);
@@ -889,13 +996,13 @@ static int AbleToPickupAmmo(enum AMMO_ID ammoID)
 		PLAYER_WEAPON_DATA *weaponPtr;
 	    
 	    /* access the extra data hanging off the strategy block */
-		PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (Player->ObStrategyBlock->SBdataptr);
+		PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (InventoryRecipient ? (void*)InventoryRecipient : InventoryActor()->SBdataptr);
 	    GLOBALASSERT(playerStatusPtr);
 	    	
 	    /* init a pointer to the weapon's data */
 	    weaponPtr = &(playerStatusPtr->WeaponSlot[weaponSlot]);
 		
-		if(weaponPtr->PrimaryMagazinesRemaining == 99)
+		if(weaponPtr->PrimaryMagazinesRemaining >= AcidResourceCapacity(99))
 		{
 			/* no room! */
 			return 0;
@@ -903,7 +1010,7 @@ static int AbleToPickupAmmo(enum AMMO_ID ammoID)
 		else
 		{
 			if (ammoID==AMMO_SADAR_TOW) {
-				weaponPtr->PrimaryMagazinesRemaining+=4;
+				weaponPtr->PrimaryMagazinesRemaining+=AcidMagazinePickup(ammoID,4);
 			} else if (ammoID==AMMO_MARINE_PISTOL_PC) {
 				if ((AvP.Network != I_No_Network)&&(PISTOL_INFINITE_AMMO)) {
 					weaponPtr->PrimaryMagazinesRemaining=10;
@@ -939,12 +1046,12 @@ static int AbleToPickupAmmo(enum AMMO_ID ammoID)
 					}
 				}
 			} else if (ammoID==AMMO_10MM_CULW) {
-				weaponPtr->PrimaryMagazinesRemaining+=5;
+				weaponPtr->PrimaryMagazinesRemaining+=AcidMagazinePickup(ammoID,5);
 			} else if (ammoID==AMMO_PRED_RIFLE) {
 				/* Add to Rounds. */
-				weaponPtr->PrimaryRoundsRemaining+=(ONE_FIXED*SPEARS_PER_PICKUP);
-				if (weaponPtr->PrimaryRoundsRemaining>(ONE_FIXED*MAX_SPEARS)) {
-					weaponPtr->PrimaryRoundsRemaining=(ONE_FIXED*MAX_SPEARS);
+				weaponPtr->PrimaryRoundsRemaining+=ONE_FIXED*AcidResourceCapacity(SPEARS_PER_PICKUP);
+				if (weaponPtr->PrimaryRoundsRemaining>(ONE_FIXED*AcidResourceCapacity(MAX_SPEARS))) {
+					weaponPtr->PrimaryRoundsRemaining=(ONE_FIXED*AcidResourceCapacity(MAX_SPEARS));
 				}
 			} else if (ammoID==AMMO_PRED_DISC) {
 				/* Disc case... */
@@ -957,11 +1064,11 @@ static int AbleToPickupAmmo(enum AMMO_ID ammoID)
 					weaponPtr->PrimaryMagazinesRemaining+=1;
 				}
 			} else {
-				weaponPtr->PrimaryMagazinesRemaining+=1; /* KJL 12:54:37 03/10/97 - need extra data field in ammo templates */
+				weaponPtr->PrimaryMagazinesRemaining+=AcidMagazinePickup(ammoID,1); /* KJL 12:54:37 03/10/97 - need extra data field in ammo templates */
 			}
 
-			if(weaponPtr->PrimaryMagazinesRemaining > 99)
-				weaponPtr->PrimaryMagazinesRemaining = 99;
+			if(weaponPtr->PrimaryMagazinesRemaining > AcidResourceCapacity(99))
+				weaponPtr->PrimaryMagazinesRemaining = AcidResourceCapacity(99);
 		}
 	}
 
@@ -979,7 +1086,7 @@ static int AbleToPickupWeapon(enum WEAPON_ID weaponID)
 	BOOL WillSwitchToThisWeapon = FALSE;
 	int weaponSlot = -1;
     /* access the extra data hanging off the strategy block */
-	PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (Player->ObStrategyBlock->SBdataptr);
+	PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (InventoryRecipient ? (void*)InventoryRecipient : InventoryActor()->SBdataptr);
     GLOBALASSERT(playerStatusPtr);
 
 	LOCALASSERT(weaponID>=0);
@@ -1180,8 +1287,7 @@ static int AbleToPickupWeapon(enum WEAPON_ID weaponID)
 				templateAmmoPtr = &TemplateAmmo[twPtr->SecondaryAmmoID];
 
 				if ((weaponPtr->SecondaryRoundsRemaining==0)&&(weaponPtr->SecondaryMagazinesRemaining>0)) {
-					weaponPtr->SecondaryRoundsRemaining = templateAmmoPtr->AmmoPerMagazine;
-					weaponPtr->SecondaryMagazinesRemaining--;
+					ReloadWeaponMagazine(weaponPtr, 1);
 				}
 				#endif
 			} 
@@ -1197,13 +1303,11 @@ static int AbleToPickupWeapon(enum WEAPON_ID weaponID)
 				templateAmmoPtr = &TemplateAmmo[twPtr->PrimaryAmmoID];
 
 				if ((weaponPtr->PrimaryRoundsRemaining==0)&&(weaponPtr->PrimaryMagazinesRemaining>0)) {
-					weaponPtr->PrimaryRoundsRemaining = templateAmmoPtr->AmmoPerMagazine;
-					weaponPtr->PrimaryMagazinesRemaining--;
+					ReloadWeaponMagazine(weaponPtr, 0);
 				}
 				if (weaponPtr->WeaponIDNumber==WEAPON_TWO_PISTOLS) {
 					if ((weaponPtr->SecondaryRoundsRemaining==0)&&(weaponPtr->SecondaryMagazinesRemaining>0)) {
-						weaponPtr->SecondaryRoundsRemaining = templateAmmoPtr->AmmoPerMagazine;
-						weaponPtr->SecondaryMagazinesRemaining--;
+						ReloadWeaponMagazine(weaponPtr, 1);
 					}
 				}
 				if(!WillSwitchToThisWeapon)
@@ -1212,7 +1316,7 @@ static int AbleToPickupWeapon(enum WEAPON_ID weaponID)
 					Only show pickup weapon message if this isn't a new weapon.
 					(To avoid message duplication when the automatic weapon switching is done)
 					*/
-					NewOnScreenMessage(GetTextString(TemplateWeapon[weaponID].Name));
+					InventoryMessage(GetTextString(TemplateWeapon[weaponID].Name));
 				}
 				
 				return(1);
@@ -1226,7 +1330,7 @@ static int AbleToPickupWeapon(enum WEAPON_ID weaponID)
 						Only show pickup weapon message if this isn't a new weapon.
 						(To avoid message duplication when the automatic weapon switching is done)
 						*/
-						NewOnScreenMessage(GetTextString(TemplateWeapon[weaponID].Name));
+						InventoryMessage(GetTextString(TemplateWeapon[weaponID].Name));
 					}
 					return(1);
 				} else {
@@ -1252,7 +1356,7 @@ static int AbleToPickupWeapon(enum WEAPON_ID weaponID)
 		Only show pickup weapon message if this isn't a new weapon.
 		(To avoid message duplication when the automatic weapon switching is done)
 		*/
-		NewOnScreenMessage(GetTextString(TemplateWeapon[weaponID].Name));
+		InventoryMessage(GetTextString(TemplateWeapon[weaponID].Name));
 	}
 	/* successful */
 	return 1;
@@ -1263,7 +1367,7 @@ static int AbleToPickupWeapon(enum WEAPON_ID weaponID)
 static int AbleToPickupHealth(int healthID)
 {
 	/* access the extra data hanging off the strategy block */
-	PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (Player->ObStrategyBlock->SBdataptr);
+	PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (InventoryRecipient ? (void*)InventoryRecipient : InventoryActor()->SBdataptr);
 	GLOBALASSERT(playerStatusPtr);
 
 	{
@@ -1317,15 +1421,15 @@ static int AbleToPickupHealth(int healthID)
 		NpcData=GetThisNpcData(PlayerType);
 		LOCALASSERT(NpcData);
 
-		if (Player->ObStrategyBlock->SBDamageBlock.IsOnFire) {
-			Player->ObStrategyBlock->SBDamageBlock.IsOnFire=0;
-		} else if (Player->ObStrategyBlock->SBDamageBlock.Health==NpcData->StartingStats.Health<<ONE_FIXED_SHIFT) {
+		if (InventoryActor()->SBDamageBlock.IsOnFire) {
+			InventoryActor()->SBDamageBlock.IsOnFire=0;
+		} else if (InventoryActor()->SBDamageBlock.Health==NpcData->StartingStats.Health<<ONE_FIXED_SHIFT) {
 			/* Already at max. */
 			return(0);
 		}
 
-		Player->ObStrategyBlock->SBDamageBlock.Health=NpcData->StartingStats.Health<<ONE_FIXED_SHIFT;
-		playerStatusPtr->Health=Player->ObStrategyBlock->SBDamageBlock.Health;
+		InventoryActor()->SBDamageBlock.Health=NpcData->StartingStats.Health<<ONE_FIXED_SHIFT;
+		playerStatusPtr->Health=InventoryActor()->SBDamageBlock.Health;
 	}
 	return 1;
 }
@@ -1334,7 +1438,7 @@ static int AbleToPickupHealth(int healthID)
 static int AbleToPickupArmour(int armourID)
 {
 	/* access the extra data hanging off the strategy block */
-	PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (Player->ObStrategyBlock->SBdataptr);
+	PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (InventoryRecipient ? (void*)InventoryRecipient : InventoryActor()->SBdataptr);
 	GLOBALASSERT(playerStatusPtr);
 	
 	{
@@ -1386,13 +1490,13 @@ static int AbleToPickupArmour(int armourID)
 		NpcData=GetThisNpcData(PlayerType);
 		LOCALASSERT(NpcData);
 
-		if (Player->ObStrategyBlock->SBDamageBlock.Armour==NpcData->StartingStats.Armour<<ONE_FIXED_SHIFT) {
+		if (InventoryActor()->SBDamageBlock.Armour>=(AcidResourceCapacity(NpcData->StartingStats.Armour)<<ONE_FIXED_SHIFT)) {
 			/* Already at max. */
 			return(0);
 		}
 		
-		Player->ObStrategyBlock->SBDamageBlock.Armour=NpcData->StartingStats.Armour<<ONE_FIXED_SHIFT;
-		playerStatusPtr->Armour=Player->ObStrategyBlock->SBDamageBlock.Armour;
+		InventoryActor()->SBDamageBlock.Armour=AcidResourceCapacity(NpcData->StartingStats.Armour)<<ONE_FIXED_SHIFT;
+		playerStatusPtr->Armour=InventoryActor()->SBDamageBlock.Armour;
 	}
 	return 1;
 }
@@ -1401,7 +1505,7 @@ static int AbleToPickupArmour(int armourID)
 static int AbleToPickupMTrackerUpgrade(int mtrackerID)
 {
 	/* access the extra data hanging off the strategy block */
-	PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (Player->ObStrategyBlock->SBdataptr);
+	PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (InventoryRecipient ? (void*)InventoryRecipient : InventoryActor()->SBdataptr);
 	GLOBALASSERT(playerStatusPtr);
 
   /* For now, allow the player to pick up any type of upgrade */
@@ -1426,7 +1530,7 @@ static int AbleToPickupMTrackerUpgrade(int mtrackerID)
 
 void SetPlayerSecurityClearance(STRATEGYBLOCK *sbPtr, unsigned int securityLevel)
 {
-	PLAYER_STATUS *playerStatusPtr = (PLAYER_STATUS *)(Player->ObStrategyBlock->SBdataptr);
+	PLAYER_STATUS *playerStatusPtr = (PLAYER_STATUS *)(InventoryRecipient ? (void*)InventoryRecipient : InventoryActor()->SBdataptr);
 	GLOBALASSERT(playerStatusPtr);	
 	GLOBALASSERT(securityLevel<32);
 
@@ -1442,7 +1546,7 @@ void SetPlayerSecurityClearance(STRATEGYBLOCK *sbPtr, unsigned int securityLevel
 
 int ReturnPlayerSecurityClearance(STRATEGYBLOCK *sbPtr, unsigned int securityLevel)
 {
-	PLAYER_STATUS *playerStatusPtr = (PLAYER_STATUS *)(Player->ObStrategyBlock->SBdataptr);
+	PLAYER_STATUS *playerStatusPtr = (PLAYER_STATUS *)(InventoryRecipient ? (void*)InventoryRecipient : InventoryActor()->SBdataptr);
 	GLOBALASSERT(playerStatusPtr);	
 	GLOBALASSERT(securityLevel<32);
 	
@@ -1452,13 +1556,16 @@ int ReturnPlayerSecurityClearance(STRATEGYBLOCK *sbPtr, unsigned int securityLev
 
 /* Removes objects picked up by the player: either destroys them for a single
 player game, or for a multiplayer game, sets them to respawn */
-extern void RemovePickedUpObject(STRATEGYBLOCK *objectPtr)
+static void RemovePickedUpObjectForActor(STRATEGYBLOCK *objectPtr,STRATEGYBLOCK *actor)
 {
 	INANIMATEOBJECT_STATUSBLOCK* objStatPtr = objectPtr->SBdataptr;
 	GLOBALASSERT(objectPtr->I_SBtype == I_BehaviourInanimateObject);
 
-	/* patrick, for e3- add a sound effect to explosions */
-	switch(objStatPtr->typeId)
+	/* NPC collection uses the normal positional/EFX audio path. */
+ if(actor && actor!=Player->ObStrategyBlock && actor->DynPtr){
+  SOUNDINDEX sound=objStatPtr->typeId==IOT_Weapon?SID_MARINE_PICKUP_WEAPON:objStatPtr->typeId==IOT_Ammo?SID_MARINE_PICKUP_AMMO:objStatPtr->typeId==IOT_Armour?SID_MARINE_PICKUP_ARMOUR:SID_PICKUP;
+  Sound_Play(sound,"d",&actor->DynPtr->Position);
+ }else switch(objStatPtr->typeId)
 	{
 		case(IOT_Weapon):
 			switch (AvP.PlayerType) {
@@ -1520,7 +1627,7 @@ int SlotForThisWeapon(enum WEAPON_ID weaponID) {
 	PLAYER_STATUS *psptr;
 	int a;
 
-	psptr=(PLAYER_STATUS *)Player->ObStrategyBlock->SBdataptr;
+	psptr=(PLAYER_STATUS *)(InventoryRecipient ? (void*)InventoryRecipient : InventoryActor()->SBdataptr);
 	for (a=0; a<MAX_NO_OF_WEAPON_SLOTS; a++) {
 		if (psptr->WeaponSlot[a].WeaponIDNumber==weaponID) {
 			break;
@@ -1537,7 +1644,7 @@ static int AbleToPickupFieldCharge(int chargeID)
 {
 	/* access the extra data hanging off the strategy block */
 	NPC_TYPES PlayerType;
-	PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (Player->ObStrategyBlock->SBdataptr);
+	PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (InventoryRecipient ? (void*)InventoryRecipient : InventoryActor()->SBdataptr);
 	GLOBALASSERT(playerStatusPtr);
 
 	switch(AvP.PlayerType) 
@@ -1588,11 +1695,11 @@ static int AbleToPickupFieldCharge(int chargeID)
 		}
 	}
 
-	if (playerStatusPtr->FieldCharge==PLAYERCLOAK_MAXENERGY) {
+	if (playerStatusPtr->FieldCharge==AcidResourceCapacity(PLAYERCLOAK_MAXENERGY)) {
 		/* Got max already. */
 		return(0);
 	} else {
-		playerStatusPtr->FieldCharge=PLAYERCLOAK_MAXENERGY;
+		playerStatusPtr->FieldCharge=AcidResourceCapacity(PLAYERCLOAK_MAXENERGY);
 		return(1);
 	}
 }
@@ -1695,7 +1802,7 @@ void Recall_Disc(void) {
 	/* If you are a predator with NO discs, pick up the nearest one? */
 	PLAYER_WEAPON_DATA *weaponPtr;
 	int weaponSlot = -1;
-	PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (Player->ObStrategyBlock->SBdataptr);
+	PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (InventoryRecipient ? (void*)InventoryRecipient : InventoryActor()->SBdataptr);
     GLOBALASSERT(playerStatusPtr);
 
 	if (AvP.PlayerType!=I_Predator) return;
@@ -1729,9 +1836,9 @@ void Recall_Disc(void) {
 					VECTORCH offset;
 					int dist;
 
-					offset.vx=Player->ObStrategyBlock->DynPtr->Position.vx-candidate->DynPtr->Position.vx;
-					offset.vy=Player->ObStrategyBlock->DynPtr->Position.vy-candidate->DynPtr->Position.vy;
-					offset.vz=Player->ObStrategyBlock->DynPtr->Position.vz-candidate->DynPtr->Position.vz;
+					offset.vx=InventoryActor()->DynPtr->Position.vx-candidate->DynPtr->Position.vx;
+					offset.vy=InventoryActor()->DynPtr->Position.vy-candidate->DynPtr->Position.vy;
+					offset.vz=InventoryActor()->DynPtr->Position.vz-candidate->DynPtr->Position.vz;
 
 					dist=Approximate3dMagnitude(&offset);
 					
@@ -1743,9 +1850,9 @@ void Recall_Disc(void) {
 					VECTORCH offset;
 					int dist;
 
-					offset.vx=Player->ObStrategyBlock->DynPtr->Position.vx-candidate->DynPtr->Position.vx;
-					offset.vy=Player->ObStrategyBlock->DynPtr->Position.vy-candidate->DynPtr->Position.vy;
-					offset.vz=Player->ObStrategyBlock->DynPtr->Position.vz-candidate->DynPtr->Position.vz;
+					offset.vx=InventoryActor()->DynPtr->Position.vx-candidate->DynPtr->Position.vx;
+					offset.vy=InventoryActor()->DynPtr->Position.vy-candidate->DynPtr->Position.vy;
+					offset.vz=InventoryActor()->DynPtr->Position.vz-candidate->DynPtr->Position.vz;
 
 					dist=Approximate3dMagnitude(&offset);
 					
@@ -1773,7 +1880,7 @@ void Recall_Disc(void) {
 					playerStatusPtr->FieldCharge-=RecallDisc_Charge;
 					CurrentGameStats_ChargeUsed(RecallDisc_Charge);
 					#if 0
-					NewOnScreenMessage("RECALLED DISC");
+					InventoryMessage("RECALLED DISC");
 					#endif
 					Sound_Play(SID_PREDATOR_DISK_RECOVERED,"h");
 					AutoSwapToDisc_OutOfSequence();
@@ -1794,7 +1901,7 @@ void Recall_Disc(void) {
 					playerStatusPtr->FieldCharge-=RecallDisc_Charge;
 					CurrentGameStats_ChargeUsed(RecallDisc_Charge);
 					#if 0
-					NewOnScreenMessage("RECALLED DISC");
+					InventoryMessage("RECALLED DISC");
 					#endif
 					Sound_Play(SID_PREDATOR_DISK_RECOVERED,"h");
 					AutoSwapToDisc_OutOfSequence();
@@ -1823,7 +1930,7 @@ void Recall_Disc(void) {
 			}
 		} else {
 			#if 0
-			NewOnScreenMessage("FOUND NO DISCS");
+			InventoryMessage("FOUND NO DISCS");
 			#endif
 		}
 	}
@@ -1873,3 +1980,7 @@ void RemoveAllThisPlayersDiscs(void) {
 		}
 	}
 }
+
+#include "npc_inventory_impl.inc"
+
+void RemovePickedUpObject(STRATEGYBLOCK*objectPtr){RemovePickedUpObjectForActor(objectPtr,Player->ObStrategyBlock);}

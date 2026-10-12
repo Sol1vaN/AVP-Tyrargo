@@ -1,7 +1,11 @@
+#include "event_latency.h"
+#include "menu_preview.h"
 /***** HModel.c *****/
 /***** CDF 21/10/97 *****/
 
 #include "3dc.h"
+#include "viewmodel.h"
+#include "pose_math.h"
 
 #include "inline.h"
 #include "module.h"
@@ -34,6 +38,7 @@
 #include "ourasert.h"
 #include "particle.h"
 #include "kshape.h"
+#include "render_geometry.h"
 #include "sfx.h"
 #include "dxlog.h"
 #include <math.h>
@@ -416,6 +421,7 @@ SECTION_DATA *Create_New_Section(SECTION *this_section) {
 	this_section_data=(SECTION_DATA *)AllocateMem(sizeof(SECTION_DATA));
 	GLOBALASSERT(this_section_data);
 
+	this_section_data->RenderPoseValid=this_section_data->RenderTweenValid=0;
 	this_section_data->sac_ptr=NULL;
 	this_section_data->tac_ptr=NULL;
 	this_section_data->sempai=this_section;
@@ -520,7 +526,15 @@ SECTION_DATA *Create_New_Section(SECTION *this_section) {
 
 }
 
+static void Create_HModelLatencyBody(HMODELCONTROLLER *controller,SECTION *root);
 void Create_HModel(HMODELCONTROLLER *controller,SECTION *root) {
+ EVENT_TICK start=EventLatencyBegin();
+ EVENT_TICK id=0;
+ int eventType=0, eventMessage=0;
+ Create_HModelLatencyBody(controller,root);
+ EventLatencyEnd(start,"assemble resident hierarchy",eventType,eventMessage,id,0,0);
+}
+static void Create_HModelLatencyBody(HMODELCONTROLLER *controller,SECTION *root) {
 
 	/* Connects sequence to controller and must generate 
 	the list of section_data structures. */
@@ -678,6 +692,7 @@ void Dispel_HModel(HMODELCONTROLLER *controller) {
 	}
 
 	Delete_Deltas_Recursion(controller->Deltas);
+	controller->Deltas=NULL;
 
 }
 
@@ -692,6 +707,67 @@ void RemoveAllDeltas(HMODELCONTROLLER *controller) {
 }
 
 /* SetElevationDeltas removed, 8.4.98. CDF. */
+
+
+static void HModelRenderSample(KEYFRAME_DATA *frame,double t,double offset[3],double q[4]) {
+ VECTORCH a,b;double qa[4],qb[4];KEYFRAME_DATA *next=frame->Next_Frame;
+ GetKeyFrameOffset(frame,&a);
+ qa[0]=frame->QOrient.quatx;qa[1]=frame->QOrient.quaty;qa[2]=frame->QOrient.quatz;qa[3]=frame->QOrient.quatw;
+ if(!next || t<=0){offset[0]=a.vx;offset[1]=a.vy;offset[2]=a.vz;memcpy(q,qa,sizeof qa);PoseNormalize(q);return;}
+ if(t>1)t=1;GetKeyFrameOffset(next,&b);
+ offset[0]=a.vx+((double)b.vx-a.vx)*t;offset[1]=a.vy+((double)b.vy-a.vy)*t;offset[2]=a.vz+((double)b.vz-a.vz)*t;
+ qb[0]=next->QOrient.quatx;qb[1]=next->QOrient.quaty;qb[2]=next->QOrient.quatz;qb[3]=next->QOrient.quatw;
+ PoseSlerp(q,qa,qb,t);
+}
+static void HModelRenderFrame(SECTION_DATA *section,KEYFRAME_DATA *frame,int timer) {
+ HModelRenderSample(frame,frame->Sequence_Length>0?(double)timer/frame->Sequence_Length:0,section->RenderOffset,section->RenderQuat);
+ section->RenderPoseValid=1;section->RenderTweenValid=0;
+}
+static void HModelRenderAddDelta(SECTION_DATA *section) {
+ int i;for(i=0;i<3;i++)section->RenderOffset[i]+=section->RenderDeltaOffset[i];
+ PoseMultiplyQuat(section->RenderQuat,section->RenderDeltaQuat,section->RenderQuat);
+}
+static void HModelRenderTweenTarget(SECTION_DATA *section,SEQUENCE *sequence,int timer) {
+ KEYFRAME_DATA *f=sequence->first_frame;
+ /* Preserve the exact endpoint selected by the legacy forward/backward tween.
+    Pure sampling: the normal timer alone owns events, sounds and attack flags. */
+ if(timer==65535){f=sequence->last_frame;timer=0;}
+ else if(f->last_frame)timer=0;
+ while(f->Sequence_Length>0 && timer>=f->Sequence_Length){timer-=f->Sequence_Length;f=f->last_frame?sequence->first_frame:f->Next_Frame;}
+ HModelRenderSample(f,f->Sequence_Length>0?(double)timer/f->Sequence_Length:0,section->RenderTargetOffset,section->RenderTargetQuat);
+}
+static void HModelRenderCaptureTween(SECTION_DATA *section) {
+ HMODELCONTROLLER *c=section->my_controller;
+ if(section->RenderPoseValid){memcpy(section->RenderStoredOffset,section->RenderOffset,sizeof section->RenderOffset);memcpy(section->RenderStoredQuat,section->RenderQuat,sizeof section->RenderQuat);}
+ else{
+  section->RenderStoredOffset[0]=section->stored_offset.vx;section->RenderStoredOffset[1]=section->stored_offset.vy;section->RenderStoredOffset[2]=section->stored_offset.vz;
+  section->RenderStoredQuat[0]=section->stored_quat.quatx;section->RenderStoredQuat[1]=section->stored_quat.quaty;section->RenderStoredQuat[2]=section->stored_quat.quatz;section->RenderStoredQuat[3]=section->stored_quat.quatw;PoseNormalize(section->RenderStoredQuat);
+ }
+ HModelRenderTweenTarget(section,GetSequencePointer(c->After_Tweening_Sequence_Type,c->After_Tweening_Sub_Sequence,section->sempai),c->AT_sequence_timer);
+ section->RenderTweenValid=1;
+}
+static void HModelRenderAddTargetDelta(SECTION_DATA *section) {
+ int i;for(i=0;i<3;i++)section->RenderTargetOffset[i]+=section->RenderDeltaOffset[i];
+ PoseMultiplyQuat(section->RenderTargetQuat,section->RenderDeltaQuat,section->RenderTargetQuat);
+}
+static void HModelRenderTween(SECTION_DATA *section,int timer) {
+ double t=timer/65536.0;int i;
+ for(i=0;i<3;i++)section->RenderOffset[i]=section->RenderStoredOffset[i]+t*(section->RenderTargetOffset[i]-section->RenderStoredOffset[i]);
+ PoseSlerp(section->RenderQuat,section->RenderStoredQuat,section->RenderTargetQuat,t);section->RenderPoseValid=1;
+}
+static void HModelRenderWorld(SECTION_DATA *section,const VECTORCH *position,const MATRIXCH *orientation) {
+ double r[9],t[3];SECTION_DATA *parent=section->My_Parent;
+ if(!section->RenderPoseValid)return;
+ PoseQuatMatrix(section->RenderLocalMatrix,section->RenderQuat);
+ if(parent && parent->RenderPoseValid){memcpy(r,parent->RenderWorldMatrix,sizeof r);memcpy(t,parent->RenderWorldOffset,sizeof t);}
+ else{
+  r[0]=orientation->mat11/65536.0;r[1]=orientation->mat21/65536.0;r[2]=orientation->mat31/65536.0;
+  r[3]=orientation->mat12/65536.0;r[4]=orientation->mat22/65536.0;r[5]=orientation->mat32/65536.0;
+  r[6]=orientation->mat13/65536.0;r[7]=orientation->mat23/65536.0;r[8]=orientation->mat33/65536.0;
+  t[0]=position->vx;t[1]=position->vy;t[2]=position->vz;
+ }
+ PoseCompose(section->RenderWorldMatrix,section->RenderWorldOffset,r,t,section->RenderLocalMatrix,section->RenderOffset);
+}
 
 void Process_Delta_Controller(SECTION_DATA *this_section_data,DELTA_CONTROLLER *delta_controller,VECTORCH *output_offset,QUAT *output_quat) {
 
@@ -803,6 +879,7 @@ void Process_Delta_Controller(SECTION_DATA *this_section_data,DELTA_CONTROLLER *
 
 	Slerp(this_frame,lerp,output_quat);
 
+	HModelRenderSample(this_frame,this_frame->Sequence_Length>0?(double)working_timer/this_frame->Sequence_Length:0,this_section_data->RenderDeltaOffset,this_section_data->RenderDeltaQuat);
 	delta_controller->lastframe_timer=delta_controller->timer;
 
 }
@@ -941,7 +1018,7 @@ void Handle_Section_Timer(HMODELCONTROLLER *controller,SECTION_DATA *this_sectio
 	this_section_data->lastframe_timer=base_timer;
 }
 
-void New_Analyse_Keyframe_Data(HMODELCONTROLLER *controller,SECTION_DATA *this_section_data,KEYFRAME_DATA *input_frame,int base_timer,VECTORCH *output_offset,MATRIXCH *output_matrix) {
+static void New_Analyse_Keyframe_Data_MeasuredBody(HMODELCONTROLLER *controller,SECTION_DATA *this_section_data,KEYFRAME_DATA *input_frame,int base_timer,VECTORCH *output_offset,MATRIXCH *output_matrix) {
 
 	KEYFRAME_DATA *this_frame;
 	QUAT output_quat;
@@ -994,6 +1071,7 @@ void New_Analyse_Keyframe_Data(HMODELCONTROLLER *controller,SECTION_DATA *this_s
 	if (input_frame->last_frame) {
 		/* This is rigid. */
 		GetKeyFrameOffset(input_frame,output_offset);
+		HModelRenderFrame(this_section_data,input_frame,0);
 	
 		CopyShortQuatToInt(&input_frame->QOrient,&output_quat);
 
@@ -1009,6 +1087,7 @@ void New_Analyse_Keyframe_Data(HMODELCONTROLLER *controller,SECTION_DATA *this_s
 			while (dcon) {
 				if (dcon->Active) {
 					Process_Delta_Controller(this_section_data,dcon,&elevation_offset,&elevation_quat);
+					HModelRenderAddDelta(this_section_data);
 					output_offset->vx+=elevation_offset.vx;
 					output_offset->vy+=elevation_offset.vy;
 					output_offset->vz+=elevation_offset.vz;
@@ -1077,6 +1156,7 @@ void New_Analyse_Keyframe_Data(HMODELCONTROLLER *controller,SECTION_DATA *this_s
 	
 
 	lerp=MUL_FIXED(working_timer,this_frame->oneoversequencelength);
+	HModelRenderFrame(this_section_data,this_frame,working_timer);
 
 	{
 		KEYFRAME_DATA* next_frame=this_frame->Next_Frame;
@@ -1113,6 +1193,7 @@ void New_Analyse_Keyframe_Data(HMODELCONTROLLER *controller,SECTION_DATA *this_s
 		while (dcon) {
 			if (dcon->Active) {
 				Process_Delta_Controller(this_section_data,dcon,&elevation_offset,&elevation_quat);
+					HModelRenderAddDelta(this_section_data);
 				output_offset->vx+=elevation_offset.vx;
 				output_offset->vy+=elevation_offset.vy;
 				output_offset->vz+=elevation_offset.vz;
@@ -1172,6 +1253,14 @@ void New_Analyse_Keyframe_Data(HMODELCONTROLLER *controller,SECTION_DATA *this_s
 
 }
 
+void New_Analyse_Keyframe_Data(HMODELCONTROLLER *controller,SECTION_DATA *this_section_data,KEYFRAME_DATA *input_frame,int base_timer,VECTORCH *output_offset,MATRIXCH *output_matrix)
+{
+ EVENT_TICK stamp=EventLatencyBegin();
+ New_Analyse_Keyframe_Data_MeasuredBody(controller,this_section_data,input_frame,base_timer,output_offset,output_matrix);
+ EventLatencyEnd(stamp,"animation keyframes",controller->Sequence_Type,controller->Sub_Sequence,0,this_section_data->sempai->Section_Name,0);
+}
+
+
 SHAPEHEADER *Get_Degraded_Shape(SHAPEHEADER *base_shape)
 {
 	VECTORCH *worldposition,viewposition;
@@ -1198,7 +1287,10 @@ SHAPEHEADER *Get_Degraded_Shape(SHAPEHEADER *base_shape)
 	/* Now walk array. */
 	{
 
-		int objectDistance = viewposition.vz;
+        /* Four times the original model distances, including the distant
+           silhouette. Preserve the user's detail option and zoom scaling. */
+        viewposition.vz /= 4;
+        int objectDistance = viewposition.vz;
 
 		if (lodScale!=ONE_FIXED)
 		{
@@ -1230,7 +1322,11 @@ SHAPEHEADER *Get_Degraded_Shape(SHAPEHEADER *base_shape)
 	return(array_ptr->shape);
 }
 
-void Process_Section(HMODELCONTROLLER *controller,SECTION_DATA *this_section_data,VECTORCH *parent_position,MATRIXCH *parent_orientation,int frame_timer, int sequence_type, int subsequence, int render) {
+void Process_Section(HMODELCONTROLLER *controller,SECTION_DATA *this_section_data,VECTORCH *parent_position,MATRIXCH *parent_orientation,int frame_timer, int sequence_type, int subsequence, int render);
+
+static void Process_Section_MeasuredBody(HMODELCONTROLLER *controller,SECTION_DATA *this_section_data,VECTORCH *parent_position,MATRIXCH *parent_orientation,int frame_timer, int sequence_type, int subsequence, int render) {
+ EventLatencyCount(EL_MODEL_SECTIONS,1);
+
 
 	KEYFRAME_DATA *sequence_start;
 	SECTION *this_section;
@@ -1274,7 +1370,7 @@ void Process_Section(HMODELCONTROLLER *controller,SECTION_DATA *this_section_dat
 	diagnostic_vector.vy=0;
 	diagnostic_vector.vz=0;
 	
-	if ((controller->FrameStamp!=GlobalFrameCounter)
+	if ((!RenderPausedPreview && controller->FrameStamp!=GlobalFrameCounter)
 		||((this_section_data->flags&section_data_initialised)==0)) {
 
 		int fake_frame_timer;
@@ -1303,10 +1399,12 @@ void Process_Section(HMODELCONTROLLER *controller,SECTION_DATA *this_section_dat
 			this_section_data->World_Offset.vx=0;
 			this_section_data->World_Offset.vy=0;
 			this_section_data->World_Offset.vz=0;
+            memset(this_section_data->RenderOffset,0,sizeof this_section_data->RenderOffset);
 		}
 		
 		if ((controller->ZeroRootRotation)&&(this_section_data==controller->section_data)) {
 			this_section_data->RelSecMat=Identity_RotMat;
+            this_section_data->RenderQuat[0]=this_section_data->RenderQuat[1]=this_section_data->RenderQuat[2]=0;this_section_data->RenderQuat[3]=1;
 		}
 						
 		this_section_data->Offset=this_section_data->World_Offset;
@@ -1321,6 +1419,7 @@ void Process_Section(HMODELCONTROLLER *controller,SECTION_DATA *this_section_dat
 		
 		/* Create the absolute rotation matrix for this section. */
 		MatrixMultiply(parent_orientation,&(this_section_data->RelSecMat),&(this_section_data->SecMat));
+        HModelRenderWorld(this_section_data,parent_position,parent_orientation);
 
 		/* Set the initialised flag... */
 		this_section_data->flags|=section_data_initialised;
@@ -1455,7 +1554,7 @@ void Process_Section(HMODELCONTROLLER *controller,SECTION_DATA *this_section_dat
 
 		/* Ho hum. */
 
-		if (dummy_displayblock.ShapeAnimControlBlock) {
+		if (!RenderPausedPreview && dummy_displayblock.ShapeAnimControlBlock) {
 			DoShapeAnimation(&dummy_displayblock);
 		}
 
@@ -1493,7 +1592,11 @@ void Process_Section(HMODELCONTROLLER *controller,SECTION_DATA *this_section_dat
 		}	
 		#endif
 		
-		RenderThisHierarchicalDisplayblock(&dummy_displayblock);						  
+		GeometrySection(this_section_data);
+		ViewmodelSection(this_section_data);
+		RenderThisHierarchicalDisplayblock(&dummy_displayblock);
+		ViewmodelSection(NULL);
+        GeometrySection(NULL);						  
 
 	} else if (controller->View_FrameStamp!=GlobalFrameCounter) {
 		this_section_data->flags&=(~section_data_view_init);
@@ -1501,7 +1604,7 @@ void Process_Section(HMODELCONTROLLER *controller,SECTION_DATA *this_section_dat
 
 	/* Gore spray... */
 	
-	if (GlobalGoreRate==0) return;
+	if (RenderPausedPreview || GlobalGoreRate==0) return;
 	if (NumberOfBloodParticles>=MAX_NO_OF_BLOOD_PARTICLES) return;
 	if (controller->DisableBleeding) return;
 
@@ -1835,6 +1938,14 @@ void Process_Section(HMODELCONTROLLER *controller,SECTION_DATA *this_section_dat
 
 }
 
+void Process_Section(HMODELCONTROLLER *controller,SECTION_DATA *this_section_data,VECTORCH *parent_position,MATRIXCH *parent_orientation,int frame_timer, int sequence_type, int subsequence, int render)
+{
+ EVENT_TICK stamp=EventLatencyBegin();
+ Process_Section_MeasuredBody(controller,this_section_data,parent_position,parent_orientation,frame_timer,sequence_type,subsequence,render);
+ EventLatencyEnd(stamp,"model section update",render,subsequence,0,this_section_data->sempai->Section_Name,0);
+}
+
+
 void Init_Sequence_Recursion(SECTION_DATA *this_section_data, int sequence_type,int subsequence, int seconds_for_sequence) {
 
 	SEQUENCE *sequence_ptr;
@@ -2002,7 +2113,8 @@ void InitHModelSequence(HMODELCONTROLLER *controller, int sequence_type,int subs
 	
 }
 
-static void HMTimer_Kernel(HMODELCONTROLLER *controller) {
+static void HMTimer_Kernel_MeasuredBody(HMODELCONTROLLER *controller) {
+ if(RenderPausedPreview)return;
 
 	/* Core of the timer code. */
 
@@ -2112,8 +2224,15 @@ static void HMTimer_Kernel(HMODELCONTROLLER *controller) {
 	}
 
 }
+static void HMTimer_Kernel(HMODELCONTROLLER *controller)
+{
+ EVENT_TICK stamp=EventLatencyBegin();
+ HMTimer_Kernel_MeasuredBody(controller);
+ EventLatencyEnd(stamp,"model animation clock",controller->Sequence_Type,controller->Sub_Sequence,0,0,0);
+}
 
-void DoHModel(HMODELCONTROLLER *controller, DISPLAYBLOCK *dptr) {
+
+static void DoHModel_MeasuredBody(HMODELCONTROLLER *controller, DISPLAYBLOCK *dptr) {
 
 	GLOBALASSERT(controller);
 	GLOBALASSERT(dptr);
@@ -2145,7 +2264,8 @@ void DoHModel(HMODELCONTROLLER *controller, DISPLAYBLOCK *dptr) {
 
 	/* Only do timer if you're out of date. */
 	
-	if (controller->FrameStamp!=GlobalFrameCounter) {
+	if (RenderPausedPreview) { /* Preserve the cached pose and keyframe events. */ }
+	else if (controller->FrameStamp!=GlobalFrameCounter) {
 
 		HMTimer_Kernel(controller);
 
@@ -2183,10 +2303,18 @@ void DoHModel(HMODELCONTROLLER *controller, DISPLAYBLOCK *dptr) {
 
 	/* Update frame stamp. */
 
-	controller->FrameStamp=GlobalFrameCounter;
+	if(!RenderPausedPreview)controller->FrameStamp=GlobalFrameCounter;
 	controller->Computed_Position=dptr->ObWorld;
 
 }
+
+void DoHModel(HMODELCONTROLLER *controller, DISPLAYBLOCK *dptr)
+{
+ EVENT_TICK stamp=EventLatencyBegin();
+ DoHModel_MeasuredBody(controller,dptr);
+ EventLatencyEnd(stamp,"model pose and rendering",dptr->ObStrategyBlock?dptr->ObStrategyBlock->I_SBtype:0,controller->Sequence_Type,EventLatencyId(dptr->ObStrategyBlock?dptr->ObStrategyBlock->SBname:0),0,0);
+}
+
 
 void DoHModelTimer_Recursion(HMODELCONTROLLER *controller,SECTION_DATA *this_section_data,int frame_timer, int sequence_type, int subsequence) {
 
@@ -2239,6 +2367,7 @@ void DoHModelTimer_Recursion(HMODELCONTROLLER *controller,SECTION_DATA *this_sec
 }
 
 void DoHModelTimer(HMODELCONTROLLER *controller) {
+ if(RenderPausedPreview)return;
 
 	/* Be VERY careful with this function - it can put the timer and the
 	position computations out of step.  Once you've called this, call NO
@@ -2321,7 +2450,7 @@ void ProveHModel(HMODELCONTROLLER *controller, DISPLAYBLOCK *dptr) {
 
 }
 
-void ProveHModel_Far(HMODELCONTROLLER *controller, STRATEGYBLOCK *sbPtr) {
+static void ProveHModel_Far_MeasuredBody(HMODELCONTROLLER *controller, STRATEGYBLOCK *sbPtr) {
 
 	/* Simply to verify a new hmodel, and remove junk. */
 
@@ -2382,6 +2511,14 @@ void ProveHModel_Far(HMODELCONTROLLER *controller, STRATEGYBLOCK *sbPtr) {
 	GLOBALASSERT(controller->section_data->flags&section_data_initialised);
 
 }
+
+void ProveHModel_Far(HMODELCONTROLLER *controller, STRATEGYBLOCK *sbPtr)
+{
+ EVENT_TICK stamp=EventLatencyBegin();
+ ProveHModel_Far_MeasuredBody(controller,sbPtr);
+ EventLatencyEnd(stamp,"model pose without rendering",sbPtr->I_SBtype,controller->Sequence_Type,EventLatencyId(sbPtr->SBname),0,0);
+}
+
 
 
 int Prune_Recursion_Virtual(SECTION_DATA *this_section_data) {
@@ -3080,6 +3217,7 @@ void Init_Tweening_Recursion(SECTION_DATA *this_section_data, int target_sequenc
 	this_section_data->lastframe_timer=0;
 	this_section_data->gore_timer=0; /* As good a time as any. */
 
+	HModelRenderCaptureTween(this_section_data);
 	this_section_data->Tweening=1;
 
 	/* Animation? */
@@ -3267,6 +3405,7 @@ void ReSnap(HMODELCONTROLLER *controller,SECTION_DATA *this_section_data, int el
 	}
 	#endif
 
+	HModelRenderTweenTarget(this_section_data,sequence_ptr,controller->AT_sequence_timer);
 	if (elevation) {
 
 		/* Elevation gone! Now deltas? */
@@ -3280,6 +3419,7 @@ void ReSnap(HMODELCONTROLLER *controller,SECTION_DATA *this_section_data, int el
 			while (dcon) {
 				if (dcon->Active) {
 					Process_Delta_Controller(this_section_data,dcon,&elevation_offset,&elevation_quat);
+                    HModelRenderAddTargetDelta(this_section_data);
 					this_section_data->target_offset.vx+=elevation_offset.vx;
 					this_section_data->target_offset.vy+=elevation_offset.vy;
 					this_section_data->target_offset.vz+=elevation_offset.vz;
@@ -3353,6 +3493,7 @@ void Analyse_Tweening_Data(HMODELCONTROLLER *controller,SECTION_DATA *this_secti
 	/* Tests: can't be too careful. */
 	if (working_timer>=65536) working_timer=65535;
 	if (working_timer<0) working_timer=0;
+    if(!this_section_data->RenderTweenValid)HModelRenderCaptureTween(this_section_data);
 
 	/* Now, a lot like the old way, but we shouldn't need to loop more than once. */
 	/* If we do, we have a game framerate slower than the anim framerate. */
@@ -3372,6 +3513,7 @@ void Analyse_Tweening_Data(HMODELCONTROLLER *controller,SECTION_DATA *this_secti
 
 	}
 
+	HModelRenderTween(this_section_data,working_timer);
 	/* Now, this_frame and next_frame are set, and working_timer<this_frame->Sequence_Length. */
 	
 	output_offset->vx=(MUL_FIXED(this_section_data->delta_offset.vx,working_timer))+this_section_data->stored_offset.vx;
@@ -3672,7 +3814,9 @@ void Transmogrification_Recursion(STRATEGYBLOCK *sbPtr,HMODELCONTROLLER *control
 					/* If it is fragged off, put it back. */
 					SECTION_DATA *new_child;
 			
-					new_child=Create_New_Section(*new_child_list_ptr);
+					/* Fragment creation can replace the shared creation context. */
+				Global_Controller_Ptr=controller;
+				new_child=Create_New_Section(*new_child_list_ptr);
 
 					new_child->My_Parent=this_section_data;
 					new_child->Prev_Sibling=NULL;
@@ -3690,6 +3834,8 @@ void Transmogrification_Recursion(STRATEGYBLOCK *sbPtr,HMODELCONTROLLER *control
 				/* No corresponding old section: create a new bit. */
 				SECTION_DATA *new_child;
 			
+				/* Fragment creation can replace the shared creation context. */
+				Global_Controller_Ptr=controller;
 				new_child=Create_New_Section(*new_child_list_ptr);
 
 				new_child->My_Parent=this_section_data;
@@ -3747,6 +3893,8 @@ void Transmogrification_Recursion(STRATEGYBLOCK *sbPtr,HMODELCONTROLLER *control
 			
 			while (*new_child_list_ptr!=NULL) {
 				
+				/* Fragment creation can replace the shared creation context. */
+				Global_Controller_Ptr=controller;
 				new_child=Create_New_Section(*new_child_list_ptr);
 			
 				new_child->My_Parent=this_section_data;
@@ -4016,6 +4164,7 @@ void Budge_Recursion(SECTION_DATA *this_section_data,VECTORCH *offset) {
 	this_section_data->World_Offset.vx+=offset->vx;
 	this_section_data->World_Offset.vy+=offset->vy;
 	this_section_data->World_Offset.vz+=offset->vz;
+ if(this_section_data->RenderPoseValid){this_section_data->RenderWorldOffset[0]+=offset->vx;this_section_data->RenderWorldOffset[1]+=offset->vy;this_section_data->RenderWorldOffset[2]+=offset->vz;}
 
 	/* Now call recursion... */
 
@@ -4421,6 +4570,7 @@ void Init_Tweening_ToTheMiddle_Recursion(SECTION_DATA *this_section_data, int ta
 	this_section_data->lastframe_timer=0;
 	this_section_data->gore_timer=0; /* As good a time as any. */
 
+	HModelRenderCaptureTween(this_section_data);
 	this_section_data->Tweening=1;
 
 	/* Animation? */
@@ -5187,6 +5337,8 @@ static void LoadHierarchySection(SECTION_DATA* section)
 			COPYELEMENT_LOAD(gore_timer);
 
 			COPYELEMENT_LOAD(flags);
+            section->RenderPoseValid=section->RenderTweenValid=0;
+            section->flags&=~section_data_initialised;
 			COPYELEMENT_LOAD(replacement_id);
 
 

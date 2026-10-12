@@ -1,3 +1,4 @@
+#include "tyrargo_version.h"
 #ifndef NDEBUG
 
 /* ********************************************************************	*
@@ -143,7 +144,7 @@ static volatile int db_vol_zero = 0;
 /* Text strings for output. */
 static const char* db_assert_textA[ 3 ] =
 {
-	"ASSERTION FAILED!",
+	TYRARGO_DISPLAY_VERSION " - ASSERTION FAILED!",
 	"Expression: %s",
 	"File: %s Line: %d"
 };

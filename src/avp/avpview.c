@@ -1,4 +1,10 @@
+#include "event_latency.h"
+#include "menu_preview.h"
+#include "camera_motion.h"
 #include "3dc.h"
+#include "projection.h"
+#include <stdint.h>
+#include <math.h>
 
 #include "inline.h"
 #include "module.h"
@@ -10,6 +16,7 @@
 #include "opengl.h"
 
 #include "kshape.h"
+#include "vertex_lights.h"
 #include "kzsort.h"
 #include "frustum.h"
 #include "vision.h"
@@ -20,6 +27,8 @@
 /* character extents data so you know where the player's eyes are */
 #include "extents.h"
 #include "avp_userprofile.h"
+#include "player_fov.h"
+#include "usr_io.h"
 
 #define UseLocalAssert Yes
 #include "ourasert.h"
@@ -70,6 +79,17 @@ VECTORCH LocalView;
 VECTORCH LocalLightCH;
 int NumLightSourcesForObject;
 LIGHTBLOCK *LightSourcesForObject[MaxLightsPerObject];
+/* Scope this compact object list to the render pass: gameplay can add/remove
+ * lights outside it, so simulation queries retain the authoritative live list. */
+static DISPLAYBLOCK *RenderLightObjects[maxobjects];
+static int NumRenderLightObjects, RenderLightListValid;
+static void BuildRenderLightList(void)
+{
+    NumRenderLightObjects = 0;
+    for (int i = 0; i < NumActiveBlocks; ++i)
+        if (ActiveBlockList[i]->ObNumLights) RenderLightObjects[NumRenderLightObjects++] = ActiveBlockList[i];
+    RenderLightListValid = 1;
+}
 int GlobalAmbience;
 int LightScale=ONE_FIXED;
 int DrawingAReflection;
@@ -102,7 +122,39 @@ extern void ColourFillBackBuffer(int FillColour);
 
 static void ModifyHeadOrientation(void);
 int AVPViewVolumePlaneTest(CLIPPLANEBLOCK *cpb, DISPLAYBLOCK *dblockptr, int obr);
+/* The gameplay renderer consumes Global_VDB_Ptr, not ScreenDescriptorBlock.
+   Rebuild its projection immediately before the frustum is prepared. */
+static void ApplyPlayerFOVToActiveView(void)
+{
+	int fov;
+	int viewWidth;
 
+	if (!Global_VDB_Ptr) return;
+
+	ClampPlayerFOVForCurrentSpecies();
+	fov = PlayerFOV;
+
+	/* A mode change updates ScreenDescriptorBlock immediately, but the level VDB
+	   survives the change. Full-screen gameplay must not keep its old clip box. */
+	if (Global_VDB_Ptr->VDB_Flags & ViewDB_Flag_FullSize) {
+		Global_VDB_Ptr->VDB_CentreX = ScreenDescriptorBlock.SDB_CentreX;
+		Global_VDB_Ptr->VDB_CentreY = ScreenDescriptorBlock.SDB_CentreY;
+		Global_VDB_Ptr->VDB_ClipLeft = ScreenDescriptorBlock.SDB_ClipLeft;
+		Global_VDB_Ptr->VDB_ClipRight = ScreenDescriptorBlock.SDB_ClipRight;
+		Global_VDB_Ptr->VDB_ClipUp = ScreenDescriptorBlock.SDB_ClipUp;
+		Global_VDB_Ptr->VDB_ClipDown = ScreenDescriptorBlock.SDB_ClipDown;
+		Global_VDB_Ptr->VDB_Width = Global_VDB_Ptr->VDB_ClipRight - Global_VDB_Ptr->VDB_ClipLeft;
+		Global_VDB_Ptr->VDB_Height = Global_VDB_Ptr->VDB_ClipDown - Global_VDB_Ptr->VDB_ClipUp;
+	}
+
+	viewWidth = Global_VDB_Ptr->VDB_ClipRight - Global_VDB_Ptr->VDB_ClipLeft;
+	if (viewWidth <= 0) return;
+
+	AvpSetViewFOV(Global_VDB_Ptr,fov);
+
+	/* Projection and clip rectangle both define the culling frustum. */
+	VDBClipPlanes(Global_VDB_Ptr);
+}
 
 
 void UpdateRunTimeLights(void)
@@ -134,7 +186,7 @@ void LightSourcesInRangeOfObject(DISPLAYBLOCK *dptr)
 	int i, j;
 
 
-	aptr = ActiveBlockList;
+	aptr = RenderLightListValid ? RenderLightObjects : ActiveBlockList;
 
 
 	NumLightSourcesForObject = 0;
@@ -146,7 +198,7 @@ void LightSourcesInRangeOfObject(DISPLAYBLOCK *dptr)
 
 	*/
 
-	for(i = NumActiveBlocks;
+	for(i = RenderLightListValid ? NumRenderLightObjects : NumActiveBlocks;
 		i!=0 && NumLightSourcesForObject < MaxLightsPerObject; i--) {
 
 		dptr2 = *aptr++;
@@ -222,7 +274,7 @@ void LightSourcesInRangeOfObject(DISPLAYBLOCK *dptr)
 		extern int NumActiveLightElements;
 		int i = NumActiveLightElements;
 		LIGHTELEMENT *lightElementPtr = LightElementStorage;
-		while(i--)
+		while(i-- && NumLightSourcesForObject < MaxLightsPerObject)
 		{
 			LIGHTBLOCK *lptr = &(lightElementPtr->LightBlock);
 			VECTORCH vertexToLight;
@@ -254,6 +306,7 @@ void LightSourcesInRangeOfObject(DISPLAYBLOCK *dptr)
 			lightElementPtr++;
 		}
 	}
+    PrepareVertexLights(LightSourcesForObject, NumLightSourcesForObject);
 }
 
 int LightIntensityAtPoint(VECTORCH *pointPtr)
@@ -376,6 +429,21 @@ static void ModifyHeadOrientation(void)
 	}
 }
 
+/* Keep vanilla landing inertia, but do not add a second, delayed 150mm
+ * deceleration kick on top of the procedural stair spring while grounded. */
+static void UpdateLegacyVerticalInertia(int *verticalSpeed,int displacement,int grounded,int procedural,int dt)
+{
+    static int previousVerticalSpeed,previousGrounded;
+    int difference=0;
+    if(dt>0 && displacement>=0 && !(procedural && grounded && previousGrounded))
+        difference=DIV_FIXED(previousVerticalSpeed-displacement,dt);
+    if(*verticalSpeed<difference)*verticalSpeed=difference;
+    if(*verticalSpeed>150*16)*verticalSpeed=150*16;
+    *verticalSpeed-=dt>>2;
+    if(*verticalSpeed<0)*verticalSpeed=0;
+    previousVerticalSpeed=displacement;previousGrounded=grounded;
+}
+
 void InteriorType_Body()
 {
 	DISPLAYBLOCK *subjectPtr = Player;
@@ -447,20 +515,7 @@ void InteriorType_Body()
 		RotateVector(&ioff, &subjectPtr->ObMat);
 		AddVector(&ioff, &Global_VDB_Ptr->VDB_World);
 		
-		#if 0
-		{
-			static int i=-10;
-			i=-i;
-			ioff.vx = MUL_FIXED(GetSin((CloakingPhase/5)&4095),i);
-			ioff.vy = MUL_FIXED(GetCos((CloakingPhase/3)&4095),i);
-			ioff.vz = 0;
 
-			RotateVector(&ioff, &subjectPtr->ObMat);
-			AddVector(&ioff, &Global_VDB_Ptr->VDB_World);
-
-
-		}
-		#endif
 	}
 	{
 		EULER orientation;
@@ -525,38 +580,29 @@ void InteriorType_Body()
 					targetingSpeed
 				);
 
-			{
-				static int previousVerticalSpeed = 0;
-				int difference;
-
-				if (relativeVelocity.vy >= 0)
-				{ 
-					difference = DIV_FIXED
-					(
-						previousVerticalSpeed - relativeVelocity.vy,
-						NormalFrameTime
-					);
-				}
-				else difference = 0;
-
-				if (verticalSpeed < difference) verticalSpeed = difference;
-				
-			 	if(verticalSpeed > 150*16) verticalSpeed = 150*16;
-				
-				verticalSpeed -= NormalFrameTime>>2;
-				if (verticalSpeed < 0) verticalSpeed = 0;				
-				
-				previousVerticalSpeed = relativeVelocity.vy;
-			}
+            UpdateLegacyVerticalInertia(&verticalSpeed,relativeVelocity.vy,dynPtr->IsInContactWithFloor,
+                AvP.PlayerType==I_Marine && (CameraMotionFlags(MarineCameraMode)&2) &&
+                ((PLAYER_STATUS *)sbPtr->SBdataptr)->IsAlive && !MultiplayerObservedPlayer,NormalFrameTime);
 	 	}
 	}
+}
+
+/* Render pitch with the fractional direct-mouse component retained by pmove.
+ * This evaluates the physical angle; it does not interpolate input samples. */
+static int CameraFixedAngleTrig(int64_t angleFixed, int cosine)
+{
+	const double radians = (double)angleFixed * (6.28318530717958647692 / (4096.0 * 65536.0));
+	const double value = (cosine ? cos(radians) : sin(radians)) * 65536.0;
+
+	return (value >= 0.0) ? (int)(value + 0.5) : (int)(value - 0.5);
 }
 
 void UpdateCamera(void)
 {
 	PLAYER_STATUS *playerStatusPtr= (PLAYER_STATUS *) (Player->ObStrategyBlock->SBdataptr);
-	int cos = GetCos(playerStatusPtr->ViewPanX);
-	int sin = GetSin(playerStatusPtr->ViewPanX);
+	int64_t cameraPitchFixed = (int64_t)playerStatusPtr->ViewPanX * ONE_FIXED + MouseRawPitchFraction;
+	int cos = CameraFixedAngleTrig(cameraPitchFixed, 1);
+	int sin = CameraFixedAngleTrig(cameraPitchFixed, 0);
 	MATRIXCH mat;
 	DISPLAYBLOCK *dptr_s = Player;
 
@@ -576,6 +622,7 @@ void UpdateCamera(void)
 
 		
 	InteriorType_Body();
+	MarineMotionUpdateCamera();
 }
 
 void AVPGetInViewVolumeList(VIEWDESCRIPTORBLOCK *VDB_Ptr)
@@ -601,7 +648,7 @@ void AVPGetInViewVolumeList(VIEWDESCRIPTORBLOCK *VDB_Ptr)
 		if(dptr->ObMyModule)
 		{
 			MODULE *mptr = dptr->ObMyModule;
-			if(ModuleCurrVisArray[mptr->m_index] != 2) MVis = No;
+			if(!ModuleIsVisibleForRendering(mptr->m_index)) MVis = No;
 			else
 			{
 				extern int NumberOfLandscapePolygons;
@@ -651,16 +698,23 @@ void ReflectObject(DISPLAYBLOCK *dPtr)
 	dPtr->ObMat.mat31 = -dPtr->ObMat.mat31;
 }
 
+static int PausedSceneCloakingPhase;
 void CheckIfMirroringIsRequired(void);
 void AvpShowViews(void)
 {
+ if(!RenderPausedPreview)PausedSceneCloakingPhase=CloakingPhase;
+	if(RenderPausedPreview){
+  D3D_DecalSystem_End(); /* Restore depth writes before the clears. */
+  ColourFillBackBuffer(0); /* Never feed yesterday's CRT/menu pixels back into the scene. */
+ }
 	FlushD3DZBuffer();
 
 	UpdateAllFMVTextures();	
 
 
 	/* Update attached object positions and orientations etc. */
-	UpdateCamera();
+	if(!RenderPausedPreview)UpdateCamera();
+	ApplyPlayerFOVToActiveView();
 
 	/* Initialise the global VMA */
 //	GlobalAmbience=655;
@@ -668,7 +722,7 @@ void AvpShowViews(void)
 
 	/* Prepare the View Descriptor Block for use in ShowView() */
 
-	PrepareVDBForShowView(Global_VDB_Ptr);
+	if(!RenderPausedPreview)PrepareVDBForShowView(Global_VDB_Ptr);
 	PlatformSpecificShowViewEntry(Global_VDB_Ptr, &ScreenDescriptorBlock);
 	TranslationSetup();
 
@@ -681,7 +735,7 @@ void AvpShowViews(void)
 	/* Now we know where the camera is, update the modules */
 
 	#if SupportModules
-	AllNewModuleHandler();
+	if(!RenderPausedPreview){ EVENT_TICK span=EventLatencyBegin(); AllNewModuleHandler(); EventLatencyEnd(span,"zone visibility / activation",0,0,0,0,0); }
 //	ModuleHandler(Global_VDB_Ptr);
 	#endif
 
@@ -690,8 +744,8 @@ void AvpShowViews(void)
 	#endif
 
 	/* Do lights */
-	UpdateRunTimeLights();
-	if (AvP.PlayerType==I_Alien)
+	{ EVENT_TICK span=EventLatencyBegin(); UpdateRunTimeLights(); EventLatencyEnd(span,"runtime lights",0,0,0,0,0); }
+	if (!RenderPausedPreview && AvP.PlayerType==I_Alien)
 	{
 		MakeLightElement(&Player->ObWorld,LIGHTELEMENT_ALIEN_TEETH);
 		MakeLightElement(&Player->ObWorld,LIGHTELEMENT_ALIEN_TEETH2);
@@ -699,9 +753,9 @@ void AvpShowViews(void)
 
 //	GlobalAmbience=ONE_FIXED/4;
 	/* Find out which objects are in the View Volume */
-	AVPGetInViewVolumeList(Global_VDB_Ptr);
+	{ EVENT_TICK span=EventLatencyBegin(); AVPGetInViewVolumeList(Global_VDB_Ptr); EventLatencyEnd(span,"view volume",0,0,0,0,0); }
 
-	if (AlienBiteAttackInProgress)
+	if (!RenderPausedPreview && AlienBiteAttackInProgress)
 	{
 		CameraZoomScale += (float)NormalFrameTime/65536.0f;
 		if (CameraZoomScale > 1.0f)
@@ -712,17 +766,19 @@ void AvpShowViews(void)
 	}
 
 	/* update players weapon */
-	UpdateWeaponStateMachine();
+	if(!RenderPausedPreview)UpdateWeaponStateMachine();
 	/* lights associated with the player may have changed */
 	UpdateObjectLights(Player);
+	{ EVENT_TICK span=EventLatencyBegin(); BuildRenderLightList(); EventLatencyEnd(span,"render light list",0,0,0,0,0); }
 
 
 	if(NumOnScreenBlocks)
 	{
 	 	/* KJL 12:13:26 02/05/97 - divert rendering for AvP */
-		KRenderItems(Global_VDB_Ptr);
+		{ EVENT_TICK span=EventLatencyBegin(); KRenderItems(Global_VDB_Ptr); EventLatencyEnd(span,"world render submission",0,0,0,0,0); }
 	}
 
+	RenderLightListValid = 0;
 	PlatformSpecificShowViewExit(Global_VDB_Ptr, &ScreenDescriptorBlock);
 
 	#if SupportZBuffering
@@ -736,8 +792,23 @@ void AvpShowViews(void)
 }
 
 
+int RenderPausedPreview;
+void AvP_RenderPausedPreview(void)
+{
+ extern int RealFrameTime;
+ int savedNormal=NormalFrameTime,savedReal=RealFrameTime,savedPhase=CloakingPhase;
+ if(!Global_VDB_Ptr)return;
+ PreserveRenderRandomState(0);
+ RenderPausedPreview=1;NormalFrameTime=RealFrameTime=0;CloakingPhase=PausedSceneCloakingPhase;
+ AvpShowViews();
+ RenderPausedWeaponPreview();
+ NormalFrameTime=savedNormal;RealFrameTime=savedReal;CloakingPhase=savedPhase;RenderPausedPreview=0;
+ PreserveRenderRandomState(1);
+}
+
 void InitCameraValues(void)
 {
+	MarineMotionReset();
 	extern VIEWDESCRIPTORBLOCK *ActiveVDBList[];
 	Global_VDB_Ptr = ActiveVDBList[0];
 
@@ -989,16 +1060,8 @@ void MakeViewingWindowSmaller(void)
 		Global_VDB_Ptr->VDB_ClipUp +=MinChangeInYSize;
 		Global_VDB_Ptr->VDB_ClipDown -=MinChangeInYSize;
 	}
-	if(AvP.PlayerType == I_Alien)
-	{
-		Global_VDB_Ptr->VDB_ProjX = (Global_VDB_Ptr->VDB_ClipRight - Global_VDB_Ptr->VDB_ClipLeft)/4;
-		Global_VDB_Ptr->VDB_ProjY = (Global_VDB_Ptr->VDB_ClipDown - Global_VDB_Ptr->VDB_ClipUp)/4;
-	}
-	else
-	{
-		Global_VDB_Ptr->VDB_ProjX = (Global_VDB_Ptr->VDB_ClipRight - Global_VDB_Ptr->VDB_ClipLeft)/2;
-		Global_VDB_Ptr->VDB_ProjY = (Global_VDB_Ptr->VDB_ClipDown - Global_VDB_Ptr->VDB_ClipUp)/2;
-	}
+	ClampPlayerFOVForCurrentSpecies();
+	AvpSetViewFOV(Global_VDB_Ptr,PlayerFOV);
 	//BlankScreen(); 
 }
 
@@ -1014,16 +1077,8 @@ void MakeViewingWindowLarger(void)
 		Global_VDB_Ptr->VDB_ClipUp -=MinChangeInYSize;
 		Global_VDB_Ptr->VDB_ClipDown +=MinChangeInYSize;
 	}
-	if(AvP.PlayerType == I_Alien)
-	{
-		Global_VDB_Ptr->VDB_ProjX = (Global_VDB_Ptr->VDB_ClipRight - Global_VDB_Ptr->VDB_ClipLeft)/4;
-		Global_VDB_Ptr->VDB_ProjY = (Global_VDB_Ptr->VDB_ClipDown - Global_VDB_Ptr->VDB_ClipUp)/4;
-	}
-	else
-	{
-		Global_VDB_Ptr->VDB_ProjX = (Global_VDB_Ptr->VDB_ClipRight - Global_VDB_Ptr->VDB_ClipLeft)/2;
-		Global_VDB_Ptr->VDB_ProjY = (Global_VDB_Ptr->VDB_ClipDown - Global_VDB_Ptr->VDB_ClipUp)/2;
-	}
+	ClampPlayerFOVForCurrentSpecies();
+	AvpSetViewFOV(Global_VDB_Ptr,PlayerFOV);
 }
 
 

@@ -1,5 +1,11 @@
 #ifndef _usr_io_h_
 #define _usr_io_h_ 1
+#include <stdint.h>
+extern int AlwaysRunBySpecies[3];
+extern int AlwaysRun_Temp,AlwaysRunSpecies_Temp;
+int PlayerWantsToRun(int species,int modifierHeld);
+extern unsigned char PredatorPreviousVisionBindings[2];
+extern int PredatorVisionCycleDirection;
 /*-------------- Patrick 21/10/96 -----------------
   Header File for User Input functions, structures,
   etc.  This is basically all platform dependant,
@@ -107,9 +113,9 @@ enum PLAYER_INPUT_ID
 #endif
 
 #if MARINE_DEMO||DEATHMATCH_DEMO
-#define NUMBER_OF_MARINE_INPUTS	27
+#define NUMBER_OF_MARINE_INPUTS	28
 #else
-#define NUMBER_OF_MARINE_INPUTS	27
+#define NUMBER_OF_MARINE_INPUTS	28
 #endif
 
 #if ALIEN_DEMO||DEATHMATCH_DEMO
@@ -133,6 +139,33 @@ typedef struct fixed_input_configuration
 	unsigned char PauseGame;
 		
 }FIXED_INPUT_CONFIGURATION;
+
+/* These five utility commands are shared by Predator, Marine and Alien. */
+#define NUMBER_OF_GLOBAL_COMMAND_BINDINGS 5
+typedef struct global_command_input_configuration
+{
+	unsigned char Screenshot;
+	unsigned char QuickSave;
+	unsigned char QuickLoad;
+	unsigned char SaveGameMenu;
+	unsigned char LoadGameMenu;
+} GLOBAL_COMMAND_INPUT_CONFIGURATION;
+
+extern GLOBAL_COMMAND_INPUT_CONFIGURATION GlobalCommandPrimaryConfig;
+extern GLOBAL_COMMAND_INPUT_CONFIGURATION GlobalCommandSecondaryConfig;
+extern const GLOBAL_COMMAND_INPUT_CONFIGURATION DefaultGlobalCommandPrimaryConfig;
+extern const GLOBAL_COMMAND_INPUT_CONFIGURATION DefaultGlobalCommandSecondaryConfig;
+
+/* Weapon slots are engine slots (1 through 11), not fixed physical keys. */
+#define NUMBER_OF_WEAPON_BINDINGS 11
+#define NUMBER_OF_MARINE_WEAPON_BINDS 9
+#define NUMBER_OF_PREDATOR_WEAPON_BINDS 6
+#define NUMBER_OF_ALIEN_WEAPON_BINDS 0
+
+typedef struct weapon_input_configuration
+{
+	unsigned char Weapon[NUMBER_OF_WEAPON_BINDINGS];
+} WEAPON_INPUT_CONFIGURATION;
 
 
 typedef struct
@@ -229,9 +262,17 @@ typedef struct
 	unsigned char Predator_Say;
 	unsigned char Predator_SpeciesSay;
 	unsigned char Predator_ShowScores;
-	unsigned char ExpansionSpace7;
-	unsigned char ExpansionSpace8;
+	unsigned char ReloadWeapon; /* Marine reload; retained for legacy Predator bind migration. */
+	unsigned char ReloadBindingProfileMarker; /* Profile migration marker. */
 } PLAYER_INPUT_CONFIGURATION;
+
+extern int SmartJetpackEnabled;
+extern int SmartZoomEnabled;
+
+/* Predator reuses its retired reload byte for the optional Zoom holding bind. */
+#define PREDATOR_ZOOM_HOLD_BIND(inputConfig) ((inputConfig)->ReloadWeapon)
+
+#define RELOAD_BINDING_PROFILE_MARKER 0xA7
 
 typedef struct
 {
@@ -272,8 +313,11 @@ typedef struct
 
 }JOYSTICK_CONTROL_METHODS;
 
-#define DEFAULT_MOUSEX_SENSITIVITY 64
-#define DEFAULT_MOUSEY_SENSITIVITY 64
+#define DEFAULT_MOUSEX_SENSITIVITY 15
+#define DEFAULT_MOUSEY_SENSITIVITY 15
+/* Keep the existing slider range independent of the default sensitivity. */
+#define MAX_MOUSE_SENSITIVITY 192
+#define DEFAULT_MOUSE_ZOOM_SENSITIVITY_TENTHS 13
 
 #define DEFAULT_TRACKERBALL_HORIZONTAL_SENSITIVITY 32
 #define DEFAULT_TRACKERBALL_VERTICAL_SENSITIVITY 32
@@ -290,6 +334,20 @@ typedef struct
 	extern PLAYER_INPUT_CONFIGURATION MarineInputSecondaryConfig;
 	extern PLAYER_INPUT_CONFIGURATION AlienInputPrimaryConfig;
 	extern PLAYER_INPUT_CONFIGURATION AlienInputSecondaryConfig;
+
+extern WEAPON_INPUT_CONFIGURATION MarineWeaponPrimaryConfig;
+extern WEAPON_INPUT_CONFIGURATION MarineWeaponSecondaryConfig;
+extern WEAPON_INPUT_CONFIGURATION PredatorWeaponPrimaryConfig;
+extern WEAPON_INPUT_CONFIGURATION PredatorWeaponSecondaryConfig;
+extern WEAPON_INPUT_CONFIGURATION AlienWeaponPrimaryConfig;
+extern WEAPON_INPUT_CONFIGURATION AlienWeaponSecondaryConfig;
+
+extern WEAPON_INPUT_CONFIGURATION DefaultMarineWeaponPrimaryConfig;
+extern WEAPON_INPUT_CONFIGURATION DefaultMarineWeaponSecondaryConfig;
+extern WEAPON_INPUT_CONFIGURATION DefaultPredatorWeaponPrimaryConfig;
+extern WEAPON_INPUT_CONFIGURATION DefaultPredatorWeaponSecondaryConfig;
+extern WEAPON_INPUT_CONFIGURATION DefaultAlienWeaponPrimaryConfig;
+extern WEAPON_INPUT_CONFIGURATION DefaultAlienWeaponSecondaryConfig;
 	extern PLAYER_INPUT_CONFIGURATION PredatorInputPrimaryConfig;
 	extern PLAYER_INPUT_CONFIGURATION PredatorInputSecondaryConfig;
 	extern PLAYER_INPUT_CONFIGURATION DefaultMarineInputPrimaryConfig;
@@ -302,6 +360,19 @@ typedef struct
 	extern CONTROL_METHODS DefaultControlMethods;
 	extern JOYSTICK_CONTROL_METHODS JoystickControlMethods;
 	extern JOYSTICK_CONTROL_METHODS DefaultJoystickControlMethods;
+
+	/* Direct mouse camera deltas, in 16.16 AvP angle units for this frame. */
+	extern int64_t MouseRawYawDelta;
+	extern int64_t MouseRawPitchDelta;
+
+	/* Extra zoom multiplier, stored in tenths: 0.0 through 2.0, default 1.0. */
+	extern int MouseZoomSensitivityTenths;
+
+	/* Fraction below a legacy 1/4096 turn unit, retained for camera rendering. */
+	extern int64_t MouseRawPitchFraction;
+
+	/* Per-profile vertical look range: 0 = original limits, 1 = +/-90 degrees. */
+	extern int FullVerticalPitchEnabled;
 
 	/* Prototypes */
 	extern void InitPlayerGameInput(STRATEGYBLOCK* sbPtr);

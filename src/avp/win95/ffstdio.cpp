@@ -1,3 +1,4 @@
+#include "event_latency.h"
 #include <errno.h>
 #include <string.h>
 #include "ffstdio.h"
@@ -314,7 +315,16 @@ char * ffgets(char * s, int n, FFILE * fp)
 	return s;
 }
 
-void const * ffreadbuf(char const * filename, size_t * p_len)
+static void const * ffreadbufLatencyBody(char const * filename, size_t * p_len);
+void const * ffreadbuf(char const * filename, size_t * p_len) {
+ EVENT_TICK start=EventLatencyBegin();
+ EVENT_TICK id=0;
+ int eventType=0, eventMessage=0;
+ void const * result=ffreadbufLatencyBody(filename,p_len);
+ EventLatencyEnd(start,"archive lookup / load",eventType,eventMessage,id,filename,1);
+ return result;
+}
+static void const * ffreadbufLatencyBody(char const * filename, size_t * p_len)
 {
 	void const * data;
 	

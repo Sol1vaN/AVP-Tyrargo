@@ -97,8 +97,13 @@
 			// called by the marine HUD gadget if input focus set to typing
 			// to stop the object scrolling away
 
+        void RenderScreenshotNotice(const struct r2rect& clip,int alpha);
 		void UpdateLineTimes();
-	private:
+    private:
+        List<SCString*>* ScreenshotNoticeLines = NULL;
+        int ScreenshotNoticeTime = 0;
+        void ClearScreenshotNotice(void);
+        void SetScreenshotNotice(SCString* text);
 		void AddTeletypeLine
 		(
 			SCString* pSCString_ToAdd

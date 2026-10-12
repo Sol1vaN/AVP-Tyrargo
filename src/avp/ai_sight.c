@@ -102,8 +102,8 @@ int NPCCanSeeTarget(STRATEGYBLOCK *sbPtr, STRATEGYBLOCK *target, int viewRange)
 					head_sec=GetThisSectionData(marineStatusPointer->HModelController.section_data,"head");
 
 					if (head_sec) {
-						WtoL=head_sec->SecMat;
-						sourcepos=head_sec->World_Offset;
+                        WtoL=sbPtr->DynPtr->OrientMat;
+                        sourcepos=head_sec->World_Offset;
 					} else {
 						WtoL=sbPtr->DynPtr->OrientMat;
 						GetTargetingPointOfObject_Far(sbPtr,&sourcepos);

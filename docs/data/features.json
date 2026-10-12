@@ -1,0 +1,1416 @@
+{
+  "schema": 1,
+  "categories": {
+    "input": {
+      "en": "Mouse, keyboard and bindings",
+      "es": "Mouse, teclado y binds",
+      "source": "src/avp/win95/usr_io.c",
+      "description": {
+        "en": "SDL float deltas follow a direct angular path with signed rounding, fractional residuals and zoom/FOV scaling. Physical keyboard and extended mouse actions preserve species-specific bindings. This corrects tested conversion errors, not every possible hardware issue.",
+        "es": "Deltas float de SDL siguen una ruta angular directa con redondeo simétrico, restos fraccionales y escala zoom/FOV. Teclado físico y mouse extendido conservan binds por especie. Corrige errores de conversión ensayados, sin prometer resolver cualquier problema de hardware."
+      }
+    },
+    "display": {
+      "en": "Display modes and presentation",
+      "es": "Modos de pantalla y presentación",
+      "source": "src/main.c",
+      "description": {
+        "en": "SDL window, drawable, framebuffer and logical canvas are coordinated through guarded changes and fallback. Texture restoration supports context recreation. Modal window movement services the game/menu and audio paths. VSync and caps are options; high-refresh simulation and the 1000-FPS setting remain audit tasks.",
+        "es": "Ventana SDL, drawable, framebuffer y lienzo lógico se coordinan con cambios protegidos y fallback. Se restauran texturas al recrear contexto. Mover ventana atiende juego/menú y audio. VSync y límite son opciones; simulación de alto refresco y límite 1000 FPS siguen en auditoría."
+      }
+    },
+    "geometry": {
+      "en": "Projection and geometric precision",
+      "es": "Proyección y precisión geométrica",
+      "source": "src/render_geometry.c",
+      "description": {
+        "en": "Fractional render coordinates survive transforms and clipping. Dedicated world/viewmodel projections synchronize camera pose, frustum and active visibility descriptors without replacing the native gameplay representation.",
+        "es": "Coordenadas fraccionales sobreviven transformación y clipping. Proyecciones de mundo/viewmodel sincronizan cámara, frustum y visibilidad sin sustituir la representación nativa de gameplay."
+      }
+    },
+    "render": {
+      "en": "Renderer, lighting and effects",
+      "es": "Render, iluminación y efectos",
+      "source": "src/opengl.c",
+      "description": {
+        "en": "Texture cutouts also constrain the additional luminous/depth pass. Shared UV clocks fix luminous-layer drift. Glass/effect ordering preserves visibility. Ordered buffer streaming and fire batching reduce submission work with original draw/blend/filter behavior and fallbacks.",
+        "es": "Los recortes de textura también limitan la pasada luminosa/profundidad. Relojes UV compartidos corrigen desfases. Orden de vidrio/efectos conserva visibilidad. Buffers ordenados y agrupación de fuego reducen trabajo conservando orden, mezclas y filtros originales."
+      }
+    },
+    "water": {
+      "en": "Water simulation and rendering",
+      "es": "Simulación y render de agua",
+      "source": "src/water_effect.c",
+      "description": {
+        "en": "Time-based wave propagation and damping avoid integer loss and uncontrolled per-frame disturbances. Modern optics add depth-aware refraction, Fresnel, scene reflections, native-light specular and caustics. Screen-space effects cannot reflect unseen geometry.",
+        "es": "Propagación y amortiguación por tiempo evitan pérdida por enteros y perturbaciones descontroladas por frame. Óptica moderna incorpora refracción con profundidad, Fresnel, reflejos, especular con luces nativas y cáusticas. Screen-space no refleja geometría fuera de pantalla."
+      }
+    },
+    "postfx": {
+      "en": "CRT, noise and image controls",
+      "es": "CRT, ruido y ajustes de imagen",
+      "source": "src/crt_filter.c",
+      "description": {
+        "en": "Native GLSL CRT, image controls and monitor noise are selectable. Constant or interior-region work is kept out of expensive fragment paths where equivalent. CRT provenance includes Mattias/newpixie and CRT-Guest-ReShade; credits do not substitute license notices.",
+        "es": "CRT GLSL, ajustes de imagen y ruido de monitores son seleccionables. Trabajo constante o interior evita rutas caras por fragmento cuando es equivalente. Procedencia CRT incluye Mattias/newpixie y CRT-Guest-ReShade; créditos no sustituyen licencias."
+      }
+    },
+    "ui": {
+      "en": "Main menu, in-game menu and UX",
+      "es": "Menú principal, menú ingame y UX",
+      "source": "src/avp/win95/frontend/avp_menus.c",
+      "description": {
+        "en": "Menu presentation uses explicit logical spaces, atlas sampling guards and supported Latin composition. Species profiles retain scales. Ordinary settings apply with Escape; video-mode confirmation is deliberately separate. Supported save/load slots remain discoverable in carousels.",
+        "es": "Menús usan espacios lógicos explícitos, protección de muestreo y composición latina. Perfiles por especie conservan escalas. Escape aplica ajustes ordinarios; confirmación de vídeo es explícita. Slots guardar/cargar permanecen accesibles en carruseles."
+      }
+    },
+    "media": {
+      "en": "Movies and screenshots",
+      "es": "Vídeos y capturas",
+      "source": "src/fmv_backend.cpp",
+      "description": {
+        "en": "Bundled Smacker/Bink decoders and buffered audio drive playback. Physical movie viewports support wide modes. Original commercial media is supplied by the player. BMP/PNG/JPEG captures exclude their own notifications.",
+        "es": "Decodificadores Smacker/Bink y audio en buffer reproducen vídeos. Viewports físicos soportan modos panorámicos. El jugador suministra medios comerciales. Capturas BMP/PNG/JPEG excluyen sus notificaciones."
+      }
+    },
+    "audio": {
+      "en": "Audio, music and latency",
+      "es": "Audio, música y latencia",
+      "source": "src/openal.c",
+      "description": {
+        "en": "OpenAL emitters follow world positions and environmental routing. Weapon overlap and feeding paths include sound handling. CD-DA support includes drive detection and volume; repeat modes include random silence. Bounded diagnostics defer writes away from frames.",
+        "es": "Emisores OpenAL siguen posiciones y entorno. Solapamiento de armas y alimentación consideran audio. CD-DA incluye unidad y volumen; bucles incluyen silencio aleatorio. Diagnósticos acotados difieren escrituras fuera de frames."
+      }
+    },
+    "player": {
+      "en": "Player movement and weapons",
+      "es": "Movimiento y armas del jugador",
+      "source": "src/avp/pmove.c",
+      "description": {
+        "en": "Wall contacts, climbing and moving support have dedicated corrections while slope friction remains. Input options include run/crouch and smart zoom/jetpack. Fire-input queues retain valid taps; interaction/cooldown paths avoid frame-driven bursts.",
+        "es": "Contacto, trepado y apoyo móvil tienen correcciones conservando fricción de pendientes. Hay correr/agachar y zoom/jetpack inteligentes. Colas de disparo conservan taps; interacción y cooldown evitan ráfagas por frame."
+      }
+    },
+    "motion": {
+      "en": "Camera, weapon and HUD motion",
+      "es": "Movimiento de cámara, armas y HUD",
+      "source": "src/camera_motion.c",
+      "description": {
+        "en": "Marine camera/viewmodel/HUD layers cover movement and equipment events with configurable channels. Transitions include stance, stairs and landing. Development calibration is opt-in source code; production retains imported values and public intensity controls.",
+        "es": "Capas Marine de cámara/arma/HUD cubren movimiento y equipo con canales configurables. Transiciones incluyen postura, escaleras y aterrizaje. Calibración requiere source de desarrollo; producción conserva valores y controles públicos."
+      }
+    },
+    "campaign": {
+      "en": "Campaign, resources and Molecular Acid",
+      "es": "Campaña, recursos y Molecular Acid",
+      "source": "src/molecular_acid.c",
+      "description": {
+        "en": "Acid is a single-player modifier over Hard, not an extra index into native difficulty arrays. UI labels x1/x1.5/x2 map to enemy factors 1.5/2/2.5 and resource factors 1.5/2/3. Exceptions are quantities, not multipliers. Campaign state and optional ammo economy have separate lifetimes.",
+        "es": "Acid modifica Hard en singleplayer y no agrega índices a arrays nativos. x1/x1.5/x2 corresponden a enemigos 1.5/2/2.5 y recursos 1.5/2/3. Excepciones son cantidades. Estado de campaña y economía de ammo tienen vidas separadas."
+      }
+    },
+    "aliens": {
+      "en": "Alien NPC behavior and navigation",
+      "es": "Comportamiento y navegación de Alien NPC",
+      "source": "src/avp/bh_alien.c",
+      "description": {
+        "en": "Fractional timing, local steering and support/contact recovery address tested vents, hatches and edges. Leap authorization is bounded: not every large leap is caused by FPS. Corpse feeding includes its animation and audio paths. Remaining arbitrary-map recovery needs playtesting.",
+        "es": "Tiempo fraccional, dirección local y recuperación de contacto corrigen casos ensayados de ductos, escotillas y bordes. Salto tiene autorización acotada: no todo salto grande es por FPS. Alimentación incluye animación/audio. Otros mapas requieren pruebas."
+      }
+    },
+    "predators": {
+      "en": "Predator NPC combat and patrol",
+      "es": "Combate y patrulla de Predator NPC",
+      "source": "src/avp/bh_pred.c",
+      "description": {
+        "en": "Private weapon state, target acquisition and patrol extend native combat. Moving shoulder-cannon acquisition uses locomotion while active shots retain native completion timing. Level navigation and cloak visibility still constrain pursuit.",
+        "es": "Armas privadas, adquisición y patrulla amplían combate nativo. Adquisición del cañón en movimiento usa locomoción; disparo activo conserva tiempo de finalización. Navegación y camuflaje siguen condicionando persecución."
+      }
+    },
+    "marines": {
+      "en": "Marine NPC squad, inventory and tactics",
+      "es": "Escuadrón, inventario y tácticas Marine NPC",
+      "source": "src/avp/npc_support.c",
+      "description": {
+        "en": "Use commands toggle follow/patrol with acknowledgment. Shared jobs, staged patrol and pacing hysteresis reduce conflicting decisions. Marines collect supported extra weapons/resources, select weapons, assist with sentries and leave recoverable drops. Saved inventories/planning have reset/load guards.",
+        "es": "Usar alterna follow/patrol con confirmación. Tareas compartidas, patrulla por etapas e histéresis reducen decisiones en conflicto. Marines recogen armas/recursos, eligen armas, ayudan con torretas y dejan drops. Inventarios/planner guardados tienen protecciones de cargar/reiniciar."
+      }
+    },
+    "kernel": {
+      "en": "Engine lifetime, performance and diagnostics",
+      "es": "Vida útil, rendimiento y diagnóstico del motor",
+      "source": "src/avp/particle_mesh_cache.inc",
+      "description": {
+        "en": "A bounded immutable-mesh BVH selects collision candidates while retaining native polygon math/order. Dynamic/morph/animated meshes fall back. Cache lifetime precedes level-pool teardown. Staged AI/support work and investigated crash guards retain full effects and NPC populations; results are scenario-specific.",
+        "es": "BVH acotado de mallas inmutables selecciona candidatos conservando matemática/orden nativos. Mallas dinámicas/morph/animadas usan fallback. Caché se limpia antes del pool. IA por etapas y protecciones investigadas conservan efectos/población; resultados dependen del escenario."
+      }
+    }
+  },
+  "items": [
+    {
+      "id": "input-01",
+      "category": "input",
+      "type": "fix",
+      "title": {
+        "en": "Direct mouse-to-camera angles",
+        "es": "Ángulos directos del mouse a la cámara"
+      },
+      "source": "src/avp/win95/usr_io.c",
+      "status": "implemented"
+    },
+    {
+      "id": "input-02",
+      "category": "input",
+      "type": "fix",
+      "title": {
+        "en": "Sub-angular yaw/pitch residuals",
+        "es": "Restos subangulares yaw/pitch"
+      },
+      "source": "src/avp/win95/usr_io.c",
+      "status": "implemented"
+    },
+    {
+      "id": "input-03",
+      "category": "input",
+      "type": "fix",
+      "title": {
+        "en": "Symmetric signed mouse conversion",
+        "es": "Conversión simétrica de mouse con signo"
+      },
+      "source": "src/avp/win95/usr_io.c",
+      "status": "implemented"
+    },
+    {
+      "id": "input-04",
+      "category": "input",
+      "type": "QoL",
+      "title": {
+        "en": "FOV-aware zoom sensitivity",
+        "es": "Sensibilidad del zoom según FOV"
+      },
+      "source": "src/avp/win95/usr_io.c",
+      "status": "implemented"
+    },
+    {
+      "id": "input-05",
+      "category": "input",
+      "type": "feature",
+      "title": {
+        "en": "Extended mouse buttons and wheel bindings",
+        "es": "Binds de botones adicionales y rueda"
+      },
+      "source": "src/avp/win95/usr_io.c",
+      "status": "implemented"
+    },
+    {
+      "id": "input-06",
+      "category": "input",
+      "type": "fix",
+      "title": {
+        "en": "Physical keyboard layout input",
+        "es": "Entrada física según teclado"
+      },
+      "source": "src/avp/win95/usr_io.c",
+      "status": "implemented"
+    },
+    {
+      "id": "input-07",
+      "category": "input",
+      "type": "QoL",
+      "title": {
+        "en": "Persistent weapon bindings per species",
+        "es": "Binds persistentes de armas por especie"
+      },
+      "source": "src/avp/win95/usr_io.c",
+      "status": "implemented"
+    },
+    {
+      "id": "input-08",
+      "category": "input",
+      "type": "feature",
+      "title": {
+        "en": "Manual reload action and localized label",
+        "es": "Recarga manual y etiqueta localizada"
+      },
+      "source": "src/avp/win95/usr_io.c",
+      "status": "implemented"
+    },
+    {
+      "id": "input-09",
+      "category": "input",
+      "type": "QoL",
+      "title": {
+        "en": "Screenshot and save/load bindings",
+        "es": "Binds de captura y guardar/cargar"
+      },
+      "source": "src/avp/win95/usr_io.c",
+      "status": "implemented"
+    },
+    {
+      "id": "display-01",
+      "category": "display",
+      "type": "feature",
+      "title": {
+        "en": "Windowed, borderless and exclusive modes",
+        "es": "Modos ventana, sin bordes y exclusivo"
+      },
+      "source": "src/main.c",
+      "status": "implemented"
+    },
+    {
+      "id": "display-02",
+      "category": "display",
+      "type": "fix",
+      "title": {
+        "en": "Transactional video-mode switching",
+        "es": "Cambios transaccionales de modo de vídeo"
+      },
+      "source": "src/main.c",
+      "status": "implemented"
+    },
+    {
+      "id": "display-03",
+      "category": "display",
+      "type": "fix",
+      "title": {
+        "en": "Texture rehydration after context recreation",
+        "es": "Restauración de texturas al recrear contexto"
+      },
+      "source": "src/main.c",
+      "status": "implemented"
+    },
+    {
+      "id": "display-04",
+      "category": "display",
+      "type": "fix",
+      "title": {
+        "en": "Resolution and refresh synchronization",
+        "es": "Sincronización de resolución y refresco"
+      },
+      "source": "src/main.c",
+      "status": "implemented"
+    },
+    {
+      "id": "display-05",
+      "category": "display",
+      "type": "QoL",
+      "title": {
+        "en": "Letterboxed and widescreen canvases",
+        "es": "Lienzos letterboxed y panorámicos"
+      },
+      "source": "src/main.c",
+      "status": "implemented"
+    },
+    {
+      "id": "display-06",
+      "category": "display",
+      "type": "feature",
+      "title": {
+        "en": "VSync and frame-cap options",
+        "es": "Opciones VSync y límite de FPS"
+      },
+      "source": "src/main.c",
+      "status": "implemented"
+    },
+    {
+      "id": "display-07",
+      "category": "display",
+      "type": "fix",
+      "title": {
+        "en": "Loop/audio continuity during window dragging",
+        "es": "Continuidad del loop/audio al mover ventana"
+      },
+      "source": "src/main.c",
+      "status": "implemented"
+    },
+    {
+      "id": "display-08",
+      "category": "display",
+      "type": "fix",
+      "title": {
+        "en": "GL state restoration across menus/gameplay",
+        "es": "Restauración de estado GL entre menú y juego"
+      },
+      "source": "src/main.c",
+      "status": "implemented"
+    },
+    {
+      "id": "geometry-01",
+      "category": "geometry",
+      "type": "fix",
+      "title": {
+        "en": "Float render transforms and clipping",
+        "es": "Transformación y clipping float"
+      },
+      "source": "src/render_geometry.c",
+      "status": "implemented"
+    },
+    {
+      "id": "geometry-02",
+      "category": "geometry",
+      "type": "fix",
+      "title": {
+        "en": "Hierarchical moving-model section precision",
+        "es": "Precisión de secciones móviles jerárquicas"
+      },
+      "source": "src/render_geometry.c",
+      "status": "implemented"
+    },
+    {
+      "id": "geometry-03",
+      "category": "geometry",
+      "type": "fix",
+      "title": {
+        "en": "Current-pose camera-space viewmodels",
+        "es": "Viewmodels según pose actual de cámara"
+      },
+      "source": "src/render_geometry.c",
+      "status": "implemented"
+    },
+    {
+      "id": "geometry-04",
+      "category": "geometry",
+      "type": "feature",
+      "title": {
+        "en": "World and weapon FOV per species",
+        "es": "FOV del mundo y arma por especie"
+      },
+      "source": "src/render_geometry.c",
+      "status": "implemented"
+    },
+    {
+      "id": "geometry-05",
+      "category": "geometry",
+      "type": "fix",
+      "title": {
+        "en": "Hor-plus projection and frustum synchronization",
+        "es": "Proyección Hor-plus y frustum sincronizados"
+      },
+      "source": "src/render_geometry.c",
+      "status": "implemented"
+    },
+    {
+      "id": "geometry-06",
+      "category": "geometry",
+      "type": "fix",
+      "title": {
+        "en": "Geometry seams and near-plane handling",
+        "es": "Juntas geométricas y plano cercano"
+      },
+      "source": "src/render_geometry.c",
+      "status": "implemented"
+    },
+    {
+      "id": "geometry-07",
+      "category": "geometry",
+      "type": "QoL",
+      "title": {
+        "en": "Calibrated weapon viewmodel positions",
+        "es": "Posiciones calibradas de armas"
+      },
+      "source": "src/render_geometry.c",
+      "status": "implemented"
+    },
+    {
+      "id": "render-01",
+      "category": "render",
+      "type": "fix",
+      "title": {
+        "en": "Alpha-aware luminous/specular depth pass",
+        "es": "Pasada luminosa/especular respetando alpha"
+      },
+      "source": "src/opengl.c",
+      "status": "implemented"
+    },
+    {
+      "id": "render-02",
+      "category": "render",
+      "type": "fix",
+      "title": {
+        "en": "Animated luminous UV synchronization",
+        "es": "Sincronización UV de capas luminosas"
+      },
+      "source": "src/opengl.c",
+      "status": "implemented"
+    },
+    {
+      "id": "render-03",
+      "category": "render",
+      "type": "fix",
+      "title": {
+        "en": "Particles and halos visible through glass",
+        "es": "Partículas y halos visibles tras vidrio"
+      },
+      "source": "src/opengl.c",
+      "status": "implemented"
+    },
+    {
+      "id": "render-04",
+      "category": "render",
+      "type": "feature",
+      "title": {
+        "en": "Ordered VBO/IBO streaming with fallback",
+        "es": "Streaming VBO/IBO ordenado con fallback"
+      },
+      "source": "src/opengl.c",
+      "status": "implemented"
+    },
+    {
+      "id": "render-05",
+      "category": "render",
+      "type": "fix",
+      "title": {
+        "en": "Fire/particle rendering work reduction",
+        "es": "Reducción de trabajo de fuego/partículas"
+      },
+      "source": "src/opengl.c",
+      "status": "implemented"
+    },
+    {
+      "id": "render-06",
+      "category": "render",
+      "type": "feature",
+      "title": {
+        "en": "Extended model-detail and draw-distance controls",
+        "es": "Controles ampliados de detalle y distancia"
+      },
+      "source": "src/opengl.c",
+      "status": "implemented"
+    },
+    {
+      "id": "render-07",
+      "category": "render",
+      "type": "QoL",
+      "title": {
+        "en": "Texture and HUD filtering controls",
+        "es": "Controles de filtros de texturas y HUD"
+      },
+      "source": "src/opengl.c",
+      "status": "implemented"
+    },
+    {
+      "id": "water-01",
+      "category": "water",
+      "type": "fix",
+      "title": {
+        "en": "Time-based ripple propagation and damping",
+        "es": "Propagación y amortiguación de ondas por tiempo"
+      },
+      "source": "src/water_effect.c",
+      "status": "implemented"
+    },
+    {
+      "id": "water-02",
+      "category": "water",
+      "type": "feature",
+      "title": {
+        "en": "Selectable classic and modern water",
+        "es": "Agua clásica y moderna seleccionable"
+      },
+      "source": "src/water_effect.c",
+      "status": "implemented"
+    },
+    {
+      "id": "water-03",
+      "category": "water",
+      "type": "feature",
+      "title": {
+        "en": "Depth-aware refraction with foreground protection",
+        "es": "Refracción con protección de foreground"
+      },
+      "source": "src/water_effect.c",
+      "status": "implemented"
+    },
+    {
+      "id": "water-04",
+      "category": "water",
+      "type": "feature",
+      "title": {
+        "en": "Fresnel and screen-space reflections",
+        "es": "Fresnel y reflejos screen-space"
+      },
+      "source": "src/water_effect.c",
+      "status": "implemented"
+    },
+    {
+      "id": "water-05",
+      "category": "water",
+      "type": "feature",
+      "title": {
+        "en": "Native-light specular and refracted-ray caustics",
+        "es": "Especular nativo y cáusticas de refracción"
+      },
+      "source": "src/water_effect.c",
+      "status": "implemented"
+    },
+    {
+      "id": "water-06",
+      "category": "water",
+      "type": "fix",
+      "title": {
+        "en": "GPU water grid and bounded reflection traversal",
+        "es": "Malla GPU y recorrido acotado de reflejos"
+      },
+      "source": "src/water_effect.c",
+      "status": "implemented"
+    },
+    {
+      "id": "postfx-01",
+      "category": "postfx",
+      "type": "feature",
+      "title": {
+        "en": "Native GLSL CRT filter",
+        "es": "Filtro CRT GLSL nativo"
+      },
+      "source": "src/crt_filter.c",
+      "status": "implemented"
+    },
+    {
+      "id": "postfx-02",
+      "category": "postfx",
+      "type": "feature",
+      "title": {
+        "en": "Brightness, contrast and saturation controls",
+        "es": "Controles de brillo, contraste y saturación"
+      },
+      "source": "src/crt_filter.c",
+      "status": "implemented"
+    },
+    {
+      "id": "postfx-03",
+      "category": "postfx",
+      "type": "feature",
+      "title": {
+        "en": "RGB/CRT monitor no-signal modes",
+        "es": "Modos sin señal RGB/CRT"
+      },
+      "source": "src/crt_filter.c",
+      "status": "implemented"
+    },
+    {
+      "id": "postfx-04",
+      "category": "postfx",
+      "type": "QoL",
+      "title": {
+        "en": "Noise and grain scale options",
+        "es": "Opciones de escala de ruido y grano"
+      },
+      "source": "src/crt_filter.c",
+      "status": "implemented"
+    },
+    {
+      "id": "postfx-05",
+      "category": "postfx",
+      "type": "fix",
+      "title": {
+        "en": "CRT shader work reduction",
+        "es": "Reducción de trabajo del shader CRT"
+      },
+      "source": "src/crt_filter.c",
+      "status": "implemented"
+    },
+    {
+      "id": "ui-01",
+      "category": "ui",
+      "type": "QoL",
+      "title": {
+        "en": "Tyrargo identity and shared version labels",
+        "es": "Identidad Tyrargo y versión común"
+      },
+      "source": "src/avp/win95/frontend/avp_menus.c",
+      "status": "implemented"
+    },
+    {
+      "id": "ui-02",
+      "category": "ui",
+      "type": "QoL",
+      "title": {
+        "en": "Widescreen Starfield and restored menu backgrounds",
+        "es": "Starfield panorámico y fondos recuperados"
+      },
+      "source": "src/avp/win95/frontend/avp_menus.c",
+      "status": "implemented"
+    },
+    {
+      "id": "ui-03",
+      "category": "ui",
+      "type": "fix",
+      "title": {
+        "en": "Glyph/HUD atlas bleeding and frame borders",
+        "es": "Sangrado de atlas glifos/HUD y marcos"
+      },
+      "source": "src/avp/win95/frontend/avp_menus.c",
+      "status": "implemented"
+    },
+    {
+      "id": "ui-04",
+      "category": "ui",
+      "type": "fix",
+      "title": {
+        "en": "Accented Latin glyph composition",
+        "es": "Composición de glifos latinos acentuados"
+      },
+      "source": "src/avp/win95/frontend/avp_menus.c",
+      "status": "implemented"
+    },
+    {
+      "id": "ui-05",
+      "category": "ui",
+      "type": "feature",
+      "title": {
+        "en": "Independent HUD, text, console and crosshair scales",
+        "es": "Escalas independientes HUD, texto, consola y crosshair"
+      },
+      "source": "src/avp/win95/frontend/avp_menus.c",
+      "status": "implemented"
+    },
+    {
+      "id": "ui-06",
+      "category": "ui",
+      "type": "QoL",
+      "title": {
+        "en": "In-game HUD/text/movie/image previews",
+        "es": "Vistas previas HUD/texto/vídeo/imagen ingame"
+      },
+      "source": "src/avp/win95/frontend/avp_menus.c",
+      "status": "implemented"
+    },
+    {
+      "id": "ui-07",
+      "category": "ui",
+      "type": "QoL",
+      "title": {
+        "en": "Escape applies settings and closes menus/console",
+        "es": "Escape aplica ajustes y cierra menús/consola"
+      },
+      "source": "src/avp/win95/frontend/avp_menus.c",
+      "status": "implemented"
+    },
+    {
+      "id": "ui-08",
+      "category": "ui",
+      "type": "QoL",
+      "title": {
+        "en": "50 save slots plus dedicated quicksave/quickload",
+        "es": "50 slots y quicksave/quickload dedicado"
+      },
+      "source": "src/avp/win95/frontend/avp_menus.c",
+      "status": "implemented"
+    },
+    {
+      "id": "ui-09",
+      "category": "ui",
+      "type": "QoL",
+      "title": {
+        "en": "Notification duration and adaptive FPS placement",
+        "es": "Duración de avisos y posición adaptable de FPS"
+      },
+      "source": "src/avp/win95/frontend/avp_menus.c",
+      "status": "implemented"
+    },
+    {
+      "id": "ui-10",
+      "category": "ui",
+      "type": "fix",
+      "title": {
+        "en": "Profile, startup fade and menu-transition cleanup",
+        "es": "Limpieza de perfiles, fades y transiciones"
+      },
+      "source": "src/avp/win95/frontend/avp_menus.c",
+      "status": "implemented"
+    },
+    {
+      "id": "media-01",
+      "category": "media",
+      "type": "feature",
+      "title": {
+        "en": "Native Smacker and Bink playback",
+        "es": "Reproducción nativa Smacker y Bink"
+      },
+      "source": "src/fmv_backend.cpp",
+      "status": "implemented"
+    },
+    {
+      "id": "media-02",
+      "category": "media",
+      "type": "fix",
+      "title": {
+        "en": "Movie audio clock, RGB and end synchronization",
+        "es": "Reloj de audio, RGB y finalización sincronizados"
+      },
+      "source": "src/fmv_backend.cpp",
+      "status": "implemented"
+    },
+    {
+      "id": "media-03",
+      "category": "media",
+      "type": "feature",
+      "title": {
+        "en": "Native, scaled, wide and ultrawide movies",
+        "es": "Vídeos nativos, escalados y ultrapanorámicos"
+      },
+      "source": "src/fmv_backend.cpp",
+      "status": "implemented"
+    },
+    {
+      "id": "media-04",
+      "category": "media",
+      "type": "feature",
+      "title": {
+        "en": "Optional IntroSound99 menu-music choice",
+        "es": "Música IntroSound99 opcional de menú"
+      },
+      "source": "src/fmv_backend.cpp",
+      "status": "implemented"
+    },
+    {
+      "id": "media-05",
+      "category": "media",
+      "type": "feature",
+      "title": {
+        "en": "BMP, PNG and JPEG menu/game screenshots",
+        "es": "Capturas BMP, PNG y JPEG en juego/menú"
+      },
+      "source": "src/fmv_backend.cpp",
+      "status": "implemented"
+    },
+    {
+      "id": "media-06",
+      "category": "media",
+      "type": "fix",
+      "title": {
+        "en": "Clean repeated screenshots",
+        "es": "Capturas repetidas limpias"
+      },
+      "source": "src/fmv_backend.cpp",
+      "status": "implemented"
+    },
+    {
+      "id": "audio-01",
+      "category": "audio",
+      "type": "feature",
+      "title": {
+        "en": "Environmental EFX and positional NPC effects",
+        "es": "EFX ambiental y efectos NPC posicionales"
+      },
+      "source": "src/openal.c",
+      "status": "implemented"
+    },
+    {
+      "id": "audio-02",
+      "category": "audio",
+      "type": "fix",
+      "title": {
+        "en": "Overlapping primary/secondary weapon audio",
+        "es": "Audio solapado de armas primarias/secundarias"
+      },
+      "source": "src/openal.c",
+      "status": "implemented"
+    },
+    {
+      "id": "audio-03",
+      "category": "audio",
+      "type": "fix",
+      "title": {
+        "en": "Alien feeding and combat SFX handling",
+        "es": "SFX de alimentación y combate Alien"
+      },
+      "source": "src/openal.c",
+      "status": "implemented"
+    },
+    {
+      "id": "audio-04",
+      "category": "audio",
+      "type": "feature",
+      "title": {
+        "en": "CD-DA/Red Book music support",
+        "es": "Soporte musical CD-DA/Red Book"
+      },
+      "source": "src/openal.c",
+      "status": "implemented"
+    },
+    {
+      "id": "audio-05",
+      "category": "audio",
+      "type": "feature",
+      "title": {
+        "en": "One-shot, looping and random-silence music",
+        "es": "Música una vez, bucle y silencio aleatorio"
+      },
+      "source": "src/openal.c",
+      "status": "implemented"
+    },
+    {
+      "id": "audio-06",
+      "category": "audio",
+      "type": "fix",
+      "title": {
+        "en": "Bounded event/audio latency handling",
+        "es": "Gestión acotada de latencia eventos/audio"
+      },
+      "source": "src/openal.c",
+      "status": "implemented"
+    },
+    {
+      "id": "player-01",
+      "category": "player",
+      "type": "fix",
+      "title": {
+        "en": "Wall sliding and curved-surface contact",
+        "es": "Deslizamiento y contacto con superficies curvas"
+      },
+      "source": "src/avp/pmove.c",
+      "status": "implemented"
+    },
+    {
+      "id": "player-02",
+      "category": "player",
+      "type": "fix",
+      "title": {
+        "en": "Moving-platform support and jump contact",
+        "es": "Apoyo de plataforma móvil y contacto al saltar"
+      },
+      "source": "src/avp/pmove.c",
+      "status": "implemented"
+    },
+    {
+      "id": "player-03",
+      "category": "player",
+      "type": "fix",
+      "title": {
+        "en": "Alien stairs, wall turns and climbing transitions",
+        "es": "Escaleras, giros y trepado Alien"
+      },
+      "source": "src/avp/pmove.c",
+      "status": "implemented"
+    },
+    {
+      "id": "player-04",
+      "category": "player",
+      "type": "feature",
+      "title": {
+        "en": "Smart jetpack and Predator zoom controls",
+        "es": "Jetpack y zoom Predator inteligentes"
+      },
+      "source": "src/avp/pmove.c",
+      "status": "implemented"
+    },
+    {
+      "id": "player-05",
+      "category": "player",
+      "type": "QoL",
+      "title": {
+        "en": "Always-run, crouch toggle and expanded pitch",
+        "es": "Correr siempre, agachar alternado y pitch ampliado"
+      },
+      "source": "src/avp/pmove.c",
+      "status": "implemented"
+    },
+    {
+      "id": "player-06",
+      "category": "player",
+      "type": "fix",
+      "title": {
+        "en": "Semiautomatic edge/latch/queue input",
+        "es": "Entrada semiautomática edge/latch/queue"
+      },
+      "source": "src/avp/pmove.c",
+      "status": "implemented"
+    },
+    {
+      "id": "player-07",
+      "category": "player",
+      "type": "fix",
+      "title": {
+        "en": "Controlled repeated flare interval",
+        "es": "Intervalo controlado de bengalas"
+      },
+      "source": "src/avp/pmove.c",
+      "status": "implemented"
+    },
+    {
+      "id": "player-08",
+      "category": "player",
+      "type": "fix",
+      "title": {
+        "en": "Reachable pickup and door interaction",
+        "es": "Interacción con pickups y puertas alcanzables"
+      },
+      "source": "src/avp/pmove.c",
+      "status": "implemented"
+    },
+    {
+      "id": "motion-01",
+      "category": "motion",
+      "type": "feature",
+      "title": {
+        "en": "Procedural weapon walk/run bob and sway",
+        "es": "Bobbing y sway procedural caminar/correr"
+      },
+      "source": "src/camera_motion.c",
+      "status": "implemented"
+    },
+    {
+      "id": "motion-02",
+      "category": "motion",
+      "type": "feature",
+      "title": {
+        "en": "Smooth crouch, stairs, jump and landing feedback",
+        "es": "Feedback suave agacharse, escaleras, salto y aterrizaje"
+      },
+      "source": "src/camera_motion.c",
+      "status": "implemented"
+    },
+    {
+      "id": "motion-03",
+      "category": "motion",
+      "type": "feature",
+      "title": {
+        "en": "Weapon-specific HUD shake profiles",
+        "es": "Perfiles HUD shake por arma"
+      },
+      "source": "src/camera_motion.c",
+      "status": "implemented"
+    },
+    {
+      "id": "motion-04",
+      "category": "motion",
+      "type": "QoL",
+      "title": {
+        "en": "Separate motion intensity sliders",
+        "es": "Sliders separados de intensidad"
+      },
+      "source": "src/camera_motion.c",
+      "status": "implemented"
+    },
+    {
+      "id": "motion-05",
+      "category": "motion",
+      "type": "fix",
+      "title": {
+        "en": "Motion lifetime and run/pitch recovery",
+        "es": "Vida de estados y recuperación correr/pitch"
+      },
+      "source": "src/camera_motion.c",
+      "status": "implemented"
+    },
+    {
+      "id": "campaign-01",
+      "category": "campaign",
+      "type": "feature",
+      "title": {
+        "en": "Optional player-state persistence between episodes",
+        "es": "Persistencia opcional entre episodios"
+      },
+      "source": "src/molecular_acid.c",
+      "status": "implemented"
+    },
+    {
+      "id": "campaign-02",
+      "category": "campaign",
+      "type": "feature",
+      "title": {
+        "en": "Optimized ammunition campaign mode",
+        "es": "Modo campaña de munición optimizada"
+      },
+      "source": "src/molecular_acid.c",
+      "status": "implemented"
+    },
+    {
+      "id": "campaign-03",
+      "category": "campaign",
+      "type": "feature",
+      "title": {
+        "en": "Molecular Acid tiers and population pressure",
+        "es": "Niveles Molecular Acid y presión de población"
+      },
+      "source": "src/molecular_acid.c",
+      "status": "implemented"
+    },
+    {
+      "id": "campaign-04",
+      "category": "campaign",
+      "type": "feature",
+      "title": {
+        "en": "Acid storage and magazine capacity rules",
+        "es": "Reglas Acid de reservas y cargadores"
+      },
+      "source": "src/molecular_acid.c",
+      "status": "implemented"
+    },
+    {
+      "id": "campaign-05",
+      "category": "campaign",
+      "type": "feature",
+      "title": {
+        "en": "Pulse Rifle/SADAR/marine-disc pickups of 3/4/5",
+        "es": "Pickups Pulse Rifle/SADAR/disco Marine de 3/4/5"
+      },
+      "source": "src/molecular_acid.c",
+      "status": "implemented"
+    },
+    {
+      "id": "campaign-06",
+      "category": "campaign",
+      "type": "feature",
+      "title": {
+        "en": "Predator energy scaling and 15-point base armor",
+        "es": "Energía Predator escalada y armadura base 15"
+      },
+      "source": "src/molecular_acid.c",
+      "status": "implemented"
+    },
+    {
+      "id": "campaign-07",
+      "category": "campaign",
+      "type": "fix",
+      "title": {
+        "en": "Bonus/custom-map Acid handling",
+        "es": "Gestión Acid bonus/custom"
+      },
+      "source": "src/molecular_acid.c",
+      "status": "implemented"
+    },
+    {
+      "id": "campaign-08",
+      "category": "campaign",
+      "type": "fix",
+      "title": {
+        "en": "Dormant visibility and wakeup recovery",
+        "es": "Recuperación de visibilidad y activación dormida"
+      },
+      "source": "src/molecular_acid.c",
+      "status": "implemented"
+    },
+    {
+      "id": "campaign-09",
+      "category": "campaign",
+      "type": "QoL",
+      "title": {
+        "en": "Briefing spacing, episode memory and retry screens",
+        "es": "Espaciado briefings, memoria episodio y reintentos"
+      },
+      "source": "src/molecular_acid.c",
+      "status": "implemented"
+    },
+    {
+      "id": "aliens-01",
+      "category": "aliens",
+      "type": "fix",
+      "title": {
+        "en": "Fractional NPC movement timing",
+        "es": "Tiempo fraccional de movimiento NPC"
+      },
+      "source": "src/avp/bh_alien.c",
+      "status": "implemented"
+    },
+    {
+      "id": "aliens-02",
+      "category": "aliens",
+      "type": "fix",
+      "title": {
+        "en": "Vent lips, square hatches and thin-edge recovery",
+        "es": "Recuperación en ductos, escotillas y bordes"
+      },
+      "source": "src/avp/bh_alien.c",
+      "status": "implemented"
+    },
+    {
+      "id": "aliens-03",
+      "category": "aliens",
+      "type": "fix",
+      "title": {
+        "en": "Bounded vertical leap authorization and support",
+        "es": "Autorización acotada de salto vertical y apoyo"
+      },
+      "source": "src/avp/bh_alien.c",
+      "status": "implemented"
+    },
+    {
+      "id": "aliens-04",
+      "category": "aliens",
+      "type": "feature",
+      "title": {
+        "en": "Player-corpse feeding behavior",
+        "es": "Alimentación del cadáver del jugador"
+      },
+      "source": "src/avp/bh_alien.c",
+      "status": "implemented"
+    },
+    {
+      "id": "aliens-05",
+      "category": "aliens",
+      "type": "fix",
+      "title": {
+        "en": "Approach oscillation and navigation recovery",
+        "es": "Oscilación de aproximación y recuperación"
+      },
+      "source": "src/avp/bh_alien.c",
+      "status": "implemented"
+    },
+    {
+      "id": "predators-01",
+      "category": "predators",
+      "type": "feature",
+      "title": {
+        "en": "Private NPC weapon inventory and selection",
+        "es": "Inventario NPC privado y elección de arma"
+      },
+      "source": "src/avp/bh_pred.c",
+      "status": "implemented"
+    },
+    {
+      "id": "predators-02",
+      "category": "predators",
+      "type": "feature",
+      "title": {
+        "en": "Predator kill taunts",
+        "es": "Taunts Predator al matar"
+      },
+      "source": "src/avp/bh_pred.c",
+      "status": "implemented"
+    },
+    {
+      "id": "predators-03",
+      "category": "predators",
+      "type": "fix",
+      "title": {
+        "en": "Weapon-specific acquisition and aiming",
+        "es": "Adquisición y apuntado por arma"
+      },
+      "source": "src/avp/bh_pred.c",
+      "status": "implemented"
+    },
+    {
+      "id": "predators-04",
+      "category": "predators",
+      "type": "feature",
+      "title": {
+        "en": "Patrol and pursuit planning",
+        "es": "Planificación de patrulla y persecución"
+      },
+      "source": "src/avp/bh_pred.c",
+      "status": "implemented"
+    },
+    {
+      "id": "predators-05",
+      "category": "predators",
+      "type": "fix",
+      "title": {
+        "en": "Walk/run animations during moving cannon acquisition",
+        "es": "Caminar/correr al adquirir disparo en movimiento"
+      },
+      "source": "src/avp/bh_pred.c",
+      "status": "implemented"
+    },
+    {
+      "id": "marines-01",
+      "category": "marines",
+      "type": "feature",
+      "title": {
+        "en": "Use-to-command follow/patrol with acknowledgment",
+        "es": "Órdenes usar follow/patrol con confirmación"
+      },
+      "source": "src/avp/npc_support.c",
+      "status": "implemented"
+    },
+    {
+      "id": "marines-02",
+      "category": "marines",
+      "type": "feature",
+      "title": {
+        "en": "Coordinated expanding exploration planner",
+        "es": "Planner de exploración expansiva coordinada"
+      },
+      "source": "src/avp/npc_support.c",
+      "status": "implemented"
+    },
+    {
+      "id": "marines-03",
+      "category": "marines",
+      "type": "fix",
+      "title": {
+        "en": "Follow pacing, stopping distance and separation",
+        "es": "Ritmo, distancia de parada y separación al seguir"
+      },
+      "source": "src/avp/npc_support.c",
+      "status": "implemented"
+    },
+    {
+      "id": "marines-04",
+      "category": "marines",
+      "type": "fix",
+      "title": {
+        "en": "APC access, exit and slope handling",
+        "es": "Acceso/salida APC y manejo de pendientes"
+      },
+      "source": "src/avp/npc_support.c",
+      "status": "implemented"
+    },
+    {
+      "id": "marines-05",
+      "category": "marines",
+      "type": "feature",
+      "title": {
+        "en": "Shared randomized supply jobs with human priority",
+        "es": "Reabastecimiento compartido aleatorio con prioridad humana"
+      },
+      "source": "src/avp/npc_support.c",
+      "status": "implemented"
+    },
+    {
+      "id": "marines-06",
+      "category": "marines",
+      "type": "feature",
+      "title": {
+        "en": "Two distinct additional weapon pickups",
+        "es": "Recogida de dos armas adicionales distintas"
+      },
+      "source": "src/avp/npc_support.c",
+      "status": "implemented"
+    },
+    {
+      "id": "marines-07",
+      "category": "marines",
+      "type": "feature",
+      "title": {
+        "en": "Resource thresholds: health/armor 60%, ammo 30%",
+        "es": "Umbrales: salud/armadura 60%, ammo 30%"
+      },
+      "source": "src/avp/npc_support.c",
+      "status": "implemented"
+    },
+    {
+      "id": "marines-08",
+      "category": "marines",
+      "type": "feature",
+      "title": {
+        "en": "Inventory-based weapon choice and reload",
+        "es": "Elección y recarga de arma según inventario"
+      },
+      "source": "src/avp/npc_support.c",
+      "status": "implemented"
+    },
+    {
+      "id": "marines-09",
+      "category": "marines",
+      "type": "fix",
+      "title": {
+        "en": "Smartgun convergence and ally exclusion",
+        "es": "Convergencia smartgun y exclusión de aliados"
+      },
+      "source": "src/avp/npc_support.c",
+      "status": "implemented"
+    },
+    {
+      "id": "marines-10",
+      "category": "marines",
+      "type": "fix",
+      "title": {
+        "en": "SADAR, grenade and weapon-specific aiming",
+        "es": "Apuntado SADAR, granadas y por arma"
+      },
+      "source": "src/avp/npc_support.c",
+      "status": "implemented"
+    },
+    {
+      "id": "marines-11",
+      "category": "marines",
+      "type": "feature",
+      "title": {
+        "en": "Nearby sentry support task",
+        "es": "Tarea de apoyo con torretas cercanas"
+      },
+      "source": "src/avp/npc_support.c",
+      "status": "implemented"
+    },
+    {
+      "id": "marines-12",
+      "category": "marines",
+      "type": "feature",
+      "title": {
+        "en": "Marine kill celebrations",
+        "es": "Celebraciones Marine al matar"
+      },
+      "source": "src/avp/npc_support.c",
+      "status": "implemented"
+    },
+    {
+      "id": "marines-13",
+      "category": "marines",
+      "type": "feature",
+      "title": {
+        "en": "Recoverable weapon drops on death",
+        "es": "Armas recuperables al morir"
+      },
+      "source": "src/avp/npc_support.c",
+      "status": "implemented"
+    },
+    {
+      "id": "marines-14",
+      "category": "marines",
+      "type": "fix",
+      "title": {
+        "en": "Squad inventory/planner save-load lifecycle",
+        "es": "Vida de guardar/cargar inventario/planner"
+      },
+      "source": "src/avp/npc_support.c",
+      "status": "implemented"
+    },
+    {
+      "id": "kernel-01",
+      "category": "kernel",
+      "type": "feature",
+      "title": {
+        "en": "Immutable-mesh BVH for actor/particle collisions",
+        "es": "BVH de mallas inmutables para actores/partículas"
+      },
+      "source": "src/avp/particle_mesh_cache.inc",
+      "status": "implemented"
+    },
+    {
+      "id": "kernel-02",
+      "category": "kernel",
+      "type": "fix",
+      "title": {
+        "en": "Dynamic-mesh fallback and cache teardown",
+        "es": "Fallback dinámico y limpieza de caché"
+      },
+      "source": "src/avp/particle_mesh_cache.inc",
+      "status": "implemented"
+    },
+    {
+      "id": "kernel-03",
+      "category": "kernel",
+      "type": "fix",
+      "title": {
+        "en": "Shared/staged AI and support work",
+        "es": "Trabajo IA/apoyo compartido por etapas"
+      },
+      "source": "src/avp/particle_mesh_cache.inc",
+      "status": "implemented"
+    },
+    {
+      "id": "kernel-04",
+      "category": "kernel",
+      "type": "fix",
+      "title": {
+        "en": "Particle, NPC and level-state crash guards",
+        "es": "Protecciones crash de partículas, NPC y nivel"
+      },
+      "source": "src/avp/particle_mesh_cache.inc",
+      "status": "implemented"
+    },
+    {
+      "id": "kernel-05",
+      "category": "kernel",
+      "type": "QoL",
+      "title": {
+        "en": "Separate diagnostic and production builds",
+        "es": "Compilaciones diagnósticas y de producción separadas"
+      },
+      "source": "src/avp/particle_mesh_cache.inc",
+      "status": "implemented"
+    }
+  ]
+}

@@ -164,6 +164,7 @@ namespace AwTl
 				, fileH(NULL)
 				, dataP(NULL)
 				, restoreH(NULL)
+                , backupHP(NULL)
 				, maxReadBytes(UINT_MAX)
 				, bytesReadP(NULL)
 				, flags(AW_TLF_DEFAULT)
@@ -186,6 +187,7 @@ namespace AwTl
 			FILE *fileH;
 			PtrUnionConst dataP;
 			AW_BACKUPTEXTUREHANDLE restoreH;
+            AW_BACKUPTEXTUREHANDLE * backupHP;
 			
 			unsigned maxReadBytes;
 			unsigned * bytesReadP;
@@ -389,10 +391,11 @@ AwTl::SurfUnion AwBackupTexture::Restore(AwTl::CreateTextureParms const & rParam
 	
 	if (!pixelFormat.validB)
 		db_log3("AwCreateGraphic(): ERROR: pixel format not valid");
-	if (!driverDesc.ddP || (!driverDesc.validB && rParams.loadTextureB))
-		db_log3("AwCreateGraphic(): ERROR: driver description not valid");
-	
-	awTlLastErr = pixelFormat.validB && driverDesc.ddP && (driverDesc.validB || !rParams.loadTextureB) ? AW_TLE_OK : AW_TLE_NOINIT;
+
+	/* OpenGL owns its texture objects directly.  There is no DirectDraw device
+	   to initialise here; requiring driverDesc.ddP rejects every valid backup
+	   immediately after SDL_GL_CreateContext(). */
+	awTlLastErr = pixelFormat.validB ? AW_TLE_OK : AW_TLE_NOINIT;
 	
 	ON_ERROR_RETURN_NULL("initializing restore")
 	
@@ -1507,7 +1510,7 @@ namespace AwTl {
 //		fprintf(stderr, "TexFileLoader::Load Pixel Format?! It's not implemented!\n");
 
 /* TODO */
-		AllocateBuffers(/* rParams.backupHP ? true : */ false, /* pixelFormat.palettizedB ? ? 1<<pixelFormat.bitsPerPixel : */ 0);
+		AllocateBuffers(rParams.backupHP != NULL, /* pixelFormat.palettizedB ? ? 1<<pixelFormat.bitsPerPixel : */ 0);
 				
 //		CHECK_MEDIA_ERRORS("allocating buffers")
 		ON_ERROR_RETURN_NULL("allocating buffers")
@@ -1517,6 +1520,12 @@ namespace AwTl {
 		SurfUnion pTex = CreateTexture(rParams);
 		
 		bool bOK = AW_TLE_OK == awTlLastErr;
+		/* Keep converted source pixels when the caller requested B.  They are
+		 * needed to rebuild a GL object after a window/context recreation. */
+		if (bOK && pTex.voidP && rParams.backupHP)
+		{
+			*rParams.backupHP = CreateBackupTexture();
+		}
 		
 //		CHECK_MEDIA_ERRORS("loading image data")
 		
@@ -1931,8 +1940,16 @@ namespace AwTl {
 					}
 					break;
 				case 'B':
-					if (pParams->restoreH)
+					if (pParams->backupHP || pParams->restoreH)
 						bad_parmsB = true;
+					else
+					{
+						pParams->backupHP = va_arg(ap,AW_BACKUPTEXTUREHANDLE *);
+						if (!pParams->backupHP)
+							bad_parmsB = true;
+						else
+							*pParams->backupHP = NULL;
+					}
 					break;
 				case 't':
 					if (pParams->prevTexP.voidP)
@@ -2216,6 +2233,7 @@ DDSurface * AwCreateSurface(char const * _argFormatS, ...)
 
 AW_TL_ERC AwDestroyBackupTexture(AW_BACKUPTEXTUREHANDLE _bH)
 {
+	if (_bH) _bH->Release();
 	return AW_TLE_OK;
 }
 

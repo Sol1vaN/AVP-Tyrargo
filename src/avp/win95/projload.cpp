@@ -3540,8 +3540,10 @@ extern void PurgeMSLShapeList();
 
 extern "C"
 {
+void ReleasePlayerWeaponGraphics(void);
 void DeallocateSoundsAndPoolAllocatedMemory()
 {
+ ReleasePlayerWeaponGraphics();
 	deallocate_behaviour_list();
 
 	ClearMemoryPool();

@@ -25,13 +25,32 @@ typedef GLfloat GLdouble;
 #define APIENTRY
 #endif
 
-typedef void (APIENTRY *PFNGLALPHAFUNCPROC)(GLenum, GLclampf);
+typedef void (APIENTRY *PFNGLACTIVETEXTUREPROC)(GLenum);
+typedef void (APIENTRY *PFNGLATTACHSHADERPROC)(GLuint, GLuint);
+typedef void (APIENTRY *PFNGLCOMPILESHADERPROC)(GLuint);
+typedef GLuint (APIENTRY *PFNGLCREATESHADERPROC)(GLenum);
+typedef GLuint (APIENTRY *PFNGLCREATEPROGRAMPROC)(void);
+typedef void (APIENTRY *PFNGLDELETEPROGRAMPROC)(GLuint);
+typedef void (APIENTRY *PFNGLDELETESHADERPROC)(GLuint);
+typedef void (APIENTRY *PFNGLGETPROGRAMINFOLOGPROC)(GLuint, GLsizei, GLsizei *, char *);
+typedef void (APIENTRY *PFNGLGETPROGRAMIVPROC)(GLuint, GLenum, GLint *);
+typedef void (APIENTRY *PFNGLGETSHADERINFOLOGPROC)(GLuint, GLsizei, GLsizei *, char *);
+typedef void (APIENTRY *PFNGLGETSHADERIVPROC)(GLuint, GLenum, GLint *);
+typedef GLint (APIENTRY *PFNGLGETUNIFORMLOCATIONPROC)(GLuint, const char *);
+typedef void (APIENTRY *PFNGLLINKPROGRAMPROC)(GLuint);
+typedef void (APIENTRY *PFNGLSHADERSOURCEPROC)(GLuint, GLsizei, const char * const *, const GLint *);
+typedef void (APIENTRY *PFNGLUNIFORM1FPROC)(GLint, GLfloat);
+typedef void (APIENTRY *PFNGLUNIFORM1IPROC)(GLint, GLint);
+typedef void (APIENTRY *PFNGLUNIFORM2FPROC)(GLint, GLfloat, GLfloat);
+typedef void (APIENTRY *PFNGLUSEPROGRAMPROC)(GLuint);
+typedef void (APIENTRY *PFNGLCLIENTACTIVETEXTUREPROC)(GLenum);typedef void (APIENTRY *PFNGLALPHAFUNCPROC)(GLenum, GLclampf);
 typedef void (APIENTRY *PFNGLBINDTEXTUREPROC)(GLenum, GLuint);
 typedef void (APIENTRY *PFNGLBLENDFUNCPROC)(GLenum, GLenum);
 typedef void (APIENTRY *PFNGLCLEARPROC)(GLbitfield);
 typedef void (APIENTRY *PFNGLCLEARCOLORPROC)(GLclampf, GLclampf, GLclampf, GLclampf);
 typedef void (APIENTRY *PFNGLCOLOR4FPROC)(GLfloat, GLfloat, GLfloat, GLfloat);
 typedef void (APIENTRY *PFNGLCOLORPOINTERPROC)(GLint, GLenum, GLsizei, const GLvoid *);
+typedef void (APIENTRY *PFNGLCOPYTEXSUBIMAGE2DPROC)(GLenum, GLint, GLint, GLint, GLint, GLint, GLsizei, GLsizei);
 typedef void (APIENTRY *PFNGLCULLFACEPROC)(GLenum);
 typedef void (APIENTRY *PFNGLDELETETEXTURESPROC)(GLsizei,const GLuint*);
 typedef void (APIENTRY *PFNGLDEPTHFUNCPROC)(GLenum);
@@ -50,8 +69,16 @@ typedef void (APIENTRY *PFNGLGETINTEGERVPROC)(GLenum, GLint *);
 typedef const GLubyte* (APIENTRY *PFNGLGETSTRINGPROC)(GLenum);
 typedef void (APIENTRY *PFNGLGETTEXPARAMETERFVPROC)(GLenum, GLenum, GLfloat*);
 typedef void (APIENTRY *PFNGLHINTPROC)(GLenum, GLenum);
+typedef void (APIENTRY *PFNGLLOADIDENTITYPROC)(void);
+typedef void (APIENTRY *PFNGLMATRIXMODEPROC)(GLenum);
 typedef void (APIENTRY *PFNGLPIXELSTOREIPROC)(GLenum, GLint);
+typedef void (APIENTRY *PFNGLPOPMATRIXPROC)(void);
+typedef void (APIENTRY *PFNGLPOPATTRIBPROC)(void);
+typedef void (APIENTRY *PFNGLPOPCLIENTATTRIBPROC)(void);
 typedef void (APIENTRY *PFNGLPOLYGONOFFSETPROC)(GLfloat, GLfloat);
+typedef void (APIENTRY *PFNGLPUSHMATRIXPROC)(void);
+typedef void (APIENTRY *PFNGLPUSHATTRIBPROC)(GLbitfield);
+typedef void (APIENTRY *PFNGLPUSHCLIENTATTRIBPROC)(GLbitfield);
 typedef void (APIENTRY *PFNGLREADPIXELSPROC)(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, GLvoid *);
 typedef void (APIENTRY *PFNGLSHADEMODELPROC)(GLenum);
 typedef void (APIENTRY *PFNGLTEXCOORDPOINTERPROC)(GLint, GLenum, GLsizei, const GLvoid *);
@@ -65,13 +92,32 @@ typedef void (APIENTRY *PFNGLTEXSUBIMAGE2DPROC)(GLenum,GLint,GLint,GLint,GLsizei
 typedef void (APIENTRY *PFNGLVERTEXPOINTERPROC)(GLint, GLenum, GLsizei, const GLvoid *);
 typedef void (APIENTRY *PFNGLVIEWPORTPROC)(GLint, GLint, GLsizei, GLsizei);
 
-extern PFNGLALPHAFUNCPROC		pglAlphaFunc;
+extern PFNGLACTIVETEXTUREPROC pglActiveTexture;
+extern PFNGLATTACHSHADERPROC pglAttachShader;
+extern PFNGLCOMPILESHADERPROC pglCompileShader;
+extern PFNGLCREATESHADERPROC pglCreateShader;
+extern PFNGLCREATEPROGRAMPROC pglCreateProgram;
+extern PFNGLDELETEPROGRAMPROC pglDeleteProgram;
+extern PFNGLDELETESHADERPROC pglDeleteShader;
+extern PFNGLGETPROGRAMINFOLOGPROC pglGetProgramInfoLog;
+extern PFNGLGETPROGRAMIVPROC pglGetProgramiv;
+extern PFNGLGETSHADERINFOLOGPROC pglGetShaderInfoLog;
+extern PFNGLGETSHADERIVPROC pglGetShaderiv;
+extern PFNGLGETUNIFORMLOCATIONPROC pglGetUniformLocation;
+extern PFNGLLINKPROGRAMPROC pglLinkProgram;
+extern PFNGLSHADERSOURCEPROC pglShaderSource;
+extern PFNGLUNIFORM1FPROC pglUniform1f;
+extern PFNGLUNIFORM1IPROC pglUniform1i;
+extern PFNGLUNIFORM2FPROC pglUniform2f;
+extern PFNGLUSEPROGRAMPROC pglUseProgram;
+extern PFNGLCLIENTACTIVETEXTUREPROC pglClientActiveTexture;extern PFNGLALPHAFUNCPROC		pglAlphaFunc;
 extern PFNGLBINDTEXTUREPROC		pglBindTexture;
 extern PFNGLBLENDFUNCPROC		pglBlendFunc;
 extern PFNGLCLEARPROC			pglClear;
 extern PFNGLCLEARCOLORPROC		pglClearColor;
 extern PFNGLCOLOR4FPROC		pglColor4f;
 extern PFNGLCOLORPOINTERPROC		pglColorPointer;
+extern PFNGLCOPYTEXSUBIMAGE2DPROC pglCopyTexSubImage2D;
 extern PFNGLCULLFACEPROC		pglCullFace;
 extern PFNGLDELETETEXTURESPROC		pglDeleteTextures;
 extern PFNGLDEPTHFUNCPROC		pglDepthFunc;
@@ -90,8 +136,16 @@ extern PFNGLGETINTEGERVPROC		pglGetIntegerv;
 extern PFNGLGETSTRINGPROC		pglGetString;
 extern PFNGLGETTEXPARAMETERFVPROC	pglGetTexParameterfv;
 extern PFNGLHINTPROC			pglHint;
+extern PFNGLLOADIDENTITYPROC		pglLoadIdentity;
+extern PFNGLMATRIXMODEPROC		pglMatrixMode;
 extern PFNGLPIXELSTOREIPROC		pglPixelStorei;
+extern PFNGLPOPMATRIXPROC		pglPopMatrix;
+extern PFNGLPOPATTRIBPROC		pglPopAttrib;
+extern PFNGLPOPCLIENTATTRIBPROC	pglPopClientAttrib;
 extern PFNGLPOLYGONOFFSETPROC		pglPolygonOffset;
+extern PFNGLPUSHMATRIXPROC		pglPushMatrix;
+extern PFNGLPUSHATTRIBPROC		pglPushAttrib;
+extern PFNGLPUSHCLIENTATTRIBPROC	pglPushClientAttrib;
 extern PFNGLREADPIXELSPROC		pglReadPixels;
 extern PFNGLSHADEMODELPROC		pglShadeModel;
 extern PFNGLTEXCOORDPOINTERPROC	pglTexCoordPointer;
@@ -112,8 +166,10 @@ extern int ogl_use_multisample_filter_hint;
 extern int ogl_use_texture_filter_anisotropic;
 
 extern void load_ogl_functions(int mode);
+extern void CopyResolvedFramebufferToTexture(GLuint texture, GLsizei width, GLsizei height);
 
 extern int check_for_errors_(const char *file, int line);
 #define check_for_errors() check_for_errors_(__FILE__, __LINE__)
 
 #endif
+

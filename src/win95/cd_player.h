@@ -14,7 +14,7 @@ moved into it's own file. */
   -----------------------------------------------------------------------------*/
 #define CDDA_VOLUME_MAX		(127)		
 #define CDDA_VOLUME_MIN		(0)
-#define CDDA_VOLUME_DEFAULT	(127)
+#define CDDA_VOLUME_DEFAULT	(64)
 #define CDDA_VOLUME_RESTOREPREGAMEVALUE (-100)
 
 /* Patrick 10/6/97 --------------------------------------------------------------
@@ -43,6 +43,9 @@ extern void CDDA_Management(void);
   enumeration of tracks should be provided in the platform header.
   -----------------------------------------------------------------------------*/
 extern void CDDA_Play(int CDDATrack);
+extern int CDDA_PlayVerified(int CDDATrack);
+extern void CDDA_RandomMusicTracef(const char *format, ...);
+extern void CDDA_GetLastStartFailure(int *track, int *stage, unsigned long *error);
 extern void CDDA_PlayLoop(int CDDATrack);
 extern void CDDA_ChangeVolume(int volume);
 extern void CDDA_Stop(void);
@@ -53,6 +56,9 @@ extern int CDDA_CheckNumberOfTracks(void);
   though it may not be changed using CDDA_ChangeVolume(). 
   -----------------------------------------------------------------------------*/
 extern int CDDA_GetCurrentVolumeSetting(void);
+extern int CDDA_GetCurrentTrack(void);
+extern unsigned long CDDA_GetPlaybackDeadline(void);
+extern void CDDA_GetDispatchDebugState(int *enabled, int *trackCount, int *playing, int *track, unsigned long *deadline, unsigned long *mciCommands, unsigned long *mciStatus);
 /* Patrick 10/6/97 --------------------------------------------------------------
   Switch on and switch off may be used to stop and start the CDDA system after
   initialisation. They are provided to allow the user to stop and start CDDA

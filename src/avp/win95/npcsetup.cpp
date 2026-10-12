@@ -330,7 +330,9 @@ void InitNPCs(RIFFHANDLE h)
 		DefaultGeneratorEnemy=HNPC_Alien;
 	}
 
-	if(Current_Level_Requires_Mirror_Image())
+	/* Preload the campaign player's corpse with the level, never at death. */
+    if(Current_Level_Requires_Mirror_Image() ||
+       (AvP.Network==I_No_Network && AvP.PlayerType!=I_Alien))
 	{
 		//need to load model for player's character , for mirror
 		switch(AvP.PlayerType)

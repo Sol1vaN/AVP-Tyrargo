@@ -1,4 +1,6 @@
 
+#include <SDL3/SDL.h>
+#include "intro_timing.h"
 extern "C"
 {
 	#include "3dc.h"
@@ -7,6 +9,7 @@ extern "C"
 	#include "avp_menus.h"
     #include "avp_intro.h"
 	extern int NormalFrameTime;
+	extern void LoadSettingsForStartup(void);
 	extern unsigned char GotAnyKey;
 	extern int DebouncedGotAnyKey;
 	extern SCREENDESCRIPTORBLOCK ScreenDescriptorBlock;
@@ -14,7 +17,10 @@ extern "C"
 extern void DirectReadKeyboard(void);
 
 
-static int IntroHasAlreadyBeenPlayed = 1;
+static int IntroHasAlreadyBeenPlayed = 0;
+static Uint64 IntroTimelineStart;
+extern int FMVBackend_MenuMusicIs99(void);
+static double IntroElapsedSeconds(void) { return (SDL_GetTicks()-IntroTimelineStart)*0.001; }
 
 
 void Show_CopyrightInfo(void);
@@ -26,17 +32,25 @@ extern void Show_WinnerScreen(void);
 extern void PlayBinkedFMV(char *filenamePtr);
 extern void DrawMainMenusBackdrop(void);
 extern void FadedScreen(int alpha);
+extern void QueueIntro99Logo(const unsigned char *rgba,int iw,int ih,int x,int y,int width,int height,double gain);
+extern void ReleaseIntro99Logo(void);
+extern void FMVBackend_StartMenuMusic(void);
+extern void FMVBackend_PlayMenuMusic(void);
+extern void FMVBackend_EndMenuMusic(void);
 
 void StartMenuMusic(void)
 {
+	FMVBackend_StartMenuMusic();
 }
 
 void PlayMenuMusic(void)
 {
+	FMVBackend_PlayMenuMusic();
 }
 
 void EndMenuMusic(void)
 {
+	FMVBackend_EndMenuMusic();
 }
 
 void WeWantAnIntro(void)
@@ -53,7 +67,10 @@ extern void PlayIntroSequence(void)
 		return;
 	}
 	IntroHasAlreadyBeenPlayed=1;
+	IntroTimelineStart=SDL_GetTicks();
 
+	/* Read persisted startup settings before any splash frame. */
+	LoadSettingsForStartup();
 	ResetFrameCounter();
 	Show_CopyrightInfo();
 
@@ -62,7 +79,7 @@ extern void PlayIntroSequence(void)
 	FlipBuffers();
 	ClearScreenToBlack();
 
-	//PlayBinkedFMV("FMVs/logos.bik");
+		PlayBinkedFMV("FMVs/logos.bik");
 	//PlayFMV("FMVs/rebellion.smk");
 
 	StartMenuMusic();
@@ -285,13 +302,30 @@ void Show_ARebellionGame(void)
 		timeRemaining-=NormalFrameTime;
 	}
 	#if ALLOW_SKIP_INTRO
-	while((timeRemaining>0) && !GotAnyKey);
+	while((timeRemaining>0) && !GotAnyKey && (!FMVBackend_MenuMusicIs99() || IntroElapsedSeconds()<INTRO99_LOGO_FADE_IN_START_SECONDS));
 	#else
-	while(timeRemaining>0);// && !GotAnyKey);
+	while(timeRemaining>0 && (!FMVBackend_MenuMusicIs99() || IntroElapsedSeconds()<INTRO99_LOGO_FADE_IN_START_SECONDS));// && !GotAnyKey);
 	#endif
 }
 void Show_AvPLogo(void)
 {
+    if(FMVBackend_MenuMusicIs99()) {
+        do {
+            CheckForWindowsMessages();
+            DrawMainMenusBackdrop(); PlayMenuMusic();
+            int y=(480-AvPMenuGfxStorage[AVPMENUGFX_ALIENSVPREDATOR].Height)/2;
+            AVPMENUGFX *gfx=&AvPMenuGfxStorage[AVPMENUGFX_ALIENSVPREDATOR];
+            D3DTexture *image=(D3DTexture*)gfx->ImagePtr;
+            if(image)QueueIntro99Logo(image->buf,image->w,image->h,MENU_CENTREX-gfx->Width/2,y,gfx->Width,gfx->Height,Intro99LogoGain(IntroElapsedSeconds()));
+            FlipBuffers(); DirectReadKeyboard(); FrameCounterHandler();
+        } while(IntroElapsedSeconds()<INTRO99_LOGO_FADE_OUT_END_SECONDS
+          #if ALLOW_SKIP_INTRO
+          && !GotAnyKey
+          #endif
+        );
+        ReleaseIntro99Logo();
+        return;
+    }
 	int timeRemaining = 5*ONE_FIXED;
 	do
 	{

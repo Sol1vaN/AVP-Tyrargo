@@ -1,3 +1,4 @@
+#include "molecular_acid.h"
 /*----------------Patrick 15/11/96-------------------
  Source for NPC generator behavior
  ----------------------------------------------------*/
@@ -223,7 +224,7 @@ void GeneratorBehaviour(STRATEGYBLOCK *sbPtr)
 	}
 
 	/* if there are too many NPCs in the module, do not create a new one */
-	if(PherAi_Buf[(sbPtr->containingModule->m_aimodule->m_index)] >= MAX_GENERATORNPCSPERMODULE)
+	if(PherAi_Buf[(sbPtr->containingModule->m_aimodule->m_index)] >= AcidSpawnLimit(MAX_GENERATORNPCSPERMODULE))
 	{
 		#if logGenData
 		{
@@ -256,14 +257,14 @@ void GeneratorBehaviour(STRATEGYBLOCK *sbPtr)
 		if(genBlock->use_own_max_npc)
 		{
 			//check npcs from this generator
-			if (NumNPCsFromThisGenerator(sbPtr) >= genBlock->MaxGenNPCs) 
+			if (NumNPCsFromThisGenerator(sbPtr) >= AcidSpawnLimit(genBlock->MaxGenNPCs)) 
 				return;
 
 		}
 		else
 		{
 			//check global npc limit
-			if (NumGeneratorNPCsInEnv() >= NPCHive.maxGeneratorNPCs) 
+			if (NumGeneratorNPCsInEnv() >= AcidSpawnLimit(NPCHive.maxGeneratorNPCs)) 
 				return;
 		}
 	}		
@@ -681,7 +682,8 @@ static void ResetGeneratorTimer(GENERATOR_BLOCK *genBlock)
 	}
 	/* clamp */
 	if(genBlock->Timer>GENERATORTIME_MAX) genBlock->Timer=GENERATORTIME_MAX;
-	if(genBlock->Timer<GENERATORTIME_MIN) genBlock->Timer=GENERATORTIME_MIN;	
+	if(genBlock->Timer<GENERATORTIME_MIN) genBlock->Timer=GENERATORTIME_MIN;
+    genBlock->Timer=AcidSpawnInterval(genBlock->Timer);	
 
 	#if logGenData
 	{

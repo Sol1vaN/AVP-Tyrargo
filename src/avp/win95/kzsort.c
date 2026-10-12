@@ -1,3 +1,4 @@
+#include "event_latency.h"
 #include "3dc.h"
 #include "inline.h"
 #include "module.h"
@@ -42,6 +43,23 @@ static struct KObject VisibleModules[MAX_NUMBER_OF_VISIBLE_MODULES];
 static struct KObject VisibleModules2[MAX_NUMBER_OF_VISIBLE_MODULES];
 static struct KObject *SortedModules;
 static struct KObject VisibleObjects[maxobjects];
+/* Preserve the old descending object order within each sorted sector.
+ * A bucket removes the full object-list scan repeated for every sector. */
+static int ModuleObjectHead[MAX_NUMBER_OF_VISIBLE_MODULES];
+static int ModuleObjectNext[maxobjects];
+static void BuildRenderObjectBuckets(int modules, int objects)
+{
+ int m,o;
+ for(m=0;m<modules;m++)ModuleObjectHead[m]=-1;
+ for(o=0;o<objects;o++){
+  m=VisibleObjects[o].SortKey;
+  ModuleObjectNext[o]=-1;
+  if(m>=0 && m<modules && !VisibleObjects[o].DrawBeforeEnvironment){
+   ModuleObjectNext[o]=ModuleObjectHead[m];ModuleObjectHead[m]=o;
+  }
+ }
+}
+
 
 static int PointIsInModule(VECTORCH *pointPtr,MODULE *modulePtr);
 
@@ -329,6 +347,15 @@ void KRenderItems(VIEWDESCRIPTORBLOCK *VDBPtr)
 		/* if it's a module, which isn't inside another module */
 		if (modulePtr && !(modulePtr->m_flags & m_flag_slipped_inside))
 		{
+            /* Check before the first write, even for malformed input lists. */
+            if(numVisMods>=MAX_NUMBER_OF_VISIBLE_MODULES){
+             EVENT_TICK stamp=EventLatencyBegin();
+             EventLatencyEnd(stamp,"render list overflow",numVisMods,numVisObjs,0,0,1);
+             return;
+            }
+            EventLatencyCount(EL_MODULES,1);
+            if(ModuleCurrVisArray && modulePtr->m_index>=0 && modulePtr->m_index<ModuleArraySize
+               && ModuleCurrVisArray[modulePtr->m_index]==1)EventLatencyCount(EL_EXTENDED_MODULES,1);
 			#if 1
  			if(PointIsInModule(&(VDBPtr->VDB_World),modulePtr))
 			{
@@ -416,19 +443,13 @@ void KRenderItems(VIEWDESCRIPTORBLOCK *VDBPtr)
 				#endif
 			}
 
-   			if(numVisMods>MAX_NUMBER_OF_VISIBLE_MODULES)
-			{
-				/* outside the environment! */
-				textprint("MAX_NUMBER_OF_VISIBLE_MODULES (%d) exceeded!\n",MAX_NUMBER_OF_VISIBLE_MODULES);
-				textprint("Possibly outside the environment!\n");
-//				LOCALASSERT(0);
-				return;
-			}
 
 			numVisMods++;
    		}
 		else /* it's just an object */
 		{
+            if(numVisObjs>=maxobjects)return;
+            EventLatencyCount(EL_OBJECTS,1);
 			VisibleObjects[numVisObjs].DispPtr = objectPtr;
 			/* this sort key defaults to the object not being drawn, ie. a grenade
 			behind a closed door (so there is no module behind door) would still be
@@ -533,6 +554,7 @@ void KRenderItems(VIEWDESCRIPTORBLOCK *VDBPtr)
 #endif	
 	}
 	ProfileStop("OBJS IN MOD TESTS");
+	BuildRenderObjectBuckets(numVisMods,numVisObjs);
 	DrawingAReflection=0;
 	{
 		int numMods = numVisMods;
@@ -595,12 +617,10 @@ void KRenderItems(VIEWDESCRIPTORBLOCK *VDBPtr)
 				#endif
 				CheckWireFrameMode(WireFrameMode&2);
 				{
-					int o = numVisObjs;
-					while(o)
+					int o;
+					for(o=ModuleObjectHead[numMods];o>=0;o=ModuleObjectNext[o])
 					{
-						o--;
-
-						if(VisibleObjects[o].SortKey == numMods && !VisibleObjects[o].DrawBeforeEnvironment)
+						/* Bucket already selects this sector and draw pass. */
 						{
 							DISPLAYBLOCK *dptr = VisibleObjects[o].DispPtr;
 							AddShape(VisibleObjects[o].DispPtr,VDBPtr);	
@@ -624,7 +644,7 @@ void KRenderItems(VIEWDESCRIPTORBLOCK *VDBPtr)
 
 
 				{
-		 			D3D_DrawWaterTest(modulePtr);
+		 			{ EVENT_TICK stamp=EventLatencyBegin(); D3D_DrawWaterTest(modulePtr); EventLatencyEnd(stamp,"sector water submission",0,modulePtr->m_index,0,modulePtr->name,0); }
 				}
 			}
 		}
@@ -655,12 +675,10 @@ void KRenderItems(VIEWDESCRIPTORBLOCK *VDBPtr)
 				#endif
 				CheckWireFrameMode(WireFrameMode&2);
 				{
-					int o = numVisObjs;
-					while(o)
+					int o;
+					for(o=ModuleObjectHead[numMods];o>=0;o=ModuleObjectNext[o])
 					{
-						o--;
-
-						if(VisibleObjects[o].SortKey == numMods && !VisibleObjects[o].DrawBeforeEnvironment)
+						/* Bucket already selects this sector and draw pass. */
 						{
 							DISPLAYBLOCK *dptr = VisibleObjects[o].DispPtr;
 							AddShape(VisibleObjects[o].DispPtr,VDBPtr);	
@@ -684,7 +702,7 @@ void KRenderItems(VIEWDESCRIPTORBLOCK *VDBPtr)
 
 
 				{
-		 			D3D_DrawWaterTest(modulePtr);
+		 			{ EVENT_TICK stamp=EventLatencyBegin(); D3D_DrawWaterTest(modulePtr); EventLatencyEnd(stamp,"sector water submission",0,modulePtr->m_index,0,modulePtr->name,0); }
 				}
 			}
 		}

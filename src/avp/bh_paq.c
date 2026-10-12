@@ -262,7 +262,7 @@ void MakePAQNear(STRATEGYBLOCK *sbPtr)
 {
 	extern MODULEMAPBLOCK AlienDefaultMap;
 
-	MODULE tempModule;
+	MODULE tempModule = {0};
 	DISPLAYBLOCK *dPtr;
 	DYNAMICSBLOCK *dynPtr;
 	PAQ_STATUS_BLOCK *paqStatusPointer;    

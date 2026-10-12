@@ -1,5 +1,9 @@
 #include "3dc.h"
-#include "bmp2.h"
+#include "screenshot_image.h"
+#include "gadget.h"
+#include "psnd.h"
+#include "psndproj.h"
+#include "rootgadg.hpp"
 #include "endianio.h"
 #include "string.hpp"
 #include "scrshot.hpp"
@@ -104,112 +108,52 @@ extern "C" {
 unsigned char *GetScreenShot24(int *width, int *height);
 };
 				 
+static void NotifyScreenshotSaved(const char *name, int format)
+{
+    char location[64];
+    snprintf(location, sizeof(location), "....avp\\%s", name);
+    const char *extension = ScreenshotExtension(format);
+    const char *pattern = GetTextString(TEXTSTRING_SCREENSHOT_SAVED_NEW);
+    const size_t size = strlen(pattern) + strlen(extension) + strlen(location) + 1;
+    char *message = (char *)malloc(size);
+    if (message) {
+        snprintf(message, size, pattern, extension, location);
+        /* Capture may also run before a HUD exists (frontend/intro). */
+        if (RootGadget::GetRoot() && RootGadget::GetRoot()->GetHUD())
+            GADGET_NewScreenshotMessage(message);
+        else
+            Sound_Play(SID_TELETEXT,NULL); /* No HUD/daemon exists in the frontend yet. */
+        printf("%s\n", message);
+        free(message);
+    }
+}
+
 void ScreenShot()
 {
-	int i;
-	char Name[40];
-	
-	int width, height;
-	unsigned char *buf = GetScreenShot24(&width, &height);
-	if (buf == NULL)
-		return;
-	
-	strcpy(Name,"avp");
-	int length=strlen(Name);
-	strncpy(&Name[length],"00.bmp",8);
-	for(i=0;i<100;i++)
-	{
-		Name[length]=i/10+'0';
-		Name[length+1]=(i%10)+'0';
-		FILE* tempfp = OpenGameFile(Name, FILEMODE_READONLY, FILETYPE_CONFIG);
-		if(!tempfp)break;
-		else
- 		{
-			fclose(tempfp);
-		}
-	}
-	if(i==100) return;
-	
-	FILE *fp = OpenGameFile(Name, FILEMODE_WRITEONLY, FILETYPE_CONFIG);
-	if (!fp)
-	{
-		return;
-	}
-	
-	BMPHEADER2 h;
-
-	// fill out header
-	
-	h.Header.Type      = 'B'+'M'*256;
-	h.Header.Reserved1 = 0;
-	h.Header.Reserved2 = 0;
-	h.Header.Offset    = 14+40+0;
-
-	/*
-	** The type of information found in a BMP structure is indicated by
-	** the Size (Information Headere Size) field with a non-zero value.
-	*/
-	h.PmInfo.Size   = 0;
-	h.Pm2Info.Size  = 0;
-
-	h.WinInfo.Size          = 40;
-	h.WinInfo.Width         = width;
-	h.WinInfo.Height        = height;
-	h.WinInfo.Planes        = 1;
-	h.WinInfo.BitCount      = 24;
-	h.WinInfo.Compression   = 0;
-	h.WinInfo.SizeImage     = h.WinInfo.Width*h.WinInfo.Height*3;
-	h.WinInfo.XPelsPerMeter = h.WinInfo.Width;
-	h.WinInfo.YPelsPerMeter = h.WinInfo.Height;
-	h.WinInfo.ClrUsed       = 0;
-	h.WinInfo.ClrImportant  = 0;
-
-	h.Header.FileSize  = h.WinInfo.SizeImage + h.Header.Offset + 8;
-
-	// write header
-
-	PutWord_F PutWord = PutLittleWord;
-	PutDword_F PutDword = PutLittleDword;
-
-    PutWord(h.Header.Type, fp);
-    PutDword(h.Header.FileSize, fp);
-    PutWord(h.Header.Reserved1, fp);
-    PutWord(h.Header.Reserved2, fp);
-    PutDword(h.Header.Offset, fp);
-
-	PutDword(h.WinInfo.Size, fp);
-
-    PutDword(h.WinInfo.Width, fp);
-    PutDword(h.WinInfo.Height, fp);
-    PutWord(h.WinInfo.Planes, fp);
-    PutWord(h.WinInfo.BitCount, fp);
-    PutDword(h.WinInfo.Compression, fp);
-    PutDword(h.WinInfo.SizeImage, fp);
-    PutDword(h.WinInfo.XPelsPerMeter, fp);
-    PutDword(h.WinInfo.YPelsPerMeter, fp);
-    PutDword(h.WinInfo.ClrUsed, fp);
-    PutDword(h.WinInfo.ClrImportant, fp);
-
-	// write 24 bit image
-
-//	unsigned char *BufferPtr = &buf[(width * 3) * (height - 1)];
-	unsigned char *BufferPtr = &buf[0];
-	for (i=h.WinInfo.Height-1; i>=0; --i)
-	{
-		unsigned int j;
-		for (j=0; j<h.WinInfo.Width; ++j)
-		{
-			PutByte((BYTE)BufferPtr[j*3+2],fp);  //b
-			PutByte((BYTE)BufferPtr[j*3+1],fp);  //g
-			PutByte((BYTE)BufferPtr[j*3],fp);  //r
-		}
-			
-		// pad to 4 byte boundary
-		for (j=~(h.WinInfo.Width*3-1) & 3; j; --j) PutByte(0,fp);
-//		BufferPtr -= width * 3;
-		BufferPtr += width * 3;
-	}
-
-	free(buf);
-	fclose(fp);	
+    char name[48];
+    const int format = ScreenshotFormat >= 0 && ScreenshotFormat < SCREENSHOT_FORMAT_COUNT ? ScreenshotFormat : SCREENSHOT_BMP;
+    int index, width, height, ok;
+    FILE *fp;
+    unsigned char *pixels;
+    /* Preserve the existing directory/names, continuing beyond avp99. */
+    for (index=0; index<1000000; ++index) {
+        snprintf(name, sizeof(name), "avp%02d.%s", index, ScreenshotExtension(format));
+        fp = OpenGameFile(name, FILEMODE_READONLY, FILETYPE_CONFIG);
+        if (!fp) break;
+        fclose(fp);
+    }
+    if (index==1000000) return;
+    pixels = GetScreenShot24(&width, &height);
+    if (!pixels) return;
+    fp = OpenGameFile(name, FILEMODE_WRITEONLY, FILETYPE_CONFIG);
+    if (!fp) { free(pixels); return; }
+    ok = WriteScreenshotImage(fp, format, width, height, pixels);
+    free(pixels);
+    if (fclose(fp) != 0) ok = 0;
+    if (!ok) {
+        DeleteGameFile(name);
+        fprintf(stderr, "Could not write screenshot: %s\n", name);
+    } else {
+        NotifyScreenshotSaved(name, format);
+    }
 }

@@ -266,7 +266,7 @@ extern void CreateFlamingDebris(VECTORCH *positionPtr, VECTORCH *dirPtr)
 	}
 	
 	{
-		MODULE tempModule;
+		MODULE tempModule = {0};
 		DISPLAYBLOCK *dPtr;
 		DYNAMICSBLOCK *dynPtr = sbPtr->DynPtr;
   

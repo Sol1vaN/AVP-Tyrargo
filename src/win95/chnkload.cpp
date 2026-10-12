@@ -3,9 +3,12 @@
 #endif
 
 #include <algorithm>
+#include <vector>
+#include "coplanar_trim.hpp"
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdio.h>
 
 #include "string.hpp"
 
@@ -32,7 +35,6 @@
 void SetupAnimatedTextures(Shape_Chunk* sc,SHAPEHEADER* shp,Animation_Chunk* ac,Shape_Merge_Data_Chunk* smdc);
 void SetupAnimOnTriangle(SHAPEHEADER* shp,TEXANIM* ta,int poly);
 void SetupAnimOnQuad(Shape_Chunk* sc,SHAPEHEADER* shp,TEXANIM* ta1,TEXANIM* ta2,int poly);
-
 // what we need to do for now is load shapes into the mainshapelist
 // and objects into the Mapheader - Map
 
@@ -472,6 +474,76 @@ extern "C"
 // Functions which operate on RIFFHANDLEs
 /////////////////////////////////////////
 
+
+/* Identify authored trim/door overlaps once while loading the environment.
+   Never modify positions, normals, UVs or collision data. Temporary records
+   are discarded before gameplay; there is no per-frame geometry search. */
+struct EnvironmentTrimFace {
+ CoplanarTrimRect rect;
+ ChunkPoly* poly;
+};
+static void MarkEnvironmentCoplanarTrim(File_Chunk*fc) {
+ std::vector<EnvironmentTrimFace> faces;
+ List<Chunk*> objects=fc->lookup_child("RBOBJECT");
+ for(List_Iterator_Forward<Chunk*> it(&objects);!it.done();it.next()) {
+  Object_Chunk*ob=(Object_Chunk*)it();
+  Shape_Chunk*shape=ob->get_assoc_shape();
+  if(!shape){ob->assoc_with_shape_no(fc);shape=ob->get_assoc_shape();}
+  if(!shape)continue;
+  const ChunkShape&sh=shape->shape_data;
+  const ChunkObject&od=ob->object_data;
+  const double qx=od.orientation.x,qy=od.orientation.y,qz=od.orientation.z,qw=od.orientation.w;
+  for(int pi=0;pi<sh.num_polys;pi++) {
+   ChunkPoly&p=sh.poly_list[pi];
+   if(p.num_verts!=4 || !is_textured(p.engine_type) || (p.flags&(iflag_notvis|iflag_ignore0|iflag_transparent|iflag_txanim)))continue;
+   double pts[4][3],lo[3]={1e100,1e100,1e100},hi[3]={-1e100,-1e100,-1e100};
+   bool valid=true;
+   for(int j=0;j<4;j++) {
+    int vi=p.vert_ind[j];if(vi<0 || vi>=sh.num_verts){valid=false;break;}
+    const ChunkVectorInt&v=sh.v_list[vi];
+    double ux=2*(qy*v.z-qz*v.y),uy=2*(qz*v.x-qx*v.z),uz=2*(qx*v.y-qy*v.x);
+    pts[j][0]=od.location.x+v.x+qw*ux+qy*uz-qz*uy;
+    pts[j][1]=od.location.y+v.y+qw*uy+qz*ux-qx*uz;
+    pts[j][2]=od.location.z+v.z+qw*uz+qx*uy-qy*ux;
+    for(int k=0;k<3;k++){lo[k]=std::min(lo[k],pts[j][k]);hi[k]=std::max(hi[k],pts[j][k]);}
+   }
+   if(!valid)continue;
+   int axis=-1;for(int k=0;k<3;k++)if(hi[k]-lo[k]<0.01){if(axis!=-1){valid=false;break;}axis=k;}
+   if(!valid || axis<0)continue;
+   int axes[2],n=0;for(int k=0;k<3;k++)if(k!=axis)axes[n++]=k;
+   int corners=0;
+   for(int j=0;j<4;j++) {
+    int corner=0;for(int k=0;k<2;k++) {
+     double value=pts[j][axes[k]];
+     if(fabs(value-hi[axes[k]])<0.01)corner|=1<<k;
+     else if(fabs(value-lo[axes[k]])>=0.01)valid=false;
+    }
+    corners|=1<<corner;
+   }
+   if(!valid || corners!=15)continue;
+   double a[3],b[3];for(int k=0;k<3;k++){a[k]=pts[1][k]-pts[0][k];b[k]=pts[2][k]-pts[0][k];}
+   double normal=a[(axis+1)%3]*b[(axis+2)%3]-a[(axis+2)%3]*b[(axis+1)%3];
+   if(fabs(normal)<0.01)continue;
+   EnvironmentTrimFace f;f.poly=&p;
+   f.rect.axis=axis;f.rect.facing=normal>0?1:-1;f.rect.object=od.index_num;f.rect.material=p.colour&0x7fff;f.rect.plane=lo[axis];
+   for(int k=0;k<2;k++){f.rect.lo[k]=lo[axes[k]];f.rect.hi[k]=hi[axes[k]];}
+   faces.push_back(f);
+  }
+ }
+ std::sort(faces.begin(),faces.end(),[](const EnvironmentTrimFace&a,const EnvironmentTrimFace&b){
+  if(a.rect.axis!=b.rect.axis)return a.rect.axis<b.rect.axis;
+  if(a.rect.facing!=b.rect.facing)return a.rect.facing<b.rect.facing;
+  return a.rect.plane<b.rect.plane;
+ });
+ for(size_t i=0;i<faces.size();i++) {
+  size_t begin=i;while(begin>0 && faces[begin-1].rect.axis==faces[i].rect.axis && faces[begin-1].rect.facing==faces[i].rect.facing && faces[i].rect.plane-faces[begin-1].rect.plane<=0.01)--begin;
+  for(size_t j=begin;j<faces.size();j++) {
+   if(faces[j].rect.axis!=faces[i].rect.axis || faces[j].rect.facing!=faces[i].rect.facing || faces[j].rect.plane-faces[i].rect.plane>0.01)break;
+   if(IsCoplanarTrim(faces[i].rect,faces[j].rect)){faces[i].poly->flags|=iflag_coplanar_trim;break;}
+  }
+ }
+}
+
 // load a rif file into memory
 RIFFHANDLE load_rif (const char * fname)
 {
@@ -495,6 +567,7 @@ RIFFHANDLE load_rif (const char * fname)
 
 	RIFFHANDLE h = current_rif_handle = new _RifHandle;
 	h->fc = Env_Chunk = fc;
+	MarkEnvironmentCoplanarTrim(fc);
 	
 	Chunk * pChunk = fc->lookup_single_child("REBENVDT");
 	if (pChunk)
@@ -625,6 +698,7 @@ int copy_sprite_to_mainshapelist(RIFFHANDLE h, Sprite_Header_Chunk * shc, int/* 
 	
 	post_process_shape(mainshapelist[list_pos]);
 
+
 	h->shape_nums.add_entry(list_pos);
 
 	return list_pos;
@@ -708,6 +782,7 @@ static void setup_tex_conv_array (
 				int imgnum = load_rif_bitmap(tex,bns().flags);
 				if (GEI_NOTLOADED != imgnum)
 					conv_array[bns().index] = imgnum;
+
 			}
 		}
 		
@@ -761,6 +836,10 @@ CTM_ReturnType copy_to_mainshapelist(RIFFHANDLE h, Shape_Chunk * tmpshp, int fla
 	
 	
 	Shape_Preprocessed_Data_Chunk* spdc=(Shape_Preprocessed_Data_Chunk*)tmpshp->lookup_single_child("SHPPRPRO");
+    /* An authored preprocessed cache predates the render-only trim flag.
+       Rebuild tagged shapes from their source polygons so the flag survives. */
+    if(spdc)for(int i=0;i<tmpshp->shape_data.num_polys;i++)
+        if(tmpshp->shape_data.poly_list[i].flags&iflag_coplanar_trim){spdc=0;break;}
 	if(spdc)
 	{
 		copy_preprocessed_to_shapeheader (
@@ -816,6 +895,8 @@ CTM_ReturnType copy_to_mainshapelist(RIFFHANDLE h, Shape_Chunk * tmpshp, int fla
 	}	
 	
 	post_process_shape(mainshapelist[list_pos]);
+
+
 
 	h->shape_nums.add_entry(list_pos);
 
@@ -1803,6 +1884,8 @@ void copy_to_module (Object_Chunk * ob, int mod_pos, int shplst_pos)
 	Map->MapWorld.vy = (int) (ob->object_data.location.y*local_scale);
 	Map->MapWorld.vz = (int) (ob->object_data.location.z*local_scale);
 
+
+
 #if 0
 	QUAT q;
 
@@ -2256,7 +2339,7 @@ BOOL copy_to_shapeheader (
 	int flags, 
 	int local_max_index,
 	int * local_tex_index_nos,
-	int /*listpos*/,
+	int listpos,
 	const ChunkObject* object
 	)
 {
@@ -2408,6 +2491,7 @@ BOOL copy_to_shapeheader (
 				uv_imnums[item_list[i*9+3]>>16]=local_tex_index_nos[texno];
 				item_list[i*9 + 3] += local_tex_index_nos[texno];
 
+
 				shphd->sh_textures[UVIndex] = (int *) PoolAllocateMem (sizeof(int *) * cshp_ptr->uv_list[UVIndex].num_verts * 2);
 				for (j=0; j<cshp_ptr->uv_list[UVIndex].num_verts; j++) {
 					(shphd->sh_textures[UVIndex])[(j*2)] = ProcessUVCoord(h,UVC_POLY_U,(int)cshp_ptr->uv_list[UVIndex].vert[j].u,uv_imnums[UVIndex]);
@@ -2487,6 +2571,7 @@ BOOL copy_to_shapeheader (
 	instruct[5].sh_instr_data = 0;
 	
 
+
 	Chunk * pchAnim = shape->lookup_single_child("TEXTANIM");
 	if(pchAnim)
 	{
@@ -2517,7 +2602,7 @@ BOOL copy_preprocessed_to_shapeheader (
 	int /*flags*/, 
 	int local_max_index,
 	int * local_tex_index_nos,
-	int /*listpos*/,
+	int listpos,
 	const ChunkObject* object
 	)
 {
@@ -3509,6 +3594,7 @@ BOOL copy_to_mainshpl (Shape_Chunk * shp, int list_pos)
 	instruct[5].sh_numitems = 0;
 	instruct[5].sh_instr_data = 0;
 	
+
 
 	Chunk * pchAnim = shp->lookup_single_child("TEXTANIM");
 	if (pchAnim)

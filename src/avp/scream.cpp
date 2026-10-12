@@ -280,9 +280,27 @@ void LoadQueenScreamSounds()
 }
 
 
+/* Resolve the requested WAV from the already loaded voice bank, retaining
+ * its authored volume/pitch instead of assuming a random category index. */
+void PlayMarineCommandSound(int following,int* ref,VECTORCH* location){
+ const char *name=following?"Marine_Taunt_02.wav":"Marine_Taunt_07.wav";
+ for(int v=0;v<MarineSounds.num_voice_types;v++)for(int c=0;c<MarineSounds.num_voice_cats;c++){
+  ScreamSoundCategory *cat=&MarineSounds.voice_types[v].category[c];
+  for(int i=0;i<cat->num_sounds;i++){
+   ScreamSound *s=&cat->sounds[i];const char *file=s->sound_loaded->wavname;
+   for(const char *p=file;*p;p++)if(*p=='\\'||*p=='/')file=p+1;
+   if(!strcasecmp(file,name)){
+    Sound_Play((SOUNDINDEX)s->sound_loaded->sound_num,"dvpe",location,s->volume,s->pitch,ref);return;
+   }
+  }
+ }
+}
 void PlayMarineScream(int VoiceType,int SoundCategory,int PitchShift,int* ExternalRef,VECTORCH* Location)
 {
-	MarineSounds.PlaySound(VoiceType,SoundCategory,PitchShift,ExternalRef,Location);
+	/* Some human voice variants have no authored taunts. The stock marine
+     * taunt bank supplies the kill acknowledgement for those variants. */
+    if(SoundCategory==SC_Taunt && MarineSounds.voice_types && VoiceType>=0 && VoiceType<MarineSounds.num_voice_types && SoundCategory<MarineSounds.num_voice_cats && !MarineSounds.voice_types[VoiceType].category[SoundCategory].num_sounds)VoiceType=0;
+    MarineSounds.PlaySound(VoiceType,SoundCategory,PitchShift,ExternalRef,Location);
 }
 void PlayAlienSound(int VoiceType,int SoundCategory,int PitchShift,int* ExternalRef,VECTORCH* Location)
 {

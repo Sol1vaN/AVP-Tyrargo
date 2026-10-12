@@ -1,3 +1,4 @@
+#include "event_latency.h"
 #define DB_LEVEL 3
 
 #include "3dc.h"
@@ -16,7 +17,10 @@
 
 #include "dynblock.h"
 #include "dynamics.h"
+#include "extents.h"
 
+#include "savegame.h"
+#include "npc_support.h"
 #define UseLocalAssert Yes
 
 #include "ourasert.h"
@@ -1419,7 +1423,18 @@ void ObjectBehaviours(void)
 }			
 
 
-void ExecuteBehaviour(STRATEGYBLOCK* sbptr)
+static void ExecuteBehaviourLatencyBody(STRATEGYBLOCK* sbptr);
+void ExecuteBehaviour(STRATEGYBLOCK* sbptr) {
+ EVENT_TICK start=EventLatencyBegin();
+ EVENT_TICK id=EventLatencyId(sbptr?sbptr->SBname:0);
+ int eventType=sbptr?sbptr->I_SBtype:-1, eventMessage=0;
+ NPC_DAMAGE_SOURCE previous=NPCSupportPushSource(sbptr);
+ NPCSupportUpdate(sbptr);
+ ExecuteBehaviourLatencyBody(sbptr);
+ NPCSupportPopSource(previous);
+ EventLatencyEnd(start,"AI / object behaviour",eventType,eventMessage,id,0,0);
+}
+static void ExecuteBehaviourLatencyBody(STRATEGYBLOCK* sbptr)
 {
 	GLOBALASSERT(sbptr);
 
@@ -2023,11 +2038,25 @@ static int AnythingNearProxDoor(MODULE *doorModulePtr,PROXDOOR_BEHAV_BLOCK *door
 			(sbPtr->I_SBtype == I_BehaviourNPCPredatorDisc))		
 		  )		
 		{
-			if (dynPtr->Position.vy > minY && dynPtr->Position.vy < maxY)
+            int insideY = dynPtr->Position.vy > minY && dynPtr->Position.vy < maxY;
+            int localPlayer = Player && sbPtr == Player->ObStrategyBlock;
+            if (localPlayer && sbPtr->SBdataptr) {
+                /* The collision system places feet on the floor instead of inside it.
+                 * Sense the actual body height, including crouch, without extending
+                 * horizontal reach or changing scripted locks/NPC activation. */
+                int extentId = AvP.PlayerType == I_Alien ? CE_ALIEN :
+                    (AvP.PlayerType == I_Predator ? CE_PREDATOR : CE_MARINE);
+                COLLISION_EXTENTS *extent = &CollisionExtents[extentId];
+                PLAYER_STATUS *status = (PLAYER_STATUS *)sbPtr->SBdataptr;
+                int top = status->ShapeState == PMph_Standing ? extent->StandingTop : extent->CrouchingTop;
+                insideY = (long long)dynPtr->Position.vy + top <= maxY &&
+                    (long long)dynPtr->Position.vy + extent->Bottom >= minY;
+            }
+            if (insideY)
 			{
-				if (dynPtr->Position.vx > minX && dynPtr->Position.vx < maxX)
+				if ((localPlayer ? dynPtr->Position.vx >= minX && dynPtr->Position.vx <= maxX : dynPtr->Position.vx > minX && dynPtr->Position.vx < maxX))
 				{
-					if (dynPtr->Position.vz > minZ && dynPtr->Position.vz < maxZ)
+					if ((localPlayer ? dynPtr->Position.vz >= minZ && dynPtr->Position.vz <= maxZ : dynPtr->Position.vz > minZ && dynPtr->Position.vz < maxZ))
 					{
 						if ((sbPtr->I_SBtype==I_BehaviourMarine)
 							||(sbPtr->I_SBtype==I_BehaviourSeal)) {
@@ -2075,7 +2104,15 @@ static void SimpleAnimBehaveFun(STRATEGYBLOCK* sbptr)
 	these set the reqest state in a strategy block 
 */
 
-void RequestState(STRATEGYBLOCK* sbptr, int message, STRATEGYBLOCK * SBRequester)
+static void RequestStateLatencyBody(STRATEGYBLOCK* sbptr, int message, STRATEGYBLOCK * SBRequester);
+void RequestState(STRATEGYBLOCK* sbptr, int message, STRATEGYBLOCK * SBRequester) {
+ EVENT_TICK start=EventLatencyBegin();
+ EVENT_TICK id=EventLatencyId(sbptr?sbptr->SBname:0);
+ int eventType=sbptr?sbptr->I_SBtype:-1, eventMessage=message;
+ RequestStateLatencyBody(sbptr,message,SBRequester);
+ EventLatencyEnd(start,"map trigger",eventType,eventMessage,id,0,1);
+}
+static void RequestStateLatencyBody(STRATEGYBLOCK* sbptr, int message, STRATEGYBLOCK * SBRequester)
 {
 	//lowest bit of message corresponds to old on/off state
 	//the rest is extended information ,the interpretation of which depends on the receiving strategy

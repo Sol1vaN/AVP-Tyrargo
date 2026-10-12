@@ -69,6 +69,9 @@ extern void MakeMatrixFromDirection(VECTORCH *directionPtr, MATRIXCH *matrixPtr)
 
 
 
+/* Release heap-owned viewmodel instances BEFORE unloading their level assets.
+ * Safe to call more than once; inventories, bindings and saves are unaffected. */
+extern void ReleasePlayerWeaponGraphics(void);
 extern void UpdateWeaponShape(void);
 /*KJL**********************************************
 * Call UpdateWeaponShape on changing environment. *

@@ -322,7 +322,7 @@ void PlacedLightBehaviour(STRATEGYBLOCK *sbPtr)
 
 void MakePlacedLightNear(STRATEGYBLOCK *sbPtr)
 {
-	MODULE tempModule;
+	MODULE tempModule = {0};
 	DISPLAYBLOCK *dPtr;
 	DYNAMICSBLOCK *dynPtr = sbPtr->DynPtr;
 	PLACED_LIGHT_BEHAV_BLOCK* pl_bhv=(PLACED_LIGHT_BEHAV_BLOCK*) sbPtr->SBdataptr;

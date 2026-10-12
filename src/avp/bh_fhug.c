@@ -302,7 +302,7 @@ void MakeFacehuggerNear(STRATEGYBLOCK *sbPtr)
 {
 	extern MODULEMAPBLOCK AlienDefaultMap;
 
-	MODULE tempModule;
+	MODULE tempModule = {0};
 	DISPLAYBLOCK *dPtr;
 	DYNAMICSBLOCK *dynPtr;
 	FACEHUGGER_STATUS_BLOCK *facehuggerStatusPointer;    

@@ -181,6 +181,8 @@
 		mode */
 
 	extern void GADGET_NewOnScreenMessage( ProjChar* messagePtr );
+	extern void GADGET_NewScreenshotMessage( ProjChar* messagePtr );
+    extern void GADGET_NewScreenModeMessage( ProjChar* messagePtr );
 
 	extern void RemoveTheConsolePlease(void);
 
@@ -192,6 +194,8 @@
 		#define GADGET_ScreenModeChange_Setup() ((void) 0)
 		#define GADGET_ScreenModeChange_Cleanup() ((void) 0)
 		#define GADGET_NewOnScreenMessage(x) ((void) 0)
+        #define GADGET_NewScreenshotMessage(x) ((void) 0)
+        #define GADGET_NewScreenModeMessage(x) ((void) 0)
 
 	#endif /* UseGadgets */
 

@@ -439,7 +439,7 @@ void SetQueenFoot(STRATEGYBLOCK *sbPtr, QUEEN_FOOT foot) {
 void MakeQueenNear(STRATEGYBLOCK *sbPtr)
 {
 	extern MODULEMAPBLOCK AlienDefaultMap;
-	MODULE tempModule;
+	MODULE tempModule = {0};
 	DISPLAYBLOCK *dPtr;
 	DYNAMICSBLOCK *dynPtr = sbPtr->DynPtr;
 	QUEEN_STATUS_BLOCK *queenStatusPointer= (QUEEN_STATUS_BLOCK *)(sbPtr->SBdataptr);    

@@ -1,5 +1,7 @@
 #ifndef __VERSION_H__
 #define __VERSION_H__
+#include "tyrargo_version.h"
+extern int TyrargoVersionOpacity(unsigned long long elapsedMilliseconds);
 
 extern const char *AvPVersionString;
 

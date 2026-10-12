@@ -452,6 +452,7 @@ extern SCENEMODULE *MainSceneArray[];
 extern AVIEW ModuleView;
 extern MODULE *Global_MotherModule;
 extern char *ModuleCurrVisArray;
+extern int ModuleIsVisibleForRendering(int index);
 extern char *ModulePrevVisArray;
 extern char *ModuleTempArray;
 extern char *ModuleLocalVisArray;

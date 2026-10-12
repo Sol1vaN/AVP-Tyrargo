@@ -14,6 +14,9 @@
 #include "pldnet.h"
 #include "los.h"
 
+#include "savegame.h"
+#include "npc_support.h"
+#include "targeting.h"
 #define UseLocalAssert Yes
 #include "ourasert.h"
 
@@ -49,13 +52,20 @@ void OperateObjectInLineOfSight(void)
 			if( (I_BehaviourBinarySwitch == behaviour)
 			  ||(I_BehaviourLinkSwitch == behaviour) 
 			  ||(I_BehaviourAutoGun == behaviour) 
-			  ||(I_BehaviourDatabase == behaviour) )
+			  ||(I_BehaviourDatabase == behaviour)
+              ||NPCSupportCanCommand(objectPtr->ObStrategyBlock) )
 			{
 				/* is it in range? */
-				if (objectPtr->ObView.vz > 0 && objectPtr->ObView.vz < ACTIVATION_Z_RANGE)
+				VECTORCH activation=objectPtr->ObView;
+                if(NPCSupportCanCommand(objectPtr->ObStrategyBlock)){
+                 GetTargetingPointOfObject_Far(objectPtr->ObStrategyBlock,&activation);
+                 SubVector(&Global_VDB_Ptr->VDB_World,&activation);
+                 RotateVector(&activation,&Global_VDB_Ptr->VDB_Mat);
+                }
+                if (activation.vz > 0 && activation.vz < ACTIVATION_Z_RANGE)
 				{
-					int absX = objectPtr->ObView.vx;
-				   	int absY = objectPtr->ObView.vy;
+					int absX = activation.vx;
+				   	int absY = activation.vy;
 
 					if (absX<0) absX=-absX;
 					if (absY<0) absY=-absY;
@@ -80,7 +90,7 @@ void OperateObjectInLineOfSight(void)
 	{
 		//only allow activation if you have a line of sight to the switch
 		//allow the switch to be activated anyway for the moment
-		if(IsThisObjectVisibleFromThisPosition_WithIgnore(Player,nearestObjectPtr,&nearestObjectPtr->ObWorld,10000))
+		if(NPCSupportCanCommand(nearestObjectPtr->ObStrategyBlock) ? IsThisObjectVisibleFromThisPosition_WithIgnore(nearestObjectPtr,Player,&Global_VDB_Ptr->VDB_World,ACTIVATION_Z_RANGE) : IsThisObjectVisibleFromThisPosition_WithIgnore(Player,nearestObjectPtr,&nearestObjectPtr->ObWorld,10000))
 		{
 			switch(nearestObjectPtr->ObStrategyBlock->I_SBtype)
 			{
@@ -107,6 +117,9 @@ void OperateObjectInLineOfSight(void)
 					RequestState(nearestObjectPtr->ObStrategyBlock,1, 0);
 					break;
 				}
+                case I_BehaviourMarine:
+                case I_BehaviourSeal:
+                    NPCSupportCommand(nearestObjectPtr->ObStrategyBlock);break;
 				case I_BehaviourDatabase:
 				{
 					AvP.GameMode = I_GM_Menus;

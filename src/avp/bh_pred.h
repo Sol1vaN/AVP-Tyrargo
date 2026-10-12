@@ -1,3 +1,4 @@
+#include "npc_precision.h"
 /*--------------Patrick 21/1/97-----------------------
   Header file for predator AI & NPC support functions
   ---------------------------------------------------*/
@@ -190,6 +191,9 @@ typedef struct predatorStatusBlock
 	STRATEGYBLOCK* death_target_sbptr;
 	int death_target_request;
 
+ int huntTimer,routeTimer,perceptionTimer,huntMode;
+ AIMODULE *huntGoal,*routeSource,*routeGoal,*routeNext;
+ NPC_MOTION_RUNTIME precision; /* runtime only, never serialized */
 }PREDATOR_STATUS_BLOCK;
 
 typedef struct dormantPredatorStatusBlock

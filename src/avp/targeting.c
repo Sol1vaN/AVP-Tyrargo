@@ -1,5 +1,6 @@
 /* KJL 14:30:27 06/05/98 - weapon targeting code */
 #include "3dc.h"
+#include "projection.h"
 #include "module.h"
 #include "inline.h"
 
@@ -31,6 +32,7 @@
 #include "bh_weap.h"
 #include "bh_agun.h"
 #include "weapons.h"
+#include "npc_support.h"
 #include "avpview.h"
 
 #include "psnd.h"
@@ -94,9 +96,9 @@ void CalculateWhereGunIsPointing(TEMPLATE_WEAPON_DATA *twPtr, PLAYER_WEAPON_DATA
 	/* very useful when considering sprites, which lie in a Z-plane in view space */
  	GunMuzzleDirectionInVS.vz = 65536;
     GunMuzzleDirectionInVS.vx = 
-    	(GunMuzzleSightX-(ScreenDescriptorBlock.SDB_Width<<15))/(VDBPtr->VDB_ProjX);
+    	(int)((GunMuzzleSightX-(ScreenDescriptorBlock.SDB_Width<<15))/AvpProjectionX(VDBPtr));
 	GunMuzzleDirectionInVS.vy = 
-		(((GunMuzzleSightY-(ScreenDescriptorBlock.SDB_Height<<15))/(VDBPtr->VDB_ProjY))*3)/4;
+		(int)((GunMuzzleSightY-(ScreenDescriptorBlock.SDB_Height<<15))/(AvpProjectionY(VDBPtr)*(4.0/3.0)));
     
 	/* Now fudge for gun judder! */
  	if ((twPtr->UseStateMovement==0)||(weaponPtr->WeaponIDNumber == WEAPON_MINIGUN)) {
@@ -902,13 +904,7 @@ int SmartTarget_TargetFilter(STRATEGYBLOCK *candidate)
 		}
 		return 0;
 	} else if (weaponPtr->WeaponIDNumber == WEAPON_SMARTGUN) {
-		/* Don't target marines if Friendly Fire is disabled. */
-		if (netGameData.disableFriendlyFire && (netGameData.gameType==NGT_CoopDeathmatch || netGameData.gameType==NGT_Coop)) {
-	   		NETGHOSTDATABLOCK *ghostDataPtr = (NETGHOSTDATABLOCK *)candidate->SBdataptr;
-			if (ghostDataPtr->type==I_BehaviourMarinePlayer || ghostDataPtr->type==I_BehaviourMarine) {
-				return(0);
-			}
-		}
+        if(!NPCSupportSmartgunHostile(Player->ObStrategyBlock,candidate))return 0;
 	}
 
 	switch (candidate->I_SBtype) {

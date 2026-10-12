@@ -408,7 +408,12 @@ static int SquashingSomething(DYNAMICSBLOCK *dynPtr)
 			else if (nextReport->ObstacleNormal.vy > 46340)
 			{
 				DYNAMICSBLOCK *objDynPtr = sbPtr->DynPtr;
-				if (objDynPtr)
+				/* The local player follows the resolved lift displacement in ObjectDynamics.
+                 * Forcing a fall impulse here double-drives the passenger and can
+                 * overwrite a jump issued earlier in this behaviour pass.
+                 * Keep the legacy assistance for other passengers, and the
+                 * crushing/damage branch below the lift unchanged. */
+                if (objDynPtr && (!Player || sbPtr != Player->ObStrategyBlock))
 				{
 					if (objDynPtr->LinImpulse.vy < PLATFORMLIFT_SPEED)
 					{

@@ -15,6 +15,8 @@
 #include "pldnet.h"
 #include "kshape.h"
 #include "d3d_hud.h"
+#include "fmv_backend.h"
+#include "awtexld.h"
 
 
 /* winmain.c */
@@ -25,45 +27,36 @@ int VideoModeNotAvailable=0;
 /* bink.c */
 void PlayBinkedFMV(char *filenamePtr)
 {
-/*
-	fprintf(stderr, "PlayBinkedFMV(%s)\n", filenamePtr);
-*/
+	FMVBackend_PlayBinked(filenamePtr);
 }
 
 void StartMenuBackgroundBink()
 {
-/*
-	fprintf(stderr, "StartMenuBackgroundBink()\n");
-*/
+	FMVBackend_StartMenuBackground();
 }
 
 int PlayMenuBackgroundBink()
 {
-/*
-	fprintf(stderr, "PlayMenuBackgroundBink()\n");
-*/	
-	return 0;
+	return FMVBackend_PlayMenuBackground();
 }
 
 void EndMenuBackgroundBink()
 {
-/*
-	fprintf(stderr, "EndMenuBackgroundBink()\n");
-*/
+	FMVBackend_EndMenuBackground();
 }
 
 /* alt_tab.cpp */
-void ATIncludeSurface(void * pSurface, void * hBackup)
+void ATIncludeSurface(DDSurface * pSurface, AW_BACKUPTEXTUREHANDLE hBackup)
 {
 	fprintf(stderr, "ATIncludeSurface(%p, %p)\n", pSurface, hBackup);
 }
 
-void ATRemoveSurface(void * pSurface)
+void ATRemoveSurface(DDSurface * pSurface)
 {
 	fprintf(stderr, "ATRemoveSurface(%p)\n", pSurface);
 }
 
-void ATRemoveTexture(void * pTexture)
+void ATRemoveTexture(D3DTexture * pTexture)
 {
 	fprintf(stderr, "ATRemoveTexture(%p)\n", pTexture);
 }
@@ -101,11 +94,42 @@ void ReleaseDirect3D()
 
 void ReloadImageIntoD3DImmediateSurface(IMAGEHEADER* iheader)
 {
-	fprintf(stderr, "ReloadImageIntoD3DImmediateSurface(%p)\n", iheader);
-}
+	if (iheader == NULL)
+	{
+		fprintf(stderr, "OGL_TEXTURE_RESTORE rejected: null image header\n");
+		return;
+	}
 
+	if (iheader->D3DTexture != NULL)
+	{
+		fprintf(stderr, "OGL_TEXTURE_RESTORE skipped: texture already present image=%p texture=%p\n", iheader, iheader->D3DTexture);
+		return;
+	}
 
-/* d3d_render.cpp */
+	if (iheader->hBackup == NULL)
+	{
+		fprintf(stderr, "OGL_TEXTURE_RESTORE unavailable: image=%p has no backup\n", iheader);
+		return;
+	}
+
+	/* The OpenGL backend reuses the legacy loader: hBackup retains the converted
+	 * source pixels, while AwCreateTexture creates a new GL texture in the current
+	 * context.  The former stub only logged this call and left textures NULL. */
+	iheader->D3DTexture = AwCreateTexture("rf", iheader->hBackup,
+		AW_TLF_PREVSRC | AW_TLF_COMPRESS);
+	iheader->D3DHandle = 0;
+
+	if (iheader->D3DTexture == NULL)
+	{
+		fprintf(stderr, "OGL_TEXTURE_RESTORE failed: image=%p backup=%p error=%d\n",
+			iheader, iheader->hBackup, awTlLastErr);
+	}
+	else
+	{
+		fprintf(stderr, "OGL_TEXTURE_RESTORE restored: image=%p texture=%p\n",
+			iheader, iheader->D3DTexture);
+	}
+}/* d3d_render.cpp */
 int NumberOfLandscapePolygons;
 int FMVParticleColour;
 int WireFrameMode;
