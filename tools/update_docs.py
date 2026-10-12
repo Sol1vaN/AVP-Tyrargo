@@ -62,13 +62,20 @@ def outputs():
   out[folder+'roadmap.md']='\n\n'.join(road)+'\n'
   intro=nav+'# '+('Development milestones' if en else 'Hitos del desarrollo')+'\n\n'+('Inventory of local probe names. A probe can be a diagnostic experiment or revision of an existing feature; this is not 249 releases, nor 249 independent features. Original probe folders and private saves remain outside this repository. Git ancestry retains upstream history; the first Tyrargo commit imports the current snapshot.' if en else 'Inventario de nombres de probes locales. Una probe puede ser diagnóstico o revisión de una función; no equivale a 249 releases ni 249 funciones independientes. Probes originales y saves privados quedan fuera del repositorio. Git conserva historia upstream; el primer commit Tyrargo importa el snapshot actual.')+'\n\n| Probe | Milestone |\n|---:|---|\n'
   out[folder+'history.md']=intro+'\n'.join(f"| {x['probe']:03} | {x['title']} |" for x in hist)+'\n'
-  gallery=[nav+'# '+('Showcase gallery' if en else 'Galería showcase'),('All supplied screenshots, resized into documentation copies; original game assets/maps are not bundled. Images may depict earlier iterations. CRT off/on is a matched pair; water/map scenes are illustrations, not matched performance comparisons.' if en else 'Todas las capturas suministradas, en copias para documentación; no incluye recursos/mapas originales. Imágenes pueden mostrar iteraciones previas. CRT off/on es un par comparable; agua/mapas son ejemplos, no comparaciones de rendimiento.')]
+  gallery=[nav+'# '+('Showcase gallery' if en else 'Galería showcase'),('All supplied screenshots, resized into documentation copies; original game assets/maps are not bundled. Images may depict earlier iterations. CRT and water comparisons alternate supplied screenshots; these are appearance examples, not performance measurements.' if en else 'Todas las capturas suministradas, en copias para documentación; no incluye recursos/mapas originales. Imágenes pueden mostrar iteraciones previas. Las comparaciones de CRT y agua alternan capturas suministradas; ilustran el aspecto visual, no el rendimiento.')]
 
   categories=list(dict.fromkeys(x['category'] for x in media if 'category' in x))
   gallery += [' · '.join(f"[{next(x['title'][lang] for x in media if x.get('category')==cat)}](#{cat})" for cat in categories)]
   for cat in categories:
    members=[x for x in media if x.get('category')==cat]
    gallery += [f'<a id="{cat}"></a>\n\n## {members[0]["title"][lang]}']
+   if cat=='water-vanilla-vs-watter-new':
+    comparison=load('water-comparisons.json')
+    gallery += [('Each comparison loops between Before (classic water) and After (modern water), holding each screenshot for two seconds. These are alternating stills, not recorded water animation.' if en else 'Cada comparación alterna en bucle Antes (agua clásica) y Después (agua moderna), mostrando cada captura durante dos segundos. Son imágenes alternadas, no una grabación del movimiento del agua.')]
+    for index,pair in enumerate(comparison['pairs'],1):
+     label=(f'Comparison {index}: Before / After' if en else f'Comparación {index}: Antes / Después')
+     gallery += [f'### {label}',f"![{label}](../media/{pair['file']})",f"<details><summary>{'Individual screenshots' if en else 'Capturas individuales'}</summary>\n\n"+f"![{'Before — classic water' if en else 'Antes — agua clásica'}](../media/{pair['before']})\n\n"+f"![{'After — modern water' if en else 'Después — agua moderna'}](../media/{pair['after']})\n\n</details>"]
+    continue
    last_group=None
    for x in members:
     sub='/'.join(x['original'].split('/')[2:-1])

@@ -2,7 +2,7 @@
 
 # Showcase gallery
 
-All supplied screenshots, resized into documentation copies; original game assets/maps are not bundled. Images may depict earlier iterations. CRT off/on is a matched pair; water/map scenes are illustrations, not matched performance comparisons.
+All supplied screenshots, resized into documentation copies; original game assets/maps are not bundled. Images may depict earlier iterations. CRT and water comparisons alternate supplied screenshots; these are appearance examples, not performance measurements.
 
 [Mission Briefings](#briefing) · [CRT GLSL Filter](#crt) · [Gameplay and Maps](#gameplay) · [Halos](#halos) · [Halos Through Glass](#halos-trough-glass) · [In-game Save Selection](#ingame-loadgame) · [Control Bindings](#ingame-menu-binds) · [In-game Options](#ingame-menu-opt) · [Live Previews: FOV, HUD and Crosshairs](#ingame-menu-realtime-preview) · [Interface Scaling](#ingame-menu-scaler) · [Main Menu Backgrounds](#main-menu-backgrounds) · [Main Menu Options](#main-menu-opt) · [Film Grain by Species](#noise) · [Single-player Difficulties](#singleplayer-difficulties) · [Single-player Options](#singleplayer-opt) · [Texture Filters](#texture-filters) · [Ultrawide Presentation](#ultrawide) · [Version Information](#versioning-console) · [Modern Water](#water-new) · [Classic Water](#water-vanilla) · [Water Before / After](#water-vanilla-vs-watter-new)
 
@@ -1040,38 +1040,40 @@ All supplied screenshots, resized into documentation copies; original game asset
 
 ## Water Before / After
 
-<details><summary>avp42.png</summary>
+Each comparison loops between Before (classic water) and After (modern water), holding each screenshot for two seconds. These are alternating stills, not recorded water animation.
 
-![avp42.png](../media/showcase/water-vanilla-vs-watter-new/avp42.jpg)
+### Comparison 1: Before / After
 
-</details>
+![Comparison 1: Before / After](../media/showcase/water-vanilla-vs-watter-new/comparison-1.gif)
 
-<details><summary>avp49.png</summary>
+<details><summary>Individual screenshots</summary>
 
-![avp49.png](../media/showcase/water-vanilla-vs-watter-new/avp49.jpg)
+![Before — classic water](../media/showcase/water-vanilla-vs-watter-new/avp42.jpg)
 
-</details>
-
-<details><summary>avp78.png</summary>
-
-![avp78.png](../media/showcase/water-vanilla-vs-watter-new/avp78.jpg)
+![After — modern water](../media/showcase/water-vanilla-vs-watter-new/avp49.jpg)
 
 </details>
 
-<details><summary>avp79.png</summary>
+### Comparison 2: Before / After
 
-![avp79.png](../media/showcase/water-vanilla-vs-watter-new/avp79.jpg)
+![Comparison 2: Before / After](../media/showcase/water-vanilla-vs-watter-new/comparison-2.gif)
+
+<details><summary>Individual screenshots</summary>
+
+![Before — classic water](../media/showcase/water-vanilla-vs-watter-new/avp78.jpg)
+
+![After — modern water](../media/showcase/water-vanilla-vs-watter-new/avp79.jpg)
 
 </details>
 
-<details><summary>avp86.png</summary>
+### Comparison 3: Before / After
 
-![avp86.png](../media/showcase/water-vanilla-vs-watter-new/avp86.jpg)
+![Comparison 3: Before / After](../media/showcase/water-vanilla-vs-watter-new/comparison-3.gif)
 
-</details>
+<details><summary>Individual screenshots</summary>
 
-<details><summary>avp88.png</summary>
+![Before — classic water](../media/showcase/water-vanilla-vs-watter-new/avp86.jpg)
 
-![avp88.png](../media/showcase/water-vanilla-vs-watter-new/avp88.jpg)
+![After — modern water](../media/showcase/water-vanilla-vs-watter-new/avp88.jpg)
 
 </details>

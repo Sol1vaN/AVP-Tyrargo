@@ -1,0 +1,20 @@
+{
+  "frame_duration_ms": 2000,
+  "pairs": [
+    {
+      "before": "showcase/water-vanilla-vs-watter-new/avp42.jpg",
+      "after": "showcase/water-vanilla-vs-watter-new/avp49.jpg",
+      "file": "showcase/water-vanilla-vs-watter-new/comparison-1.gif"
+    },
+    {
+      "before": "showcase/water-vanilla-vs-watter-new/avp78.jpg",
+      "after": "showcase/water-vanilla-vs-watter-new/avp79.jpg",
+      "file": "showcase/water-vanilla-vs-watter-new/comparison-2.gif"
+    },
+    {
+      "before": "showcase/water-vanilla-vs-watter-new/avp86.jpg",
+      "after": "showcase/water-vanilla-vs-watter-new/avp88.jpg",
+      "file": "showcase/water-vanilla-vs-watter-new/comparison-3.gif"
+    }
+  ]
+}

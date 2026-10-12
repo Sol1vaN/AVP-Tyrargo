@@ -2,7 +2,7 @@
 
 # Galería showcase
 
-Todas las capturas suministradas, en copias para documentación; no incluye recursos/mapas originales. Imágenes pueden mostrar iteraciones previas. CRT off/on es un par comparable; agua/mapas son ejemplos, no comparaciones de rendimiento.
+Todas las capturas suministradas, en copias para documentación; no incluye recursos/mapas originales. Imágenes pueden mostrar iteraciones previas. Las comparaciones de CRT y agua alternan capturas suministradas; ilustran el aspecto visual, no el rendimiento.
 
 [Informes de misión](#briefing) · [Filtro CRT GLSL](#crt) · [Gameplay y mapas](#gameplay) · [Halos](#halos) · [Halos a través del vidrio](#halos-trough-glass) · [Selección de partidas en juego](#ingame-loadgame) · [Asignación de controles](#ingame-menu-binds) · [Opciones en juego](#ingame-menu-opt) · [Vistas previas: FOV, HUD y miras](#ingame-menu-realtime-preview) · [Escalado de interfaz](#ingame-menu-scaler) · [Fondos del menú principal](#main-menu-backgrounds) · [Opciones del menú principal](#main-menu-opt) · [Grano por especie](#noise) · [Dificultades singleplayer](#singleplayer-difficulties) · [Opciones singleplayer](#singleplayer-opt) · [Filtros de texturas](#texture-filters) · [Presentación ultrapanorámica](#ultrawide) · [Información de versión](#versioning-console) · [Agua moderna](#water-new) · [Agua clásica](#water-vanilla) · [Agua: antes / después](#water-vanilla-vs-watter-new)
 
@@ -1040,38 +1040,40 @@ Todas las capturas suministradas, en copias para documentación; no incluye recu
 
 ## Agua: antes / después
 
-<details><summary>avp42.png</summary>
+Cada comparación alterna en bucle Antes (agua clásica) y Después (agua moderna), mostrando cada captura durante dos segundos. Son imágenes alternadas, no una grabación del movimiento del agua.
 
-![avp42.png](../media/showcase/water-vanilla-vs-watter-new/avp42.jpg)
+### Comparación 1: Antes / Después
 
-</details>
+![Comparación 1: Antes / Después](../media/showcase/water-vanilla-vs-watter-new/comparison-1.gif)
 
-<details><summary>avp49.png</summary>
+<details><summary>Capturas individuales</summary>
 
-![avp49.png](../media/showcase/water-vanilla-vs-watter-new/avp49.jpg)
+![Antes — agua clásica](../media/showcase/water-vanilla-vs-watter-new/avp42.jpg)
 
-</details>
-
-<details><summary>avp78.png</summary>
-
-![avp78.png](../media/showcase/water-vanilla-vs-watter-new/avp78.jpg)
+![Después — agua moderna](../media/showcase/water-vanilla-vs-watter-new/avp49.jpg)
 
 </details>
 
-<details><summary>avp79.png</summary>
+### Comparación 2: Antes / Después
 
-![avp79.png](../media/showcase/water-vanilla-vs-watter-new/avp79.jpg)
+![Comparación 2: Antes / Después](../media/showcase/water-vanilla-vs-watter-new/comparison-2.gif)
+
+<details><summary>Capturas individuales</summary>
+
+![Antes — agua clásica](../media/showcase/water-vanilla-vs-watter-new/avp78.jpg)
+
+![Después — agua moderna](../media/showcase/water-vanilla-vs-watter-new/avp79.jpg)
 
 </details>
 
-<details><summary>avp86.png</summary>
+### Comparación 3: Antes / Después
 
-![avp86.png](../media/showcase/water-vanilla-vs-watter-new/avp86.jpg)
+![Comparación 3: Antes / Después](../media/showcase/water-vanilla-vs-watter-new/comparison-3.gif)
 
-</details>
+<details><summary>Capturas individuales</summary>
 
-<details><summary>avp88.png</summary>
+![Antes — agua clásica](../media/showcase/water-vanilla-vs-watter-new/avp86.jpg)
 
-![avp88.png](../media/showcase/water-vanilla-vs-watter-new/avp88.jpg)
+![Después — agua moderna](../media/showcase/water-vanilla-vs-watter-new/avp88.jpg)
 
 </details>
