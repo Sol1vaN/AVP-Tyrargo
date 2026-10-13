@@ -1,84 +1,54 @@
-# AVP: Tyrargo v6.251 RC1 — first public Windows x64 release
+# AVP: Tyrargo v6.252 RC1 — Windows x64
 
-Tyrargo is an independent, non-commercial fan port derived from **atsb's NakedAVP 1.2.3**, built on the original Rebellion Aliens versus Predator source. **Rebellion created and owns the original game/source.** Its license and the component licenses remain applicable.
+This update improves autonomous alien recovery at vent edges and restores the original console cheats in normal builds. It includes all changes from v6.251 RC1.
 
-This is a **release candidate**, with compiled binaries, matching production source, dependency sources and relinking materials. Original game data is supplied separately.
+## Alien vent-edge recovery
+
+- Detects a stalled approach by measuring progress toward the target. Sideways oscillation at a vent lip no longer counts as useful forward movement.
+- Starts a bounded recovery sooner and keeps a direct approach when the enemy is physically visible, instead of repeatedly abandoning it for waiting or avoidance.
+- Uses current targeting positions for navigation visibility and preserves the shared line-of-sight state.
+- Retains native hull collision, wall climbing, movement speed, gravity and leap limits. Patrol, retreat and inter-room detours retain their normal progress checks.
+
+Nine controlled save replays with the player stationary reached a visible combat position in approximately 1.7–2.5 simulated seconds across tested timesteps of roughly 60, 144, 240 and 1000 FPS. The previous build also eventually recovered in this case, but more slowly. Repeated save loading and a separate oscillation/progress test passed. These are targeted checks, not a claim that every map edge is resolved.
+
+## Original cheats available again
+
+Launch the executable with:
+
+```text
+avpt.exe -debug
+```
+
+Open the in-game console and enter `GOD` to toggle immortality, or `GIVEALLWEAPONS` for equipment. Normal builds now honor the startup flag instead of depending on development calibration tools. Commands remain disabled without the flag. The original cheat restrictions on normal saves/records still apply. `-d` and `--debug` remain compatible aliases; `-debug` is sufficient.
+
+Native `GOD` on/off and `GIVEALLWEAPONS` were checked with the debug flag and without it.
+
+## Smartgun behavior preserved
+
+No smartgun targeting-mode change is included in this update. A new game starts in Tracking, secondary fire switches Tracking / Free, and loading restores the mode saved in that game. Rendered tests confirmed enemy acquisition, the red tracking sight, moving crosshair and weapon convergence after switching the supplied Free-mode save to Tracking. Allied filtering and previous targeting fixes remain in place.
 
 ## Download and install
 
-Download **AVP-Tyrargo-v6.251-rc1-Windows-x64.zip** for playing. The other archives are development/license materials.
+Download **AVP-Tyrargo-v6.252-rc1-Windows-x64.zip**. Extract it into your installed **Aliens versus Predator Gold Edition (retail CD)** or **Aliens versus Predator Classic 2000 (Steam/GOG)** directory, preserving folders. Run `avpt.exe` and keep the included DLLs beside it. Back up previous Tyrargo profiles and saves before updating.
 
-Compatible game-data editions:
+Original commercial game data must be supplied separately. This release contains no game maps, movies, audio, profiles, saves or diagnostic hooks. RC1 remains a release candidate for broader player testing.
 
-- **Aliens versus Predator Gold Edition — retail CD**.
-- **Aliens versus Predator Classic 2000 — Steam or GOG**.
-
-Extract the Windows ZIP into the installed game directory, retaining directories and notices, then run **avpt.exe**. Keep its runtime DLLs beside it. The executable has a different name from the stock executables, so those can remain installed. Back up profiles/saves before replacing an earlier Tyrargo build. A copy of the game directory can be used for an independent installation.
-
-[Full installation instructions](https://github.com/Sol1vaN/AVP-Tyrargo/blob/main/docs/en/install-and-play.md) · [Feature catalog](https://github.com/Sol1vaN/AVP-Tyrargo/blob/main/docs/en/features.md) · [Gallery](https://github.com/Sol1vaN/AVP-Tyrargo/blob/main/docs/en/gallery.md)
-
-## Changes in this candidate
-
-- **Assisted targeting:** enemies outside the sight's capture rectangle are rejected before nearest-target selection. A nearer off-axis enemy can no longer mask another aimable enemy. Ally exclusions remain active, and free/assisted smartgun modes retain their separate behavior.
-- **Alien route recovery:** a stalled approach retains its target instead of being forced into wandering. During the bounded recovery interval it can retry a visible target direction through ordinary collision/dynamics. Wall climbing and authored jumping remain available; no teleport or collision bypass is used.
-- **Marine weapon cadence:** persistent per-weapon/channel timing prevents animation resets, target changes or weapon swaps from bypassing shot recovery. Grenade launcher spacing respects the player's firing/recoil definitions; a controlled combat replay at 60 FPS measured about 1.35 seconds between launches against a 1.33-second minimum.
-- **Reloads and ammunition:** SADAR/disc launchers no longer refill instantly through the squad controller. Reload clocks and animations use player definitions; projectile ammunition is debited after successful creation. Native automatic weapons use the corresponding player fire rates and ammunition types. Flamethrower consumption carries its fractional remainder instead of treating a complete tank as three seconds of fuel.
-- **Simulation outside camera:** firing/reload animation events advance even when an allied NPC is not being drawn. Weapon clocks are saved in the new optional squad extension; older 245/246 squad payloads remain accepted.
-- **Documentation and credits:** instrumentation is rewritten coherently in English with a separate Spanish page. Installation editions are explicit. The gallery contains **160 screenshots in 21 categories**, with CRT Before/After naming and the additional Marine screenshot on the homepage. Shader/runtime notices and visible decoder/CRT credits are included.
-
-## What the public build includes
-
-The existing Tyrargo foundation provides fractional mouse/render precision; per-species FOV, HUD, crosshair and text scaling; live option previews; windowed/borderless/exclusive presentation; screenshot options; optional CRT GLSL/image controls and modern water; spatial audio/environment effects; campaign persistence and optimized ammunition; and coordinated single-player NPC support.
-
-Allied marines can acknowledge Use commands, follow or patrol, collect two distinct additional weapons, manage private ammunition, use nearby sentries and leave recoverable firearms on death. Supply jobs coordinate access and give the human player priority. Health/armor pickups use the below-60% threshold and ammunition the below-30% threshold. Exploration and combat retain native collision constraints. Predator locomotion and weapon acquisition include the prior animation corrections.
-
-Molecular Acid menu labels **x1 / x1.5 / x2** use enemy factors **1.5 / 2 / 2.5** and resource factors **1.5 / 2 / 3**. Pulse Rifle magazines, SADAR rockets and marine discs use total pickup quantities **3 / 4 / 5**. Predator energy scales with resources, and Acid armor uses a 15-point base multiplied by that resource factor. Authored triggers and supported generators still matter; every custom scripted wave is not guaranteed to have a simple multiplied count.
-
-Performance work preserves draw order, collision results and visual options. The prior two New Derelict comparisons reduced measured mean frame times from **15.828 to 10.371 ms** and **18.692 to 9.460 ms** in their documented local fixtures. Those are scenario results, not a promise of constant FPS on every map/machine. [Measurement method and limits](https://github.com/Sol1vaN/AVP-Tyrargo/blob/main/docs/en/performance.md).
-
-## Validation and limits
-
-This iteration exercised nine supported marine weapons at multiple simulated frame steps; reload capacities/reserves; fractional fuel; all four grenade variants with native gravity/velocity; friendly-target filtering; blocked sight lines; per-weapon save/load state; the tunnel save; delayed alien arrival/assisted targeting; and a fresh Steam-data start. The release's decoder rebuild/relink script was also exercised. Laboratory invulnerability/scene setup/replay hooks are excluded from production.
-
-Broader campaign, custom-map and multiplayer testing continues. This build is not labeled stable, and it does not introduce a new map loader, a Vulkan renderer or the planned camouflage system. Use saves made against the corresponding map data; restore the same custom-map installation when investigating a save.
-
-## Build and source materials
-
-- **Windows-x64.zip:** avpt.exe, the six matching runtime DLLs, installation notes, notices and a file/version/hash manifest.
-- **source.zip:** the matching production source and bilingual documentation.
-- **relink.zip:** production objects, decoder source/compile recipes, import libraries, object timestamps and a tested rebuild/relink script.
-- **dependency-sources.zip:** SDL3 3.4.14, OpenAL Soft 1.25.2, libiconv 1.19, GCC 16.2.0 and the matching winpthreads source, plus pinned MSYS2 build recipes and licenses.
-- **SHA256SUMS.txt:** hashes of the downloadable archives.
-
-The original engine remains non-commercial. Independently licensed LGPL, BSD, zlib, MIT and CRT components retain their own notices and permissions. The supplied MattiasCRT adaptation carries **CC BY-NC-SA 3.0**; newpixie and CRT-Guest-ReShade are credited references. No commercial game assets, movie/audio data, profiles or saves are included.
-
----
+The same release supplies matching production source, dependency sources/build recipes, relinkable objects and `SHA256SUMS.txt`. Original Rebellion, NakedAVP and third-party notices remain included. Installation details: [English](https://github.com/Sol1vaN/AVP-Tyrargo/blob/v6.252-rc1/docs/en/install-and-play.md) / [Español](https://github.com/Sol1vaN/AVP-Tyrargo/blob/v6.252-rc1/docs/es/install-and-play.md).
 
 ## Español
 
-Esta es la primera publicación pública de **AVP: Tyrargo v6.251 RC1**, un port independiente y no comercial basado en **NakedAVP 1.2.3 de atsb** y el código original de **Rebellion**, creadores y propietarios del juego/código. Se conservan su licencia y las licencias propias de los componentes.
+### Alien atascado en ventilaciones
 
-Para jugar descarga **AVP-Tyrargo-v6.251-rc1-Windows-x64.zip**, extráelo en el directorio instalado y ejecuta **avpt.exe**. Sirven **Gold Edition CD retail** y **Classic 2000 Steam/GOG**. Conserva las DLL junto al ejecutable y los avisos de licencia. Los ejecutables originales tienen otro nombre y permanecen disponibles. Respalda perfiles/partidas al actualizar un Tyrargo anterior. El paquete no contiene el juego ni recursos comerciales.
+La recuperación detecta la falta de avance hacia el objetivo, comienza antes y mantiene el intento de salida cuando existe visibilidad física. Así evita que el movimiento lateral en el borde reinicie la detección del atasco o que el alien abandone continuamente el intento. Se conservan las colisiones, el trepado y los límites de movimiento originales.
 
-[Instalación completa](https://github.com/Sol1vaN/AVP-Tyrargo/blob/main/docs/es/install-and-play.md) · [Catálogo](https://github.com/Sol1vaN/AVP-Tyrargo/blob/main/docs/es/features.md) · [Galería](https://github.com/Sol1vaN/AVP-Tyrargo/blob/main/docs/es/gallery.md)
+En nueve pruebas con el jugador inmóvil, el alien alcanzó una posición visible de combate en unos **1,7–2,5 segundos de simulación**. También se comprobó la recuperación al volver a cargar la partida. La versión anterior terminaba saliendo en este caso, pero tardaba más; la validación se limita a los escenarios probados.
 
-### Correcciones de este candidato
+### Cheats disponibles nuevamente
 
-- La selección asistida descarta primero blancos fuera del área válida de la mira. Un enemigo cercano fuera de esa área ya no oculta a otro apuntable. Se mantienen la exclusión de aliados y los modos libre/asistido.
-- El alien atascado conserva su objetivo al recuperar la ruta, en lugar de entrar obligadamente en merodeo. Puede probar la dirección de un objetivo visible durante una recuperación acotada, manteniendo colisiones, trepado y saltos nativos.
-- La cadencia NPC usa temporizadores persistentes por arma/canal. Cambiar objetivo, arma o animación no evita la recuperación. Las granadas respetan aproximadamente 1,33 segundos como mínimo; el combate controlado a 60 FPS midió unos 1,35 segundos entre lanzamientos.
-- SADAR/lanzadiscos dejan de recargar instantáneamente. Recargas, cadencias, munición y consumo de combustible se vinculan a las definiciones del jugador. Solo se descuenta un proyectil cuando su creación tiene éxito. El combustible conserva sus restos fraccionales.
-- Las animaciones de disparo/recarga avanzan fuera de cámara. Los relojes de arma se conservan al guardar/cargar; se aceptan extensiones antiguas de escuadrón 245/246.
-- La instrumentación tiene páginas coherentes separadas por idioma. La galería reúne **160 capturas en 21 categorías**, pares CRT Before/After y la nueva captura Marine bajo Halos en la portada. Se incluyen créditos y licencias identificadas del shader, librerías y decodificadores.
+Inicia con **`avpt.exe -debug`**. En la consola del juego, **`GOD`** activa/desactiva la inmortalidad y **`GIVEALLWEAPONS`** entrega equipamiento. No necesitas `--debug`; ese alias sigue siendo compatible. Sin el parámetro, los cheats permanecen desactivados. Se conservan las restricciones originales de guardado y registros cuando se usan cheats.
 
-### Base disponible y comprobaciones
+### Smartgun e instalación
 
-Se mantienen precisión de mouse/geometría, escalas y FOV por especie, vistas previas, modos de pantalla, capturas, CRT GLSL, ajustes de imagen, agua moderna opcional, audio espacial, persistencia, munición optimizada y comportamiento coordinado del escuadrón. Los marines pueden recibir órdenes, recoger dos armas adicionales, administrar inventario privado, usar torretas y dejar armas recuperables. Los umbrales de pickup son menos del 60% de salud/armadura y menos del 30% de munición.
+El cambio Tracking / Free permanece intacto: disparo secundario alterna el modo y al cargar se restaura el modo guardado. La build no fuerza el seguimiento.
 
-Acid **x1 / x1.5 / x2** usa enemigos **1,5 / 2 / 2,5** y recursos **1,5 / 2 / 3**. Las excepciones Pulse Rifle/SADAR/discos entregan cantidades totales **3 / 4 / 5**. Energía Predator y armadura base de 15 puntos usan el factor de recursos. Los scripts y generadores del mapa conservan sus condiciones.
-
-Las mediciones previas de New Derelict bajaron el tiempo medio de frame de **15,828 a 10,371 ms** y de **18,692 a 9,460 ms** en las escenas documentadas. No equivalen a una garantía de FPS constantes. [Método y límites](https://github.com/Sol1vaN/AVP-Tyrargo/blob/main/docs/es/performance.md).
-
-Se probaron nueve armas con distintos pasos simulados, recargas/reservas, combustible, cuatro granadas y sus físicas, aliados/obstrucciones, guardar/cargar temporizadores, el atasco del túnel, la llegada posterior de aliens y el arranque con datos Steam. También se probó recompilar y volver a enlazar los decodificadores. Las escenas y variables de laboratorio no forman parte del ejecutable publicado.
-
-Los archivos de código, dependencias y relink acompañan a los binarios en esta misma release, con hashes SHA-256. Continúan las pruebas más amplias; **RC1 es un candidato**, no una versión estable. No se implementan aquí el futuro cloaking, Vulkan ni un cargador de mapas nuevo. Para reproducir un save debe usarse su mismo mapa custom. Los recursos comerciales y las partidas personales se suministran por separado.
+Descarga el ZIP Windows x64, extráelo en tu instalación de Gold CD o Classic Steam/GOG y ejecuta `avpt.exe`, conservando las DLL incluidas. Respalda tus perfiles y partidas anteriores. Los datos comerciales del juego no se incluyen. RC1 continúa disponible para pruebas más amplias.

@@ -5,7 +5,7 @@
 typedef struct {
  double distance;
  int sampleTime,stillTime,moving;
- int routeTime,routeX,routeY,routeZ,routeSample,recoveryTime;
+ int routeTime,routeX,routeY,routeZ,routeSample,recoveryTime,routeGoalDistance;
  int aftermath,pace,paceTimer,corpsePhase,corpseRetry,feedTime,feedStall,feedBestDistance,bitten;
  int launchLocked,launchAirborne,launchTime;
  int feedTimer,feedSound;
@@ -27,18 +27,24 @@ static void AlienMotionObserve(ALIEN_MOTION_RUNTIME *r,double distance,int dt)
 }
 /* Runtime only: no change to ALIEN_SAVE_BLOCK. A stationary navigation intent
  * may otherwise persist forever when waypoint output or support projection is zero. */
-static int AlienRouteStalled(ALIEN_MOTION_RUNTIME *r,int x,int y,int z,int dt,int navigating)
+static int AlienRouteStalled(ALIEN_MOTION_RUNTIME *r,int x,int y,int z,int dt,int navigating,int goalDistance)
 {
  double dx,dy,dz;
  if(dt<=0)return 0;
  if(r->recoveryTime>0){r->recoveryTime-=dt;if(r->recoveryTime<0)r->recoveryTime=0;r->routeSample=0;return 0;}
  if(!navigating){r->routeSample=0;r->routeTime=0;return 0;}
- if(!r->routeSample){r->routeX=x;r->routeY=y;r->routeZ=z;r->routeTime=0;r->routeSample=1;}
+ if(!r->routeSample){r->routeX=x;r->routeY=y;r->routeZ=z;r->routeTime=0;r->routeSample=1;r->routeGoalDistance=goalDistance;}
  dx=(double)x-r->routeX;dy=(double)y-r->routeY;dz=(double)z-r->routeZ;
- if(dx*dx+dy*dy+dz*dz>200.0*200.0){r->routeX=x;r->routeY=y;r->routeZ=z;r->routeTime=0;return 0;}
+ /* Sliding around the same lip is motion, but not route progress. For a
+  * target in the same room, require progress towards that target. Inter-room
+  * routes keep the displacement test so authored detours remain valid. */
+ if((goalDistance>=0 && (r->routeGoalDistance<0 || goalDistance+200<r->routeGoalDistance)) ||
+    (goalDistance<0 && dx*dx+dy*dy+dz*dz>200.0*200.0)){
+  r->routeX=x;r->routeY=y;r->routeZ=z;r->routeTime=0;r->routeGoalDistance=goalDistance;return 0;
+ }
  r->routeTime+=dt;
- if(r->routeTime<3*65536/2)return 0;
- r->routeSample=0;r->routeTime=0;r->recoveryTime=65536;return 1;
+ if(r->routeTime<3*65536/5)return 0;
+ r->routeSample=0;r->routeTime=0;r->recoveryTime=2*65536;return 1;
 }
 /* An impulse is a launch event, never a per-frame acceleration.
  * Re-arm after actual flight/landing, or a blocked launch at the support. */

@@ -3,7 +3,7 @@
 /* Single source for C/C++, Windows resources and CMake. Minor = release probe.
  * MAJOR 6 is the fork's chosen convention; it is not upstream's version. */
 #define TYRARGO_VERSION_MAJOR 6
-#define TYRARGO_VERSION_MINOR 251
+#define TYRARGO_VERSION_MINOR 252
 #define TYRARGO_VERSION_PATCH 0
 #define TYRARGO_VERSION_RC 1
 #define TYRARGO_STR_IMPL(x) #x

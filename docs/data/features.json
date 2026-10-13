@@ -1142,10 +1142,10 @@
       "category": "aliens",
       "type": "fix",
       "title": {
-        "en": "Recover stalled approach without discarding the target",
-        "es": "Recuperar aproximación atascada sin descartar el objetivo"
+        "en": "Progress-aware, committed recovery at vent edges without discarding the target",
+        "es": "Recuperación comprometida en bordes de ductos, midiendo progreso y conservando el objetivo"
       },
-      "source": "src/avp/bh_alien.c",
+      "source": "src/avp/bh_near.c",
       "status": "implemented"
     },
     {
@@ -1410,6 +1410,17 @@
         "es": "Compilaciones diagnósticas y de producción separadas"
       },
       "source": "src/avp/particle_mesh_cache.inc",
+      "status": "implemented"
+    },
+    {
+      "id": "ui-11",
+      "category": "ui",
+      "type": "fix",
+      "title": {
+        "en": "Native console cheats enabled by -debug in public builds",
+        "es": "Cheats nativos de consola habilitados con -debug en builds públicas"
+      },
+      "source": "src/main.c",
       "status": "implemented"
     }
   ]

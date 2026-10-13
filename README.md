@@ -12,7 +12,7 @@ This is an independent, non-commercial fan project, unaffiliated with Rebellion 
 
 **Installation instructions are on the [How to install and play](docs/en/install-and-play.md) page.** Developers: [build from source](docs/en/build.md).
 
-Current release candidate: **v6.251 RC1**, Windows x64. **[Download binaries and release notes](https://github.com/Sol1vaN/AVP-Tyrargo/releases/tag/v6.251-rc1)**. Supply your own Gold CD or Classic Steam/GOG game data. The same release includes source, dependency sources and relinking materials. Broader player testing continues.
+Current release candidate: **v6.252 RC1**, Windows x64. **[Download binaries and release notes](https://github.com/Sol1vaN/AVP-Tyrargo/releases/tag/v6.252-rc1)**. Supply your own Gold CD or Classic Steam/GOG game data. The same release includes source, dependency sources and relinking materials. Broader player testing continues.
 
 ## Showcase
 
@@ -35,7 +35,7 @@ GitHub READMEs do not embed a YouTube player. This preview opens the video with 
 
 | Fixes | Quality of life | Features | Total |
 |---:|---:|---:|---:|
-| 52 | 17 | 46 | 115 |
+| 53 | 17 | 46 | 116 |
 
 These are **consolidated implemented changes**, classified once each; counts are not promises of bug-free behavior. Repeated experiments are tracked in the [development history](docs/en/history.md), not counted again as new features.
 
@@ -45,7 +45,7 @@ These are **consolidated implemented changes**, classified once each; counts are
 - **[Renderer, lighting and effects](docs/en/features.md#render)** — Alpha-aware luminous/specular depth pass · Animated luminous UV synchronization (7).
 - **[Water simulation and rendering](docs/en/features.md#water)** — Time-based ripple propagation and damping · Selectable classic and modern water (6).
 - **[CRT, noise and image controls](docs/en/features.md#postfx)** — Native GLSL CRT filter · Brightness, contrast and saturation controls (5).
-- **[Main menu, in-game menu and UX](docs/en/features.md#ui)** — Tyrargo identity and shared version labels · Widescreen Starfield and restored menu backgrounds (10).
+- **[Main menu, in-game menu and UX](docs/en/features.md#ui)** — Tyrargo identity and shared version labels · Widescreen Starfield and restored menu backgrounds (11).
 - **[Movies and screenshots](docs/en/features.md#media)** — Native Smacker and Bink playback · Movie audio clock, RGB and end synchronization (6).
 - **[Audio, music and latency](docs/en/features.md#audio)** — Environmental EFX and positional NPC effects · Overlapping primary/secondary weapon audio (6).
 - **[Player movement and weapons](docs/en/features.md#player)** — Wall sliding and curved-surface contact · Moving-platform support and jump contact (8).

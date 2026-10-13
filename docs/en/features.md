@@ -185,6 +185,8 @@ Menu presentation uses explicit logical spaces, atlas sampling guards and suppor
 
 | `ui-10` | fix | Profile, startup fade and menu-transition cleanup |
 
+| `ui-11` | fix | Native console cheats enabled by -debug in public builds |
+
 <a id="media"></a>
 
 ## Movies and screenshots
@@ -327,7 +329,7 @@ Fractional timing, local steering and support/contact recovery address tested ve
 
 | `aliens-04` | feature | Player-corpse feeding behavior |
 
-| `aliens-05` | fix | Recover stalled approach without discarding the target |
+| `aliens-05` | fix | Progress-aware, committed recovery at vent edges without discarding the target |
 
 <a id="predators"></a>
 

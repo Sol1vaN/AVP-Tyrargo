@@ -257,3 +257,4 @@ Inventario de nombres de probes locales. Una probe puede ser diagnóstico o revi
 | 249 | saved world performance predator gait |
 | 250 | Private repository preparation, bilingual catalogs and preserved upstream ancestry |
 | 251 | Smartgun capture selection, alien route recovery, NPC weapon rules and first public Windows release candidate |
+| 252 | Vent-edge progress recovery, smartgun mode verification and native debug cheats |

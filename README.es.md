@@ -12,7 +12,7 @@ Es un proyecto independiente de fans, no comercial, sin afiliación con Rebellio
 
 **Las instrucciones están en [Cómo instalar y jugar](docs/es/install-and-play.md).** Desarrolladores: [compilar desde el código](docs/es/build.md).
 
-Candidato actual: **v6.251 RC1**, Windows x64. **[Descargar binarios y notas de versión](https://github.com/Sol1vaN/AVP-Tyrargo/releases/tag/v6.251-rc1)**. Debes suministrar los datos de Gold CD o Classic Steam/GOG. La misma release incluye código, fuentes de dependencias y materiales para volver a enlazar. Continúan las pruebas más amplias con jugadores.
+Candidato actual: **v6.252 RC1**, Windows x64. **[Descargar binarios y notas de versión](https://github.com/Sol1vaN/AVP-Tyrargo/releases/tag/v6.252-rc1)**. Debes suministrar los datos de Gold CD o Classic Steam/GOG. La misma release incluye código, fuentes de dependencias y materiales para volver a enlazar. Continúan las pruebas más amplias con jugadores.
 
 ## Showcase
 
@@ -35,7 +35,7 @@ GitHub no permite incrustar un reproductor YouTube en el README. Esta vista prev
 
 | Correcciones | Calidad de vida | Funciones | Total |
 |---:|---:|---:|---:|
-| 52 | 17 | 46 | 115 |
+| 53 | 17 | 46 | 116 |
 
 Son **cambios implementados consolidados**, contados una sola vez; no prometen ausencia de bugs. Experimentos repetidos se conservan en el [historial del desarrollo](docs/es/history.md), sin volver a contarlos como funciones nuevas.
 
@@ -45,7 +45,7 @@ Son **cambios implementados consolidados**, contados una sola vez; no prometen a
 - **[Render, iluminación y efectos](docs/es/features.md#render)** — Pasada luminosa/especular respetando alpha · Sincronización UV de capas luminosas (7).
 - **[Simulación y render de agua](docs/es/features.md#water)** — Propagación y amortiguación de ondas por tiempo · Agua clásica y moderna seleccionable (6).
 - **[CRT, ruido y ajustes de imagen](docs/es/features.md#postfx)** — Filtro CRT GLSL nativo · Controles de brillo, contraste y saturación (5).
-- **[Menú principal, menú ingame y UX](docs/es/features.md#ui)** — Identidad Tyrargo y versión común · Starfield panorámico y fondos recuperados (10).
+- **[Menú principal, menú ingame y UX](docs/es/features.md#ui)** — Identidad Tyrargo y versión común · Starfield panorámico y fondos recuperados (11).
 - **[Vídeos y capturas](docs/es/features.md#media)** — Reproducción nativa Smacker y Bink · Reloj de audio, RGB y finalización sincronizados (6).
 - **[Audio, música y latencia](docs/es/features.md#audio)** — EFX ambiental y efectos NPC posicionales · Audio solapado de armas primarias/secundarias (6).
 - **[Movimiento y armas del jugador](docs/es/features.md#player)** — Deslizamiento y contacto con superficies curvas · Apoyo de plataforma móvil y contacto al saltar (8).

@@ -55,6 +55,10 @@ Acid modifies Hard/Director's Cut behavior in single player. Labels intentionall
 
 Supported magazines/tanks and reserves expand; the listed exceptions use total pickup quantities. Predator energy uses the resource factor and Acid armor uses a 15-point base × that factor. Population handling respects supported generators/actors and authored map triggers; it is not a promise that every scripted wave always contains exactly the same multiplied count.
 
+## Smartgun tracking
+
+The smartgun starts in Tracking mode in a new game. Secondary fire switches between Tracking and Free modes. In Tracking, the targeting sight follows detected enemies and turns red, while the gun converges towards the target. A saved game restores its saved mode, which can be Free; use secondary fire to re-enable Tracking. Allied targets remain excluded.
+
 ## Allied marines
 
 Use an allied marine to toggle follow/patrol and receive an acknowledgment. Follow returns after combat; patrol uses coordinated expanding exploration. Marines can collect two distinct extra weapon types, reload/switch supported weapons, use nearby sentries and leave recoverable weapons when killed. Their resource pickup thresholds are below 60% health/armor and below 30% ammunition. Cramped supply jobs give the human player priority.

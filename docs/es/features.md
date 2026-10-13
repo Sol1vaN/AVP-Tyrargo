@@ -185,6 +185,8 @@ Menús usan espacios lógicos explícitos, protección de muestreo y composició
 
 | `ui-10` | fix | Limpieza de perfiles, fades y transiciones |
 
+| `ui-11` | fix | Cheats nativos de consola habilitados con -debug en builds públicas |
+
 <a id="media"></a>
 
 ## Vídeos y capturas
@@ -327,7 +329,7 @@ Tiempo fraccional, dirección local y recuperación de contacto corrigen casos e
 
 | `aliens-04` | feature | Alimentación del cadáver del jugador |
 
-| `aliens-05` | fix | Recuperar aproximación atascada sin descartar el objetivo |
+| `aliens-05` | fix | Recuperación comprometida en bordes de ductos, midiendo progreso y conservando el objetivo |
 
 <a id="predators"></a>
 

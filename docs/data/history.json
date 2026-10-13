@@ -1253,5 +1253,9 @@
     "probe": 251,
     "slug": "gameplay_weapon_rules_public_release",
     "title": "Smartgun capture selection, alien route recovery, NPC weapon rules and first public Windows release candidate"
+  },
+  {
+    "probe": 252,
+    "title": "Vent-edge progress recovery, smartgun mode verification and native debug cheats"
   }
 ]

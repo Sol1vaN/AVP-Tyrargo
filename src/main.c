@@ -3665,8 +3665,8 @@ TYRARGO_DISPLAY_VERSION "\n"
 "      [-s | --nosound]        Do not access the soundcard\n"
 "      [-c | --nocdrom]        Do not access the CD-ROM\n"
 "      [-j | --nojoy]          Do not access the joystick\n"
+"      [-d | -debug | --debug]  Enable native cheat/debug commands\n"
 #if TYRARGO_DEVELOPMENT_TOOLS
-"      [-d | -debug | --debug]  Enable debugging commands\n"
 "      [-dev | --dev]         Viewmodel Z calibration in Controls\n"
 #endif
 "      [-p | --datapath] [x]   Look at [x] for game files\n"
@@ -3918,7 +3918,7 @@ int main(int argc, char *argv[])
 				break;
 			case 'd': {
 				extern int DebuggingCommandsActive;
-				DebuggingCommandsActive = TYRARGO_DEVELOPMENT_TOOLS;
+				DebuggingCommandsActive = 1;
 				}
 				break;
 			case 1002:

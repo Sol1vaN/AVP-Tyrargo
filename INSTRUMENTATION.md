@@ -8,13 +8,17 @@ This document describes the current source switches and shipped diagnostics. Cal
 
 | Switch | Default | Purpose and deliberate reactivation |
 |---|---:|---|
-| `TYRARGO_DEVELOPMENT_TOOLS` in `src/tyrargo_instrumentation.h` | 0 | Viewmodel/flamethrower editor (`-dev`), development console/debug tools. Set to 1 and rebuild. |
+| `TYRARGO_DEVELOPMENT_TOOLS` in `src/tyrargo_instrumentation.h` | 0 | Viewmodel/flamethrower editor (`-dev`) and development tools. Set to 1 and rebuild; native console cheats do not require this switch. |
 | `SHAKE_CALIBRATION_AVAILABLE` in `src/shake_params.h` | 0 | HUD calibration (`-dev2`). Enable and rebuild. |
 | `TYRARGO_MOTION_CALIBRATION` | 0 | Camera calibration. Enable and restore the development menu entry before rebuilding. |
 | `TYRARGO_RENDER_TRACE` | 0 | Legacy context/render traces. Review output paths before enabling and rebuilding. |
 | `TYRARGO_MEASURE_LATENCY` in `src/event_latency.h` | 1 | Bounded event/audio latency recording and load checkpoints. Set to 0 and rebuild to disable. |
 
 Disabled editor arguments do not reopen hidden menus or import old calibration CSV files. Public effect-intensity controls and the calibrated values embedded in source remain active.
+
+## Native console cheats
+
+Start the game with `-debug` (or `-d` / `--debug`) to enable the original console cheats in a public build. Open the in-game console and enter `GOD` to toggle immortality or `GIVEALLWEAPONS` to grant the available weapons/ammunition. They remain disabled without that startup option. Development editors remain separate; activating cheats disables ordinary campaign record eligibility through the native debug rules.
 
 ## Shipped logs
 

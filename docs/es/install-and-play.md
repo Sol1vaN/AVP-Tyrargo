@@ -53,6 +53,10 @@ Modifica Hard/Director's Cut en singleplayer. Las etiquetas difieren deliberadam
 
 Aumentan reservas y cargadores/depósitos soportados; excepciones son cantidades totales por pickup. Energía Predator usa factor de recursos y armadura Acid parte de 15 puntos × factor. Población respeta generadores/actores soportados y triggers del mapa; no garantiza multiplicar exactamente cada oleada guionizada.
 
+## Seguimiento de la smartgun
+
+En una partida nueva la smartgun empieza en Tracking (seguimiento). Disparo secundario alterna entre Tracking y Free (modo libre). En Tracking, la mira sigue a los enemigos detectados y se vuelve roja, mientras el arma converge hacia el objetivo. Al cargar, se restaura el modo del save, que puede ser Free; usa disparo secundario para reactivar Tracking. Los aliados siguen excluidos.
+
 ## Marines aliados
 
 Usar sobre un Marine alterna follow/patrol con confirmación. Follow se retoma tras combate; patrol usa exploración coordinada expansiva. Recogen dos tipos adicionales distintos, recargan/cambian armas soportadas, ayudan con torretas y dejan armas recuperables al morir. Recogen salud/armadura bajo 60% y ammo bajo 30%. En zonas estrechas de suministro el humano tiene prioridad.

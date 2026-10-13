@@ -12,7 +12,7 @@ Es un proyecto independiente de fans, no comercial, sin afiliación con Rebellio
 
 **Las instrucciones están en [Cómo instalar y jugar](docs/es/install-and-play.md).** Desarrolladores: [compilar desde el código](docs/es/build.md).
 
-Candidato actual: **{{VERSION}}**, Windows x64. **[Descargar binarios y notas de versión](https://github.com/Sol1vaN/AVP-Tyrargo/releases/tag/v6.251-rc1)**. Debes suministrar los datos de Gold CD o Classic Steam/GOG. La misma release incluye código, fuentes de dependencias y materiales para volver a enlazar. Continúan las pruebas más amplias con jugadores.
+Candidato actual: **{{VERSION}}**, Windows x64. **[Descargar binarios y notas de versión](https://github.com/Sol1vaN/AVP-Tyrargo/releases/tag/v6.252-rc1)**. Debes suministrar los datos de Gold CD o Classic Steam/GOG. La misma release incluye código, fuentes de dependencias y materiales para volver a enlazar. Continúan las pruebas más amplias con jugadores.
 
 ## Showcase
 

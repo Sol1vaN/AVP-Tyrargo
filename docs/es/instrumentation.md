@@ -8,13 +8,18 @@ Este documento describe los interruptores actuales y los diagnósticos de la bui
 
 | Interruptor | Valor normal | Uso |
 |---|---:|---|
-| `TYRARGO_DEVELOPMENT_TOOLS` en `src/tyrargo_instrumentation.h` | 0 | Editor de armas/flamethrower (`-dev`) y herramientas de consola/debug. Cambiar a 1 y recompilar. |
+| `TYRARGO_DEVELOPMENT_TOOLS` en `src/tyrargo_instrumentation.h` | 0 | Editor de armas/flamethrower (`-dev`) y herramientas de desarrollo. Cambiar a 1 y recompilar; los cheats nativos no requieren este switch. |
 | `SHAKE_CALIBRATION_AVAILABLE` en `src/shake_params.h` | 0 | Calibración HUD (`-dev2`), disponible solo al habilitarla y recompilar. |
 | `TYRARGO_MOTION_CALIBRATION` | 0 | Calibración de cámara; también requiere restaurar el acceso al menú de desarrollo. |
 | `TYRARGO_RENDER_TRACE` | 0 | Trazas antiguas de render/contexto; revisar destinos antes de habilitarlas. |
 | `TYRARGO_MEASURE_LATENCY` en `src/event_latency.h` | 1 | Registro acotado de latencias y checkpoints de carga. Cambiar a 0 y recompilar para desactivarlo. |
 
 Los argumentos de editores deshabilitados no abren menús ocultos ni importan CSV antiguos. Los valores calibrados del código y los controles públicos de intensidad permanecen activos.
+
+## Cheats nativos de consola
+
+Inicia el juego con `-debug` (o `-d` / `--debug`) para habilitar los cheats originales en una build pública. Abre la consola dentro del juego y escribe `GOD` para alternar la inmortalidad o `GIVEALLWEAPONS` para obtener las armas/munición disponibles. Sin ese parámetro permanecen desactivados. Los editores de calibración son independientes; las reglas nativas de debug excluyen esos runs de los récords normales de campaña.
+
 
 ## Registros de la build
 

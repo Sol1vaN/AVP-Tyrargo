@@ -162,6 +162,21 @@ static void AlienNavigationGravity(STRATEGYBLOCK *sb,int allowClimb)
     (d->GravityDirection.vy<63000 || d->OrientMat.mat22<63000)))d->UseStandardGravity=0;
  else d->UseStandardGravity=1;
 }
+/* Navigation samples the current dynamics pose, including actors whose
+ * rendered hierarchy has not yet been updated this frame. */
+static int AlienRecoveryTargetVisible(STRATEGYBLOCK *sb,STRATEGYBLOCK *target)
+{
+ VECTORCH from,point,delta,oldPoint=LOS_Point,oldNormal=LOS_ObjectNormal;
+ DISPLAYBLOCK*oldHit=LOS_ObjectHitPtr;SECTION_DATA*oldSection=LOS_HModel_Section;
+ int oldLambda=LOS_Lambda,visible;
+ if(!sb->SBdptr || !target || !target->SBdptr || !target->DynPtr)return 0;
+ GetTargetingPointOfObject_Far(sb,&from);GetTargetingPointOfObject_Far(target,&point);
+ delta=point;SubVector(&from,&delta);int distance=Magnitude(&delta);
+ visible=distance>0 && IsThisObjectVisibleFromThisPosition_WithIgnore(target->SBdptr,sb->SBdptr,&from,distance+100);
+ LOS_Point=oldPoint;LOS_ObjectNormal=oldNormal;LOS_ObjectHitPtr=oldHit;
+ LOS_HModel_Section=oldSection;LOS_Lambda=oldLambda;
+ return visible;
+}
 static int AlienCorpseVisible(STRATEGYBLOCK *sb,STRATEGYBLOCK *corpse)
 {
  VECTORCH eye,point,direction,oldPoint=LOS_Point,oldNormal=LOS_ObjectNormal;
@@ -370,7 +385,11 @@ void NearAlienBehaviour(STRATEGYBLOCK *sbPtr)
             alienStatusPointer->BehaviourState==ABS_Retreat ||
             alienStatusPointer->BehaviourState==ABS_Avoidance;
         if(AlienRouteStalled(&alienStatusPointer->motion,dyn->Position.vx,
-            dyn->Position.vy,dyn->Position.vz,NormalFrameTime,navigating)) {
+            dyn->Position.vy,dyn->Position.vz,NormalFrameTime,navigating,
+            alienStatusPointer->BehaviourState==ABS_Approach &&
+            alienStatusPointer->Target && alienStatusPointer->Target->DynPtr &&
+            alienStatusPointer->Target->containingModule==sbPtr->containingModule?
+            VectorDistance(&dyn->Position,&alienStatusPointer->Target->DynPtr->Position):-1)) {
             NPC_InitMovementData(&alienStatusPointer->moveData);
             NPC_InitWanderData(&alienStatusPointer->wanderData);
             InitWaypointManager(&alienStatusPointer->waypointManager);
@@ -382,6 +401,16 @@ void NearAlienBehaviour(STRATEGYBLOCK *sbPtr)
         }
     }
 
+
+    if(alienStatusPointer->motion.recoveryTime>0 &&
+       (alienStatusPointer->BehaviourState==ABS_Avoidance || alienStatusPointer->BehaviourState==ABS_Wait) &&
+       alienStatusPointer->Target && alienStatusPointer->Target->DynPtr &&
+       alienStatusPointer->Target->SBdptr && AlienRecoveryTargetVisible(sbPtr,alienStatusPointer->Target)){
+        /* A stale edge report must not cancel an already committed recovery.
+         * The dynamics solver still checks the complete hull on every step. */
+        alienStatusPointer->BehaviourState=ABS_Approach;
+        alienStatusPointer->NearStateTimer=0;alienStatusPointer->CurveTimeOut=0;
+    }
 
 	if (alienStatusPointer->incidentFlag) {
 		Alien_ElectToPounce(sbPtr);
@@ -1015,6 +1044,7 @@ static void AlienNearState_Approach(STRATEGYBLOCK *sbPtr)
 	VECTORCH targetPos;
 	int approachingAirDuct = 0;
 	int curveToPlayer = 0;
+    int recoveryDirect = 0;
 	int distanceToPlayer;
 
 	LOCALASSERT(sbPtr);
@@ -1064,6 +1094,9 @@ static void AlienNearState_Approach(STRATEGYBLOCK *sbPtr)
 		curveToPlayer=0;
 	}
 
+    /* A committed recovery must reach the exit instead of immediately
+     * re-entering the random curved approach which found the same lip. */
+    if(alienStatusPointer->motion.recoveryTime>0)curveToPlayer=0;
 	if(curveToPlayer)
 	{
 		/* curve to the player... */
@@ -1182,11 +1215,10 @@ static void AlienNearState_Approach(STRATEGYBLOCK *sbPtr)
          * Retry the visible target itself for the bounded recovery interval.
          * Native dynamics still resolve the full collision hull and support. */
         if(alienStatusPointer->motion.recoveryTime>0 && alienStatusPointer->Target->SBdptr) {
-            VECTORCH from,goal,direct;
-            GetTargetingPointOfObject_Far(sbPtr,&from);
-            GetTargetingPointOfObject_Far(alienStatusPointer->Target,&goal);
-            direct=goal;SubVector(&from,&direct);int distance=Magnitude(&direct);
-            if(distance>0 && IsThisObjectVisibleFromThisPosition_WithIgnore(alienStatusPointer->Target->SBdptr,sbPtr->SBdptr,&from,distance+100)) {
+            VECTORCH direct;
+            /* Reuse the native physical LOS test while preserving its globals. */
+            if(AlienRecoveryTargetVisible(sbPtr,alienStatusPointer->Target)) {
+                recoveryDirect=1;
                 direct=alienStatusPointer->Target->DynPtr->Position;SubVector(&dynPtr->Position,&direct);
                 if(!AlienIsCrawling(sbPtr))direct.vy=0;
                 Normalise(&direct);velocityDirection=direct;
@@ -1336,7 +1368,7 @@ static void AlienNearState_Approach(STRATEGYBLOCK *sbPtr)
 	}
 
 	/* is player visible?: if not, go to timed wait... */
-	if(!AlienIsAwareOfTarget(sbPtr))
+	if(!recoveryDirect && !AlienIsAwareOfTarget(sbPtr))
 	{
 		alienStatusPointer->BehaviourState = ABS_Wait;
 		alienStatusPointer->NearStateTimer = ALIEN_NEARWAITTIME;
@@ -1346,7 +1378,7 @@ static void AlienNearState_Approach(STRATEGYBLOCK *sbPtr)
 		/* this is because we have already set a velocity this frame */
 		dynPtr->LinVelocity.vx = dynPtr->LinVelocity.vy = dynPtr->LinVelocity.vz = 0;
 		return;
-	} else if (!AlienHasPathToTarget(sbPtr)) {
+	} else if (!recoveryDirect && !AlienHasPathToTarget(sbPtr)) {
 		/* Go to hunt. */
 		alienStatusPointer->BehaviourState = ABS_Hunt;
 		alienStatusPointer->NearStateTimer = ALIEN_NEARWAITTIME;
@@ -1356,7 +1388,7 @@ static void AlienNearState_Approach(STRATEGYBLOCK *sbPtr)
 	/* test here for impeding collisions, and not being able to reach target... */
 	#if ALL_NEW_AVOIDANCE_ALIEN
 	{
-		if (New_NPC_IsObstructed(sbPtr,&alienStatusPointer->avoidanceManager)) {
+		if (New_NPC_IsObstructed(sbPtr,&alienStatusPointer->avoidanceManager) && !recoveryDirect) {
 			/* Go to all new avoidance. */
 			alienStatusPointer->BehaviourState = ABS_Avoidance;  		
 			alienStatusPointer->NearStateTimer = NPC_AVOIDTIME;
@@ -1369,7 +1401,7 @@ static void AlienNearState_Approach(STRATEGYBLOCK *sbPtr)
 		STRATEGYBLOCK *destructableObject = NULL;
 		NPC_OBSTRUCTIONREPORT obstruction;
 		NPC_IsObstructed(sbPtr,&(alienStatusPointer->moveData),&obstruction,&destructableObject);
-		if(obstruction.environment)
+		if(obstruction.environment && !recoveryDirect)
 		{
 			#if 1
 			NPC_InitMovementData(&(alienStatusPointer->moveData));
@@ -1391,7 +1423,7 @@ static void AlienNearState_Approach(STRATEGYBLOCK *sbPtr)
 		VECTORCH velocityDirection = dynPtr->LinVelocity;
 		Normalise(&velocityDirection);
 
-		if(NPC_CannotReachTarget(&(alienStatusPointer->moveData), &targetPos, &velocityDirection))
+		if(!recoveryDirect && NPC_CannotReachTarget(&(alienStatusPointer->moveData), &targetPos, &velocityDirection))
 		{
 			/* go to avoidance */
 			NPC_OBSTRUCTIONREPORT obstruction = {1,0,0};
@@ -1709,7 +1741,19 @@ static void AlienNearState_Wait(STRATEGYBLOCK *sbPtr)
 
 	AlienHandleStandingAnimation(sbPtr);
 
-    if(alienStatusPointer->motion.recoveryTime>0)return;
+    if(alienStatusPointer->motion.recoveryTime>0){
+        /* Wait must not consume the entire recovery window at zero velocity
+         * when the retained target is physically visible from the edge. */
+        if(alienStatusPointer->Target && alienStatusPointer->Target->DynPtr &&
+           alienStatusPointer->Target->SBdptr && AlienRecoveryTargetVisible(sbPtr,alienStatusPointer->Target)){
+            alienStatusPointer->BehaviourState=ABS_Approach;
+            alienStatusPointer->NearStateTimer=0;alienStatusPointer->CurveTimeOut=0;
+            NPC_InitMovementData(&alienStatusPointer->moveData);
+            InitWaypointManager(&alienStatusPointer->waypointManager);
+            StartAlienMovementSequence(sbPtr);
+        }
+        return;
+    }
 	/* test for attack */
 	if(AlienHasPathToTarget(sbPtr))
 	{
