@@ -43,11 +43,11 @@ Son **cambios implementados consolidados**, contados una sola vez; no prometen a
 - **[Proyección y precisión geométrica](docs/es/features.md#geometry)** — Transformación y clipping float · Precisión de secciones móviles jerárquicas (7).
 - **[Render, iluminación y efectos](docs/es/features.md#render)** — Pasada luminosa/especular respetando alpha · Sincronización UV de capas luminosas (7).
 - **[Simulación y render de agua](docs/es/features.md#water)** — Propagación y amortiguación de ondas por tiempo · Agua clásica y moderna seleccionable (6).
-- **[CRT, ruido y ajustes de imagen](docs/es/features.md#postfx)** — Filtro CRT GLSL nativo · Controles de brillo, contraste y saturación (5).
-- **[Menú principal, menú ingame y UX](docs/es/features.md#ui)** — Identidad Tyrargo y versión común · Starfield panorámico y fondos recuperados (11).
+- **[CRT, ruido electrostático/scanlines y ajustes de imagen](docs/es/features.md#postfx)** — Filtro CRT GLSL nativo · Controles de brillo, contraste y saturación (5).
+- **[Menú principal, menú ingame y UX](docs/es/features.md#ui)** — Título Tyrargo y versioning con fade · Starfield panorámico y fondos recuperados (11).
 - **[Vídeos y capturas](docs/es/features.md#media)** — Reproducción nativa Smacker y Bink · Reloj de audio, RGB y finalización sincronizados (6).
 - **[Audio, música y latencia](docs/es/features.md#audio)** — EFX ambiental y efectos NPC posicionales · Audio solapado de armas primarias/secundarias (6).
-- **[Movimiento y armas del jugador](docs/es/features.md#player)** — Deslizamiento y contacto con superficies curvas · Apoyo de plataforma móvil y contacto al saltar (8).
+- **[Movimiento y armas del jugador](docs/es/features.md#player)** — Físicas de deslizamiento y contacto con superficies curvas · Apoyo de plataformas móvil y contacto al saltar (8).
 - **[Movimiento de cámara, armas y HUD](docs/es/features.md#motion)** — Bobbing y sway procedural caminar/correr · Feedback suave agacharse, escaleras, salto y aterrizaje (5).
 - **[Campaña, recursos y Molecular Acid](docs/es/features.md#campaign)** — Persistencia opcional entre episodios · Modo campaña de munición optimizada (9).
 - **[Comportamiento y navegación de Alien NPC](docs/es/features.md#aliens)** — Tiempo fraccional de movimiento NPC · Recuperación en ductos, escotillas y bordes (5).
