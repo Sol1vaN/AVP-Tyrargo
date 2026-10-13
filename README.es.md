@@ -27,7 +27,7 @@ GitHub no permite incrustar un reproductor YouTube en el README. Esta vista prev
 ## Objetivos
 
 - Mejorar y pulir la experiencia de usuario (UX) en todos sus aspectos: mouse input, teclado, físicas, framepacing, UI, gameplay IA de los enemigos.
-- Ampliar gameplay y eyecandy con novedosas opciones, pero siempre permitiendo al usuario volver al comportamiento vanilla original, para los más puristas.
+- Ampliar gameplay y eyecandy con increíbles novedades, pero siempre permitiendo al usuario volver al comportamiento vanilla original, para los más puristas.
 - Mejorar la estabilidad/robustecimiento del engine reduciendo el trabajo caro del render, colisiones e IA sin eliminar efectos ni reducir la concurrencia/cantidad de elementos en pantalla.
 
 ## Mejoras destacadas
