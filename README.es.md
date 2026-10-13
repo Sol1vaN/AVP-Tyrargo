@@ -4,7 +4,7 @@
 
 Tyrargo mejora el motor clásico de Aliens versus Predator mediante entrada precisa, una presentación audiovisual ampliada, nuevos sistemas singleplayer y comportamiento NPC coordinado. Deriva de [NakedAVP 1.2.3 de atsb](https://github.com/atsb/NakedAVP), sobre el código original de Rebellion y ports anteriores de la comunidad.
 
-Es un proyecto independiente de fans, no comercial, sin afiliación con Rebellion ni los titulares de la franquicia. Rebellion creó y posee el juego/código original; se conserva su [licencia no comercial y créditos obligatorios](LICENSE). Los datos originales del juego se suministran por separado.
+Es un proyecto independiente, no comercial, sin afiliación con Rebellion ni los titulares de la franquicia. Rebellion creó y posee el juego/código original; se conserva su [licencia no comercial y créditos obligatorios](LICENSE). Los datos originales del juego se suministran por separado.
 
 ![Halos e iluminación — captura elegida de Tyrargo](docs/media/hero.png)
 
