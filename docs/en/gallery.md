@@ -960,7 +960,7 @@ All supplied screenshots, resized into documentation copies; original game asset
 
 <a id="versioning-console"></a>
 
-## Version Information
+## Versioning Consola
 
 <details><summary>avp02.png</summary>
 
