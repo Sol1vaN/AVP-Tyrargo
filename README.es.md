@@ -32,7 +32,7 @@ GitHub no permite incrustar un reproductor YouTube en el README. Esta vista prev
 
 ## Mejoras destacadas
 
-| Correcciones | Calidad de vida | Funciones | Total |
+| Correcciones | QoL | Funciones | Total |
 |---:|---:|---:|---:|
 | 53 | 17 | 46 | 116 |
 
