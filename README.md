@@ -32,7 +32,7 @@ GitHub READMEs do not embed a YouTube player. This preview opens the video with 
 
 ## Highlights
 
-| Fixes | Quality of life | Features | Total |
+| Fixes | QoL | Features | Total |
 |---:|---:|---:|---:|
 | 53 | 17 | 46 | 116 |
 
