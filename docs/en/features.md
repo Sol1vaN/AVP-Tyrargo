@@ -165,7 +165,7 @@ Menu presentation uses explicit logical spaces, atlas sampling guards and suppor
 | ID | Type | Change |
 |---|---|---|
 
-| `ui-01` | QoL | Tyrargo identity and shared version labels |
+| `ui-01` | QoL | Tyrargo identity and versioning |
 
 | `ui-02` | QoL | Widescreen Starfield and restored menu backgrounds |
 

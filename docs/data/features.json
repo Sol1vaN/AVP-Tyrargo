@@ -614,8 +614,8 @@
       "category": "ui",
       "type": "QoL",
       "title": {
-        "en": "Tyrargo identity and shared version labels",
-        "es": "Identidad Tyrargo y versión común"
+        "en": "Tyrargo identity and versioning",
+        "es": "Identidad Tyrargo y versioning"
       },
       "source": "src/avp/win95/frontend/avp_menus.c",
       "status": "implemented"

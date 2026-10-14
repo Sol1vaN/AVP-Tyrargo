@@ -45,7 +45,7 @@ These are **consolidated implemented changes**, classified once each; counts are
 - **[Renderer, lighting and effects](docs/en/features.md#render)** — Alpha-aware luminous/specular depth pass · Animated luminous UV synchronization (7).
 - **[Water simulation and rendering](docs/en/features.md#water)** — Time-based ripple propagation and damping · Selectable classic and modern water (6).
 - **[CRT, noise and image controls](docs/en/features.md#postfx)** — Native GLSL CRT filter · Brightness, contrast and saturation controls (5).
-- **[Main menu, in-game menu and UX](docs/en/features.md#ui)** — Tyrargo identity and shared version labels · Widescreen Starfield and restored menu backgrounds (11).
+- **[Main menu, in-game menu and UX](docs/en/features.md#ui)** — Tyrargo identity and versioning · Widescreen Starfield and restored menu backgrounds (11).
 - **[Movies and screenshots](docs/en/features.md#media)** — Native Smacker and Bink playback · Movie audio clock, RGB and end synchronization (6).
 - **[Audio, music and latency](docs/en/features.md#audio)** — Environmental EFX and positional NPC effects · Overlapping primary/secondary weapon audio (6).
 - **[Player movement and weapons](docs/en/features.md#player)** — Wall sliding and curved-surface contact · Moving-platform support and jump contact (8).
