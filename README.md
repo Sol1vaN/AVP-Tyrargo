@@ -26,10 +26,9 @@ GitHub READMEs do not embed a YouTube player. This preview opens the video with 
 
 ## Goals
 
-- Preserve the atmosphere, assets and visual detail of the original while making input and presentation comfortable on modern systems.
-- Improve expensive rendering, collision and NPC work without secretly removing effects or reducing enemy populations.
-- Make single-player resources, squad commands and interface options explicit and configurable.
-- Keep changes testable: compare behavior, pixels, frame times and save/load lifetime before accepting an optimization.
+- Improve and refine the user experience (UX) in every aspect: mouse input, keyboard controls, physics, frame pacing, UI, gameplay and enemy AI.
+- Expand gameplay and visual effects with exciting new features, while always allowing players who prefer the original experience to return to vanilla behavior.
+- Improve engine stability and robustness by reducing expensive rendering, collision and AI work without removing effects or reducing the number of elements simultaneously on screen.
 
 ## Highlights
 

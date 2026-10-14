@@ -26,10 +26,9 @@ GitHub no permite incrustar un reproductor YouTube en el README. Esta vista prev
 
 ## Objetivos
 
-- Conservar atmósfera, recursos y detalle visual mientras entrada y presentación se adaptan a sistemas modernos.
-- Reducir trabajo caro de render, colisiones e IA sin eliminar efectos ni reducir población a escondidas.
-- Hacer configurables y explícitos los recursos singleplayer, órdenes de escuadrón y opciones de interfaz.
-- Comparar comportamiento, píxeles, tiempo de frame y guardar/cargar antes de aceptar optimizaciones.
+- Mejorar y pulir la experiencia de usuario (UX) en todos sus aspectos: mouse input, teclado, físicas, framepacing, UI, gameplay IA de los enemigos.
+- Ampliar gameplay y eyecandy con increíbles novedades, pero siempre permitiendo al usuario volver al comportamiento vanilla original, para los más puristas.
+- Mejorar la estabilidad/robustecimiento del engine reduciendo el trabajo caro del render, colisiones e IA sin eliminar efectos ni reducir la concurrencia/cantidad de elementos en pantalla.
 
 ## Mejoras destacadas
 
