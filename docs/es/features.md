@@ -165,7 +165,7 @@ Menús usan espacios lógicos explícitos, protección de muestreo y composició
 | ID | Tipo | Cambio |
 |---|---|---|
 
-| `ui-01` | QoL | Identidad Tyrargo y versión común |
+| `ui-01` | QoL | Identidad Tyrargo y versioning |
 
 | `ui-02` | QoL | Starfield panorámico y fondos recuperados |
 
